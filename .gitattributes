@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# Unified diff files necessarily contain context-space plus tab indentation.
+patches/*.patch whitespace=-space-before-tab

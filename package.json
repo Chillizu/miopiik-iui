@@ -8,6 +8,12 @@
   "engines": {
     "node": ">=23.6"
   },
+  "scripts": {
+    "test": "node --test",
+    "check": "node tools/check-release.mjs",
+    "build:check": "node tools/build.mjs --check",
+    "icon:check": "node tools/icon-check.mjs"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -22,10 +28,15 @@
     "renderer.js",
     "settings.js",
     "shared/",
-    "tools/",
     "patches/",
     "locale/*.json",
     "cordis.patch.yml",
+    "tools/build.mjs",
+    "tools/fork-chat-embeds.mjs",
+    "tools/install-plugin.mjs",
+    "tools/check-release.mjs",
+    "tools/icon-check.mjs",
+    "tools/verify-pack.mjs",
     "README.md",
     "LICENSE"
   ],
@@ -52,11 +63,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Chillizu/miopiik.git",
-    "directory": "miopiik-iui"
+    "url": "https://github.com/Chillizu/miopiik-iui.git"
   },
-  "homepage": "https://github.com/Chillizu/miopiik",
+  "homepage": "https://github.com/Chillizu/miopiik-iui#readme",
   "bugs": {
-    "url": "https://github.com/Chillizu/miopiik/issues"
+    "url": "https://github.com/Chillizu/miopiik-iui/issues"
   }
 }

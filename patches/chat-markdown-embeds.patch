@@ -1,5 +1,5 @@
 --- a/upstream/lib/client.js
-+++ b/miopiik-iui/lib/client.js
++++ b/upstream/lib/client.js
 @@ -6287,7 +6287,37 @@
  			return fileMediaUrl(base, path);
  		}
