@@ -112,7 +112,8 @@ test('Host 输出约定独立注入，不占用工具面', () => {
   assert.equal(sections.length, 1)
   assert.equal(sections[0].name, 'miopiik-iui:render-contract')
   assert.match(sections[0].text, /miopiik-ml/u)
-  assert.match(IUI_CHARTER, /优先普通 Markdown/u)
+  assert.match(IUI_CHARTER, /由你按内容判断/u)
+  assert.doesNotMatch(IUI_CHARTER, /优先普通 Markdown/u)
 })
 
 test('客户端在没有 Mind/Ink/Operator 时可加载、渲染并注销', () => {

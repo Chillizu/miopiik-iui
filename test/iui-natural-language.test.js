@@ -90,12 +90,28 @@ test('安全边界：恶意 state key、协议外链接、错误图表输入安�
   assert.deepEqual(readBinding('$state.__proto__.polluted'), { literal: '$state.__proto__.polluted' })
 })
 
-test('模型常驻章程默认引导直接输出 IUI，不为演示而做工具探索', () => {
+test('模型常驻章程把用不用交给模型判断，并给出可解析的完整示例', () => {
   const prompt = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   assert.match(prompt, /miopiik-ml/u)
-  assert.match(prompt, /不为展示查找源码/u)
-  assert.match(prompt, /不调用工具来画界面/u)
+  assert.match(prompt, /由你按内容判断/u)
+  assert.match(prompt, /不要为了画界面去查源码/u)
+  assert.doesNotMatch(prompt, /优先普通 Markdown/u)
   assert.doesNotMatch(prompt, /展示协议（Extra 层，删掉也不影响主干）/u)
+
+  // 章程里的完整示例必须始终可解析、零降级：模型照抄的就是这些块。
+  // 示例一律写成单行完整块，占位形式（<ui title="…">）不算示例。
+  const blocks = prompt
+    .split('\n')
+    .filter((line) => line.includes('<ui') && line.includes('</ui>'))
+    .map((line) => line.slice(line.indexOf('<ui'), line.lastIndexOf('</ui>') + '</ui>'.length))
+  assert.ok(blocks.length >= 2, '章程至少应有两个完整示例')
+  for (const block of blocks) {
+    const parsed = parseMiopiikMl(block)
+    assert.equal(parsed.ok, true, block)
+    const result = validateAst(parsed.doc)
+    assert.equal(result.ok, true, block)
+    assert.equal(result.degraded + parsed.degraded.length, 0, block)
+  }
 })
 
 // fork 是生成物（gitignore、不随仓库分发），干净 clone / CI 里不存在；
