@@ -1,5 +1,7 @@
 # MiOpIIk IUI
 
+<img src="icon.svg" width="96" alt="MiOpIIk IUI icon">
+
 [English](README.md) | **简体中文**
 
 > **Version 0.1.0-rc.4 — 预发布（prerelease）。**
@@ -48,6 +50,8 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 本仓库通过 `git subtree split -P miopiik-iui` 从原 MiOpIIk monorepo 提取，保留 13 个 IUI 提交历史。Agent 包位于独立仓库 <https://github.com/Chillizu/miopiik>。拆分前旧仓库中的 `miopiik-iui-v...` Release 及其下载链接继续有效。历史会话数据零迁移、不改写：旧 `ink-view` 内容在渲染时由只读 adapter 映射回放（见[旧协议回放](#旧-ink-view-协议回放)）。迁移溯源见 [docs/MIGRATION.md](docs/MIGRATION.md)。
 
 ## 架构
+
+![MiOpIIk IUI 声明式渲染管线](docs/images/iui-pipeline.svg)
 
 ```text
 模型输出（普通 Markdown）

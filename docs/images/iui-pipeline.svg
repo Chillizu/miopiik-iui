@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 340" width="880" height="340" role="img">
+  <title>MiOpIIk IUI Pipeline: Trusted Declarative Markdown Embeds</title>
+  <desc>Model Markdown with inline tokens and fenced iui blocks passes through the stateless splitter, miopiik-ml parser, iui/1 AST validator, and React component registry.</desc>
+  <style>
+    .bg { fill: #ffffff; }
+    .panel { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1.2; }
+    .stage { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.3; }
+    .stage-core { fill: #f1f5ff; stroke: #3650de; stroke-width: 1.5; }
+    .stage-out { fill: #f0fdfa; stroke: #108792; stroke-width: 1.5; }
+    .fg { fill: #0f172a; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .sub { fill: #475569; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .mut { fill: #64748b; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .code { fill: #1e293b; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .flow { stroke: #3650de; stroke-width: 1.6; fill: none; }
+    .flow-alt { stroke: #64748b; stroke-width: 1.3; stroke-dasharray: 4 3; fill: none; }
+    .arr { fill: #3650de; }
+    .arr-alt { fill: #64748b; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #14161a; }
+      .panel { fill: #1b1e24; stroke: #2e333d; }
+      .stage { fill: #20242c; stroke: #383e4c; }
+      .stage-core { fill: #192132; stroke: #658eff; }
+      .stage-out { fill: #16292b; stroke: #51cfdb; }
+      .fg { fill: #f1f5f9; }
+      .sub { fill: #cbd5e1; }
+      .mut { fill: #94a3b8; }
+      .code { fill: #e2e8f0; }
+      .flow { stroke: #658eff; }
+      .flow-alt { stroke: #94a3b8; }
+      .arr { fill: #658eff; }
+      .arr-alt { fill: #94a3b8; }
+    }
+  </style>
+  <defs>
+    <marker id="m-main" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" class="arr"/>
+    </marker>
+    <marker id="m-alt" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" class="arr-alt"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="880" height="340" rx="12"/>
+
+  <text x="32" y="36" font-size="16.5" font-weight="700" class="fg">MiOpIIk IUI · Declarative Markdown Rendering Pipeline</text>
+  <text x="32" y="56" font-size="12" class="sub">Pure presentation layer for DSH Web (0.1.0-rc.4 prerelease) · Zero model tools · Local React state only</text>
+
+  <!-- Stage 1 -->
+  <rect class="stage" x="28" y="82" width="152" height="128" rx="8"/>
+  <text x="104" y="106" font-size="12.5" font-weight="700" text-anchor="middle" class="fg">1. Model Markdown</text>
+  <text x="104" y="128" font-size="10.5" text-anchor="middle" class="code">{{badge:success:ok}}</text>
+  <text x="104" y="146" font-size="10.5" text-anchor="middle" class="code">{{icon:check}}</text>
+  <text x="104" y="164" font-size="10.5" text-anchor="middle" class="code">```iui &lt;ui&gt;...&lt;/ui&gt;</text>
+  <text x="104" y="190" font-size="10" text-anchor="middle" class="mut">No tool call required</text>
+
+  <line x1="180" y1="146" x2="202" y2="146" class="flow" marker-end="url(#m-main)"/>
+
+  <!-- Stage 2 -->
+  <rect class="stage" x="206" y="82" width="152" height="128" rx="8"/>
+  <text x="282" y="106" font-size="12.5" font-weight="700" text-anchor="middle" class="fg">2. Segment Splitter</text>
+  <text x="282" y="125" font-size="10" text-anchor="middle" class="code">markdown-segments.js</text>
+  <text x="282" y="148" font-size="10.5" text-anchor="middle" class="sub">Splits iui / ink-view</text>
+  <text x="282" y="164" font-size="10.5" text-anchor="middle" class="sub">and inline tokens</text>
+  <text x="282" y="190" font-size="10" text-anchor="middle" class="mut">Other fences untouched</text>
+
+  <line x1="358" y1="146" x2="380" y2="146" class="flow" marker-end="url(#m-main)"/>
+
+  <!-- Stage 3 -->
+  <rect class="stage" x="384" y="82" width="152" height="128" rx="8"/>
+  <text x="460" y="106" font-size="12.5" font-weight="700" text-anchor="middle" class="fg">3. Parser / Adapter</text>
+  <text x="460" y="125" font-size="10" text-anchor="middle" class="code">miopiik-ml.js</text>
+  <text x="460" y="145" font-size="10.5" text-anchor="middle" class="sub">ML tags -&gt; raw AST</text>
+  <text x="460" y="165" font-size="10" text-anchor="middle" class="code">legacy-widgets.js</text>
+  <text x="460" y="182" font-size="10" text-anchor="middle" class="mut">Read-only ink-view replay</text>
+
+  <line x1="536" y1="146" x2="558" y2="146" class="flow" marker-end="url(#m-main)"/>
+
+  <!-- Stage 4 -->
+  <rect class="stage-core" x="562" y="82" width="144" height="128" rx="8"/>
+  <text x="634" y="106" font-size="12.5" font-weight="700" text-anchor="middle" class="fg">4. AST Validator</text>
+  <text x="634" y="125" font-size="10" text-anchor="middle" class="code">iui-ast.js</text>
+  <text x="634" y="146" font-size="10.5" text-anchor="middle" class="sub">REGISTRY whitelist</text>
+  <text x="634" y="162" font-size="10.5" text-anchor="middle" class="sub">LIMITS &amp; safe links</text>
+  <text x="634" y="178" font-size="10.5" text-anchor="middle" class="sub">$state path check</text>
+  <text x="634" y="194" font-size="10" text-anchor="middle" class="mut">Scoped fallback</text>
+
+  <line x1="706" y1="146" x2="726" y2="146" class="flow" marker-end="url(#m-main)"/>
+
+  <!-- Stage 5 -->
+  <rect class="stage-out" x="730" y="82" width="122" height="128" rx="8"/>
+  <text x="791" y="106" font-size="12.5" font-weight="700" text-anchor="middle" class="fg">5. Renderer</text>
+  <text x="791" y="125" font-size="10" text-anchor="middle" class="code">renderer.js</text>
+  <text x="791" y="146" font-size="10.5" text-anchor="middle" class="sub">DSH theme tokens</text>
+  <text x="791" y="162" font-size="10.5" text-anchor="middle" class="sub">Inline SVG charts</text>
+  <text x="791" y="178" font-size="10.5" text-anchor="middle" class="sub">Local segmented</text>
+  <text x="791" y="194" font-size="10" text-anchor="middle" class="mut">No network / eval</text>
+
+  <!-- Fallback & Host ownership bar -->
+  <rect class="panel" x="28" y="234" width="824" height="82" rx="8"/>
+  <text x="46" y="258" font-size="12" font-weight="600" class="fg">Fail-Closed Error Isolation &amp; DSH Ownership</text>
+  <text x="46" y="278" font-size="11" class="sub">• Unparsed fences return to native DSH AssistantMarkdown as raw text; invalid subtrees degrade locally; invalid roots show fallback text.</text>
+  <text x="46" y="296" font-size="11" class="sub">• ReasoningRow fold, streaming, copy, images, and history remain under DSH native components (in-chat hook via experimental ui-chat patch).</text>
+</svg>

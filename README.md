@@ -1,5 +1,7 @@
 # MiOpIIk IUI
 
+<img src="icon.svg" width="96" alt="MiOpIIk IUI icon">
+
 **English** | [简体中文](README.zh-CN.md)
 
 > **Version 0.1.0-rc.4 — prerelease.**
@@ -48,6 +50,8 @@ The MiOpIIk project consists of two independent repositories. Either or both pac
 This repository was extracted from the former MiOpIIk monorepo with `git subtree split -P miopiik-iui`, preserving the 13 IUI commits. The Agent package lives in <https://github.com/Chillizu/miopiik>. Pre-split release tags in the monorepo used the `miopiik-iui-v...` prefix and their release assets remain valid. Historical session data requires zero migration: legacy `ink-view` content is mapped read-only at render time (see [Legacy replay](#legacy-ink-view-replay)). Full provenance details are in [docs/MIGRATION.md](docs/MIGRATION.md).
 
 ## Architecture
+
+![MiOpIIk IUI declarative rendering pipeline](docs/images/iui-pipeline.svg)
 
 ```text
 model output (plain Markdown from the model)
