@@ -16,6 +16,7 @@ export const IUI_CHARTER = [
   `交互：<state name="r" value='{"cur":"7d","s":[["周一",420]]}'/> 声明初值，<segmented label bind="$state.r.cur" options='[{"label":"近7天","value":"7d"},{"label":"近30天","value":"30d"}]'/> 做本地切换，任意属性写 "$state.r.x" 即绑定。只在浏览器内变化，不产生消息、不调用工具。`,
   `完整形状一（数据）：<ui title="请求概览" fallback="1240 次请求，成功率 98.2%"><row gap="12"><metric label="请求" value="1240" unit="次"/><metric label="成功率" value="98.2" unit="%" tone="success" delta="+0.4"/></row><chart kind="bar" series='[["周一",420],["周二",510]]' source="网关日志"/><table columns='["区间","请求"]' rows='[["小于 100ms",1190],["100ms 以上",50]]'/></ui>`,
   `完整形状二（交互）：<ui title="时间范围" fallback="切换时间范围"><state name="r" value='{"cur":"7d","s":[["周一",420]]}'/><segmented label="范围" bind="$state.r.cur" options='[{"label":"近7天","value":"7d"},{"label":"近30天","value":"30d"}]'/><chart kind="line" series="$state.r.s"/></ui>`,
+  `完整形状三（对比）：<ui title="方案对比" fallback="A：12 万 / 3 周 / 中风险；B：18 万 / 5 周 / 低风险"><row gap="12"><metric label="A 成本" value="12" unit="万"/><metric label="B 成本" value="18" unit="万"/></row><table columns='["方案","成本","耗时","风险"]' rows='[["A",12,3,"中"],["B",18,5,"低"]]'/><callout tone="info" title="结论">选 A，多花的 6 万只把中风险换成低风险。</callout></ui>`,
   '预算：嵌套 6 层、节点 120、表格 200 行、图表 60 点；超出整块不渲染，所以别堆。',
   '禁止任意 HTML / JavaScript / CSS、事件处理与网络请求；数字注明来源或“演示数据”。',
 ].join('\n')
