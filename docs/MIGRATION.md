@@ -20,7 +20,8 @@
 - 独立仓库当前版本 `0.1.0-rc.4`，**prerelease**；stable blocker 见
   [RELEASE-NOTES.md](RELEASE-NOTES.md)。
 - 旧仓库的同名 Release `miopiik-iui-v0.1.0-rc.4` 及其资产、下载链接**继续有效**，不删除、不改写。
-- 新仓库将另行发布 tag `v0.1.0-rc.4` 的 prerelease；历史 tag/Release 不重写、不 force-push。
+- 新仓库已发布 tag `v0.1.0-rc.4` 的 prerelease（独立 `miopiik-iui-0.1.0-rc.4.tgz` + `SHA256SUMS.txt`）；
+  历史 tag/Release 不重写、不 force-push。
 - 包名不变（`miopiik-iui`），已安装用户的升级路径不受影响。
 
 ## 3. 历史数据兼容
@@ -41,9 +42,29 @@
   IUI 可与 MiOpIIk Agent 同装，但不读取 Agent 的日志、不注册 Agent 的工具。
 - 旧 monorepo 的 `miopiik-iui/` 目录不再作为开发主线；后续修复在独立仓库进行。
 
-## 5. 回滚
+## 5. 自托管：把已有 profile 从 monorepo 布局切到本仓库
 
-- 代码回滚：切回旧 monorepo 对应的历史提交即可。
-- 运行环境回滚：若打过 fork，按 [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md)
-  恢复 profile 里 `@deepseek-ai/dsh-client-ui-chat` 的原依赖解析，并在确认无运行中任务后
-  安全重启该 profile 的 DSH；不改全局 DSH 安装或其他 profile 的共享依赖链接。
+如果之前是把 monorepo 的 `miopiik-iui/` 子目录 `link:` 进 DSH profile，拆分后需要：
+
+1. 备份 profile：`cp -a ~/.dsh/profiles/<profile> ~/.dsh/profiles/<profile>.bak`
+2. 改该 profile `package.json`：`"miopiik-iui": "link:/path/to/miopiik-iui"`，
+   并同步 `pnpm-lock.yaml`（或执行 `pnpm install`），否则下次安装会把链接改回旧路径。
+3. 在新仓库生成并校验 fork：
+
+   ```sh
+   MIOPIIK_DSH_DIR=<DSH 安装目录> node tools/fork-chat-embeds.mjs
+   node tools/fork-chat-embeds.mjs --check
+   ```
+
+4. 只把该 profile 的 `@deepseek-ai/dsh-client-ui-chat` 指向
+   `<repo>/upstream/dsh-client-ui-chat-embeds`；**不要改全局 DSH 安装或其他 profile**。
+5. 确认无运行中任务后重启该 profile 的 DSH，验证插件页、设置页预览、聊天内嵌与旧会话回放。
+6. 回滚：软链指回旧 fork 与旧仓库路径并重启；或按
+   [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md) 恢复原依赖解析。
+
+## 6. 回滚
+
+- 代码回滚：切回旧 monorepo 对应的历史提交，或使用旧 Release 的 tarball 重新安装。
+- 运行环境回滚：把 profile 的 `link:` 与三条软链（两个插件 + ui-chat）指回旧路径，
+  或在插件配置页关闭 IUI 渲染（`localStorage["miopiik.markdownEmbeds"] = "0"`），
+  并在确认无运行中任务后安全重启该 profile 的 DSH；不改全局 DSH 安装或其他 profile 的共享依赖链接。
