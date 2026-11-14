@@ -43,7 +43,7 @@
   <rect class="bg" x="0" y="0" width="880" height="340" rx="12"/>
 
   <text x="32" y="36" font-size="16.5" font-weight="700" class="fg">MiOpIIk IUI · Declarative Markdown Rendering Pipeline</text>
-  <text x="32" y="56" font-size="12" class="sub">Pure presentation layer for DSH Web (0.1.0-rc.4 prerelease) · Zero model tools · Local React state only</text>
+  <text x="32" y="56" font-size="12" class="sub">Pure presentation layer for DSH Web (0.1.0-rc.5 prerelease) · Zero model tools · Local React state only</text>
 
   <!-- Stage 1 -->
   <rect class="stage" x="28" y="82" width="152" height="128" rx="8"/>

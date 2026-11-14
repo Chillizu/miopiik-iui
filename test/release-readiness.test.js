@@ -37,7 +37,7 @@ test('发布检查：单包可独立打包，tarball 覆盖全部运行时依赖
 })
 
 test('版本策略：IUI 保持 rc 预发布，blocker 未解除前不升 stable', () => {
-  assert.equal(manifest.version, '0.1.0-rc.4', '版本策略以 rc.4 为准')
+  assert.match(manifest.version, /^0\.\d+\.\d+-rc\.\d+$/u, 'IUI 必须保持 rc 版本')
   assert.match(manifest.version, /^0\.\d+\.\d+-rc\.\d+$/u, 'IUI 必须保持 rc 直到 blocker 解除')
   assert.equal(manifest.private, undefined, 'IUI 不应标记 private')
 

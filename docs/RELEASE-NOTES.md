@@ -2,7 +2,17 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.4` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
+> **当前版本 `0.1.0-rc.5` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
+
+## miopiik-iui 0.1.0-rc.5 — prerelease
+
+**状态**：prerelease（预发布），四项 stable blocker 仍未解除（非官方 chat 包补丁、跨 token Markdown 有损、流式非增量、无多版本兼容矩阵）。
+
+- **设置页职责调整**：插件页保留介绍与真实渲染器预览；真实设置入口移入 DSH「设置 → 内置插件」。
+- **文档细化**：中英文 README 与当前文档改为直接陈述，移除防御性话术与装饰性比喻；新增渲染管线矢量图 `docs/images/iui-pipeline.svg`，README 顶部补图标。
+- **运行时不变**：渲染器、校验器、legacy `ink-view` 只读回放与宿主补丁生成逻辑均未改动；与 MiOpIIk Agent 仍互不依赖。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.5.tgz`，按 README 的 profile 补丁步骤安装后重启 DSH。
+- **验证**：`npm test`（67 项）、`npm run check`、`npm run build:check`、`npm run icon:check`。
 
 ## miopiik-iui 0.1.0-rc.4 — prerelease
 
