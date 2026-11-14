@@ -21,13 +21,6 @@ function loadStandalonePlugin({ preference = null } = {}) {
   }
   // The page prefers the official primitives; the stub keeps the same contract.
   const primitives = {
-    SegmentedTabs({ items, value, onChange }) {
-      return React.createElement('div', { role: 'tablist' }, items.map((item) => React.createElement(
-        'button',
-        { key: item.value, role: 'tab', 'aria-selected': value === item.value, onClick: () => onChange(item.value) },
-        item.label,
-      )))
-    },
     Switch({ checked, onChange, label }) {
       return React.createElement('button', {
         role: 'switch', 'aria-checked': checked, 'aria-label': label,
@@ -59,7 +52,13 @@ function loadStandalonePlugin({ preference = null } = {}) {
   const slots = []
   plugin.apply({
     effect(callback) { dispose = callback() },
-    slots: { inject(name, register) { assert.equal(name, 'plugins.bundle.config'); register() }, register(metadata, render) { slots.push({ metadata, render }); return () => {} } },
+    slots: {
+      inject(name, register) {
+        assert.ok(['plugins.bundle.config', 'settings.plugins.tab'].includes(name), 'unexpected slot: ' + name)
+        register()
+      },
+      register(metadata, render) { slots.push({ metadata, render }); return () => {} },
+    },
   })
   return { sandbox, registry: sandbox.__miopiikMarkdownEmbeds, dispose, slots, storage, getReloads: () => reloads, getCopied: () => copied }
 }
@@ -72,8 +71,18 @@ function render(node) {
   return [node, ...(node.children ?? []).flatMap(render)]
 }
 
+function slotBy(slots, name) {
+  const entry = slots.find((slot) => slot.metadata.name === name)
+  assert.ok(entry !== undefined, 'missing slot: ' + name)
+  return entry
+}
+
 function renderPage(slots, props = { view: 'page' }) {
-  return render(slots[0].render(props))
+  return render(slotBy(slots, 'plugins.bundle.config').render(props))
+}
+
+function renderSettingsTab(slots) {
+  return render(slotBy(slots, 'settings.plugins.tab').render({}))
 }
 
 test('独立包不依赖 MiOpIIk Agent，也不注册旧工具', () => {
@@ -127,25 +136,30 @@ test('客户端在没有 Mind/Ink/Operator 时可加载、渲染并注销', () =
   assert.equal(sandbox.__miopiikMarkdownEmbeds, undefined)
 })
 
-test('插件页分为介绍与配置，介绍用真实渲染器预览并说明兼容边界', () => {
+test('插件页只做介绍：真实渲染器预览 + 兼容边界，并把设置指向「设置 → 内置插件」', () => {
   const { slots } = loadStandalonePlugin()
   const nodes = renderPage(slots)
   assert.ok(nodes.some((node) => node.props?.['data-iui-plugin-settings'] === '1'))
-  const tabs = nodes.filter((node) => node.props?.role === 'tab')
-  assert.deepEqual(tabs.map((tab) => tab.children[0]), ['介绍', '配置'])
+  assert.equal(nodes.filter((node) => node.props?.role === 'tab').length, 0, '插件页不该再有二级页签')
   assert.ok(nodes.some((node) => node.props?.['data-iui-overview'] === '1'))
   assert.equal(nodes.some((node) => node.props?.['data-iui-configuration'] === '1'), false)
+  assert.equal(nodes.filter((node) => node.props?.role === 'switch').length, 0, '插件页不应有开关')
   assert.equal(nodes.find((node) => node.props?.['data-iui-settings-preview'])?.props['data-iui-settings-preview'], 'live')
-  assert.match(nodes.flatMap((node) => node.children ?? []).filter((child) => typeof child === 'string').join(' '), /独立插件/u)
   const text = nodes.flatMap((node) => node.children ?? []).filter((child) => typeof child === 'string').join(' ')
+  assert.match(text, /独立插件/u)
   assert.match(text, /兼容性与边界/u)
   assert.match(text, /MiOpIIk Agent/u)
   assert.match(text, /无任意 HTML/u)
+  assert.match(text, /设置 → 内置插件 → MiOpIIk IUI/u)
 })
 
-test('配置页只有一个真实的浏览器渲染开关，并提供诊断与可复制示例', async () => {
+test('设置页（设置 → 内置插件）只有一个真实的浏览器渲染开关，并提供诊断与可复制示例', async () => {
   const { slots, storage, getReloads, getCopied } = loadStandalonePlugin()
-  const nodes = renderPage(slots, { view: 'page', initialTab: 'configuration' })
+  const tab = slotBy(slots, 'settings.plugins.tab')
+  assert.equal(tab.metadata.id, 'miopiik-iui')
+  assert.equal(tab.metadata.order, 31)
+  assert.equal(tab.metadata.label(), 'MiOpIIk IUI')
+  const nodes = renderSettingsTab(slots)
   assert.ok(nodes.some((node) => node.props?.['data-iui-configuration'] === '1'))
   assert.equal(nodes.some((node) => node.props?.['data-iui-overview'] === '1'), false)
   const switches = nodes.filter((node) => node.props?.role === 'switch')
@@ -169,7 +183,7 @@ test('配置页只有一个真实的浏览器渲染开关，并提供诊断与�
   assert.match(getCopied(), /^```iui\n<ui /u)
 
   const disabled = loadStandalonePlugin({ preference: '0' })
-  const disabledNodes = renderPage(disabled.slots, { view: 'page', initialTab: 'configuration' })
+  const disabledNodes = renderSettingsTab(disabled.slots)
   const disabledSwitch = disabledNodes.find((node) => node.props?.role === 'switch')
   assert.equal(disabledSwitch.props['aria-checked'], false)
   disabledSwitch.props.onClick()

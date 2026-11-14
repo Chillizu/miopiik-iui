@@ -1,17 +1,22 @@
 #!/usr/bin/env node
 /**
- * MiOpIIk Agent + independent IUI: native DSH Plugins page smoke test.
+ * MiOpIIk Agent + independent IUI: DSH surfaces smoke test.
  * Isolated Playwright browser; never sends a model message or edits user history.
  *
  * 需要本机同时安装 MiOpIIk Agent 与 MiOpIIk IUI（双仓库联调脚本，不属于 npm test），
- * 路径用 dev-env.mjs 的 MIOPIIK_* 环境变量覆盖。
+ * 路径与端口用 dev-env.mjs 的 MIOPIIK_* 环境变量覆盖。
+ *
+ * The two surfaces are deliberately separate:
+ *  - Plugins page = what each plugin is (documentation + live preview only);
+ *  - Settings → Built-in plugins = the pages that actually configure them
+ *    (`settings.plugins.tab`), i.e. where every other setting of this
+ *    deployment lives.
  *
  * Checks, for light/dark themes and 1280/420 widths:
- *  - each plugin has its own Overview / Configuration page inside the official
- *    plugins.bundle.config slot (no extra slot is invented);
- *  - Agent Configuration is read-only (defaults + YAML example, no switches);
- *  - IUI Configuration has exactly one real browser-local switch, diagnostics
- *    and a copyable example; Overview previews with the real renderer;
+ *  - plugin pages carry no tabs and no controls;
+ *  - Settings → plugins section exposes a per-plugin tab with its real
+ *    configuration (IUI: exactly one browser-local switch + diagnostics +
+ *    copyable sample; Agent: read-only Host defaults, no fake switches);
  *  - no horizontal overflow, no page errors, native chat still loads.
  */
 import { execFileSync } from 'node:child_process'
@@ -27,20 +32,26 @@ function authUrl() {
 }
 
 async function openPlugins(page) {
-  await page.goto(BASE + '/', { waitUntil: 'domcontentloaded' })
   await page.getByRole('button', { name: '插件', exact: true }).waitFor({ timeout: 20000 })
   await page.getByRole('button', { name: '插件', exact: true }).click()
+  await page.waitForTimeout(400)
 }
 
-async function openBundle(page, pkg, { rich = false } = {}) {
+async function openBundle(page, pkg) {
   const card = page.locator(`[data-plugin-package="${pkg}"]`)
   await card.waitFor({ state: 'visible', timeout: 20000 })
   await card.locator('button').filter({ hasText: /^MiOpIIk/ }).first().click()
   await page.locator(`[data-plugin-detail="${pkg}"]`).waitFor({ state: 'visible', timeout: 12000 })
-  if (rich) {
-    await page.locator(pkg === 'miopiik-dsh' ? '[data-miopiik-settings="1"]' : '[data-iui-plugin-settings="1"]')
-      .waitFor({ state: 'visible', timeout: 12000 })
-  }
+  await page.waitForTimeout(400)
+}
+
+async function openPluginSettings(page, tabName) {
+  await page.getByRole('button', { name: '账号菜单' }).click()
+  await page.getByRole('menuitem', { name: '设置' }).click()
+  await page.getByRole('button', { name: '内置插件' }).click()
+  await page.waitForTimeout(700)
+  await page.getByRole('tab', { name: tabName }).click()
+  await page.waitForTimeout(400)
 }
 
 function pageText() {
@@ -56,8 +67,7 @@ try {
       const page = await context.newPage()
       const jsErrors = []
       page.on('pageerror', (error) => jsErrors.push(String(error).slice(0, 180)))
-      const url = authUrl()
-      await page.goto(url, { waitUntil: 'domcontentloaded' })
+      await page.goto(authUrl(), { waitUntil: 'domcontentloaded' })
       // The deployment may persist an explicit theme; force only this page's
       // palette attribute so both token sets get exercised without touching settings.
       await page.evaluate((wanted) => {
@@ -70,42 +80,48 @@ try {
       tokens[theme] = token
       check(token !== '', `missing --dsw-alias-bg-base at ${width}/${theme}`)
 
-      // ---- MiOpIIk Agent -------------------------------------------------
+      // ---- MiOpIIk Agent: plugin page is documentation only --------------
       await openPlugins(page)
-      await openBundle(page, 'miopiik-dsh', { rich: true })
+      await openBundle(page, 'miopiik-dsh')
       const agent = page.locator('[data-miopiik-settings="1"]')
-      const agentTabs = await agent.getByRole('tab').allTextContents()
-      check(agentTabs.join('|') === '介绍|配置', `Agent tabs wrong at ${width}/${theme}: ${agentTabs.join('|')}`)
+      check(await agent.getByRole('tab').count() === 0, 'Agent plugin page must not carry tabs at ' + width)
+      check(await agent.locator('[role="switch"]').count() === 0, 'Agent plugin page must not carry controls at ' + width)
       let agentBody = await page.evaluate(pageText)
       check(/Mind/.test(agentBody) && /Ink/.test(agentBody) && /Operator/.test(agentBody), 'Agent overview must describe Mind/Ink/Operator at ' + width)
       check(/v?0\.1\.1/.test(agentBody), 'Agent overview must show its version at ' + width)
-      check(agentBody.includes('miopiik-iui') && /独立插件/.test(agentBody), 'Agent overview must state independence from IUI')
-      check(await agent.locator('[data-miopiik-overview]').count() === 1, 'Agent overview missing')
+      check(/miopiik-iui/.test(agentBody) && /独立插件/.test(agentBody), 'Agent overview must state independence from IUI')
+      check(/设置 → 内置插件 → MiOpIIk Agent/.test(agentBody), 'Agent overview must point to the settings surface')
+      check(await agent.getAttribute('data-miopiik-overview') === '1', 'Agent overview marker missing on its root')
       const agentOverflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 3)
       check(!agentOverflow, 'Agent overview overflows at ' + width)
+      outcome.checks.push({ side: 'MiOpIIk Agent plugin page', width, theme, tabs: 0, token })
 
-      await agent.getByRole('tab', { name: '配置', exact: true }).click()
-      await agent.locator('[data-miopiik-configuration="1"]').waitFor({ timeout: 5000 })
+      // ---- MiOpIIk Agent settings page (Settings → plugins) -------------
+      await page.goto(authUrl(), { waitUntil: 'domcontentloaded' })
+      await openPluginSettings(page, 'MiOpIIk Agent')
+      await page.locator('[data-miopiik-configuration="1"]').waitFor({ timeout: 8000 })
+      const agentConfig = page.locator('[data-miopiik-configuration="1"]')
       agentBody = await page.evaluate(pageText)
-      const defaultCount = await agent.locator('[data-miopiik-default]').count()
-      const groupCount = await agent.locator('[data-miopiik-group]').count()
-      const example = await agent.locator('[data-miopiik-config-example]').innerText()
-      const agentSwitches = await agent.locator('[role="switch"], input').count()
+      const defaultCount = await agentConfig.locator('[data-miopiik-default]').count()
+      const groupCount = await agentConfig.locator('[data-miopiik-group]').count()
+      const example = await agentConfig.locator('[data-miopiik-config-example]').innerText()
+      const agentSwitches = await agentConfig.locator('[role="switch"], input').count()
       const agentConfigOverflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 3)
-      check(defaultCount === 14, `Agent config should list 14 defaults, got ${defaultCount}`)
-      check(groupCount === 3, `Agent config should group defaults in 3 groups, got ${groupCount}`)
+      check(defaultCount === 14, `Agent settings page should list 14 defaults, got ${defaultCount}`)
+      check(groupCount === 3, `Agent settings page should group defaults in 3 groups, got ${groupCount}`)
       check(example.includes('- id: miopiik-dsh') && example.includes('config:') && example.includes('activeLoopCap:'), 'Agent YAML example incomplete')
-      check(/内置默认值，不是当前实际运行值/.test(agentBody), 'Agent config must state defaults are not current values')
-      check(agentSwitches === 0, 'Agent config must not fake switches/inputs')
-      check(!agentConfigOverflow, 'Agent config overflows at ' + width)
-      outcome.checks.push({ side: 'MiOpIIk Agent', width, theme, tabs: 2, groups: groupCount, defaults: defaultCount, switches: agentSwitches, token })
+      check(/内置默认值，不是当前实际运行值/.test(agentBody), 'Agent settings must state defaults are not current values')
+      check(agentSwitches === 0, 'Agent settings must not fake switches/inputs')
+      check(!agentConfigOverflow, 'Agent settings page overflows at ' + width)
+      outcome.checks.push({ side: 'MiOpIIk Agent settings', width, theme, groups: groupCount, defaults: defaultCount, switches: agentSwitches })
 
-      // ---- MiOpIIk IUI ---------------------------------------------------
+      // ---- MiOpIIk IUI: plugin page is documentation + live preview -----
+      await page.goto(authUrl(), { waitUntil: 'domcontentloaded' })
       await openPlugins(page)
-      await openBundle(page, 'miopiik-iui', { rich: true })
+      await openBundle(page, 'miopiik-iui')
       const iui = page.locator('[data-iui-plugin-settings="1"]')
-      const iuiTabs = await iui.getByRole('tab').allTextContents()
-      check(iuiTabs.join('|') === '介绍|配置', `IUI tabs wrong at ${width}/${theme}: ${iuiTabs.join('|')}`)
+      check(await iui.getByRole('tab').count() === 0, 'IUI plugin page must not carry tabs at ' + width)
+      check(await iui.locator('[role="switch"]').count() === 0, 'IUI plugin page must not carry the switch at ' + width)
       const preview = await iui.locator('[data-iui-settings-preview="live"]').count()
       const ready = await iui.locator('[data-iui-registry-state="ready"]').count()
       const chart = await iui.locator('[data-iui-chart]').count()
@@ -115,39 +131,44 @@ try {
       check(chart > 0, 'IUI preview chart must render')
       check(/兼容性与边界/.test(iuiBody) && /MiOpIIk Agent/.test(iuiBody), 'IUI overview compatibility copy missing')
       check(/声明式 Markdown 界面/.test(iuiBody), 'IUI overview must explain declarative Markdown UI')
+      check(/设置 → 内置插件 → MiOpIIk IUI/.test(iuiBody), 'IUI overview must point to the settings surface')
       const metricBefore = await iui.locator('[data-iui-metric]').allTextContents()
       await iui.getByRole('button', { name: '近 30 天', exact: true }).click()
       const metricAfter = await iui.locator('[data-iui-metric]').allTextContents()
       check(metricBefore.join('') !== metricAfter.join(''), 'IUI local interaction should update the preview')
       const iuiOverviewOverflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 3)
       check(!iuiOverviewOverflow, 'IUI overview overflows at ' + width)
+      outcome.checks.push({ side: 'MiOpIIk IUI plugin page', width, theme, tabs: 0, preview, ready, chart })
 
-      await iui.getByRole('tab', { name: '配置', exact: true }).click()
-      await iui.locator('[data-iui-configuration="1"]').waitFor({ timeout: 5000 })
-      const switches = await iui.locator('[role="switch"]').count()
-      const source = await iui.locator('[data-iui-preview-source]').innerText()
-      const copyButtons = await iui.getByRole('button', { name: '复制示例', exact: true }).count()
+      // ---- MiOpIIk IUI settings page (Settings → plugins) --------------
+      await page.goto(authUrl(), { waitUntil: 'domcontentloaded' })
+      await openPluginSettings(page, 'MiOpIIk IUI')
+      await page.locator('[data-iui-configuration="1"]').waitFor({ timeout: 8000 })
+      const iuiConfig = page.locator('[data-iui-configuration="1"]')
+      const switches = await iuiConfig.locator('[role="switch"]').count()
+      const source = await iuiConfig.locator('[data-iui-preview-source]').innerText()
+      const copyButtons = await iuiConfig.getByRole('button', { name: '复制示例', exact: true }).count()
       const iuiConfigBody = await page.evaluate(pageText)
       const iuiConfigOverflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 3)
-      check(switches === 1, `IUI config must expose exactly one real switch, got ${switches}`)
+      check(switches === 1, `IUI settings must expose exactly one real switch, got ${switches}`)
       check(source.includes('iui') && source.includes('segmented') && source.includes('chart'), 'IUI copyable example incomplete')
       check(copyButtons === 1, 'IUI copy button missing')
       check(/仅作用于当前浏览器/.test(iuiConfigBody), 'IUI switch must be described as browser-local')
       check(/实验性 DSH Chat Markdown 补丁/.test(iuiConfigBody), 'IUI diagnostics must state the experimental integration')
-      check(!iuiConfigOverflow, 'IUI config overflows at ' + width)
+      check(!iuiConfigOverflow, 'IUI settings page overflows at ' + width)
 
       // The one real setting: persistence is browser-local and forces a reload
       // so historical messages re-render with the new preference.
       if (width === 1280 && theme === 'light') {
         const prefBefore = await page.evaluate(() => localStorage.getItem('miopiik.markdownEmbeds'))
-        await iui.getByRole('switch').click()
+        await iuiConfig.getByRole('switch').click()
         await page.waitForLoadState('domcontentloaded').catch(() => {})
         await page.waitForTimeout(700)
         const prefAfter = await page.evaluate(() => localStorage.getItem('miopiik.markdownEmbeds'))
         check(prefBefore !== '0' && prefAfter === '0', 'IUI real render switch must persist the browser-local preference')
         outcome.checks.push({ side: 'IUI switch', width, theme, before: prefBefore, after: prefAfter })
       }
-      outcome.checks.push({ side: 'IUI', width, theme, tabs: 2, preview, ready, chart, switches, copyButtons, token })
+      outcome.checks.push({ side: 'MiOpIIk IUI settings', width, theme, switches, copyButtons })
 
       // ---- Native chat still loads --------------------------------------
       await page.goto(BASE + '/', { waitUntil: 'domcontentloaded' })

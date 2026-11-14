@@ -13,7 +13,7 @@ MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型写�
 - `iui` 围栏：内容为 `miopiik-ml` 或校验过的 `iui/1` JSON AST
 - 一小份声明式组件白名单、本地状态绑定与本地 `segmented` 交互
 - 旧 `ink-view` Widget JSON 的只读回放，历史会话不丢内容
-- DSH 原生插件页：Overview 用真实渲染器预览，Configuration 放唯一的浏览器开关与诊断
+- DSH 原生插件页只做说明与实时预览；唯一真实开关、诊断与可复制示例在 **设置 → 内置插件** 的对应页签里
 
 它不是界面生成器：模型不能投递任意 HTML、JavaScript 或 CSS，消息内容也不能发起网络请求、调用工具或触发模型回合。
 
@@ -38,7 +38,7 @@ MiOpIIk 已拆分成两个独立仓库，可同装或单装，互不依赖。
 | 主要面 | 行内 token、`iui` 围栏、声明式组件、本地状态 | `ink_*` 工具面、收件箱/事实/开环/鱼骨账本、Operator 派发 |
 | 状态 | 一个浏览器本地渲染偏好 | workspace 下 `.dsh/miopiik/` 的 append-only JSONL 账本 |
 | 模型工具 | 无 | 有 |
-| 聊天所有权 | 原生 DSH `AssistantMarkdown` / `ReasoningRow` 继续负责 | 会话视图与插件页；不渲染 IUI |
+| 聊天所有权 | 原生 DSH `AssistantMarkdown` / `ReasoningRow` 继续负责 | 会话视图与插件页、设置页；不渲染 IUI |
 | 安装条件 | DSH Web profile；聊天内渲染需要实验性 chat 补丁 | DSH Web profile |
 | 仓库 | 本仓库 | <https://github.com/Chillizu/miopiik> |
 
@@ -76,7 +76,7 @@ MiOpIIk 已拆分成两个独立仓库，可同装或单装，互不依赖。
 | [shared/iui-ast.js](shared/iui-ast.js) | `iui/1` 的唯一校验器：`REGISTRY` 白名单、`LIMITS`、绑定解析、表格/图表归一、局部降级。 |
 | [shared/legacy-widgets.js](shared/legacy-widgets.js) | 只读适配器，把退役的七 Widget `ink-view` JSON 映射成 `iui/1`。 |
 | [renderer.js](renderer.js) | 校验后 AST 的 React 渲染器，以及行内原语。原样打进 `client.js`。 |
-| [settings.js](settings.js) | DSH 插件页（`plugins.bundle.config`，key `miopiik-iui`）：Overview 与 Configuration 两个视图。 |
+| [settings.js](settings.js) | 两个 DSH 面：插件页（`plugins.bundle.config`，key `miopiik-iui`——只做说明与实时预览）与设置页（`settings.plugins.tab`——浏览器开关、诊断与可复制示例）。 |
 | [client.js](client.js) | 生成的浏览器 bundle。不要手改，用 `node tools/build.mjs` 重新生成。 |
 | [cordis.patch.yml](cordis.patch.yml) | DSH profile 加载插件所用的 bundle patch。 |
 
@@ -87,7 +87,7 @@ MiOpIIk 已拆分成两个独立仓库，可同装或单装，互不依赖。
 1. [tools/fork-chat-embeds.mjs](tools/fork-chat-embeds.mjs) 把已安装的 `@deepseek-ai/dsh-client-ui-chat` 复制到 `upstream/dsh-client-ui-chat-embeds/`（生成物，已 gitignore），只在 `AssistantMarkdown` 的 `case "text"` 分支插入一个受控挂钩。
 2. 它把精确差异写到 [patches/chat-markdown-embeds.patch](patches/chat-markdown-embeds.patch)，对产物执行 `node --check`，并把 fork 的 `node_modules` 链到 DSH 依赖树，保证 import 能解析。
 3. 原生 `AssistantMarkdown`、`ReasoningRow`（折叠、摘要、流式、无障碍）、图片、附件、复制与回放仍归 DSH；只有被受信标记命中的文本片段交给插件。
-4. 挂钩 fail-closed：插件注册表缺失、浏览器偏好关闭或渲染抛错时，片段回退到原生 Markdown 或纯文本兜底。挂钩还会置位 `globalThis.__miopiikMarkdownEmbedsHost = true`，插件页据此报告补丁是否已加载。
+4. 挂钩 fail-closed：插件注册表缺失、浏览器偏好关闭或渲染抛错时，片段回退到原生 Markdown 或纯文本兜底。挂钩还会置位 `globalThis.__miopiikMarkdownEmbedsHost = true`，设置页据此报告补丁是否已加载。
 
 这**不是 DSH 上游 API**。生成器用锚点定位已安装包，结构不符时直接报错而不是产出错误补丁，因此 fork 与 DSH 版本耦合。DSH 升级后要重新生成，并且只把目标 profile 指向它；不要改全局 DSH 安装。
 
@@ -167,14 +167,14 @@ payload 最长 120 字符，不能含花括号或换行。其他代码围栏原�
 
 旧会话里可能有 fenced `ink-view`，内容是退役的七 Widget spec（`dataset`、`graph`、`timeline`、`text`、`choice`、`media`、`layout`）。渲染器在进入校验前把这些 spec 只读映射成 `iui/1`，历史消息继续显示内容而不是原始 JSON。映射是尽力而为：无法映射的 spec 保留原始文本（当前路径不显示旧 spec 自带的 `fallback` 字段），`choice` 的动作只显示为不可执行选项，不写回会话，也不写任何账本。旧协议作为退役设计史记录在 [docs/EXTRA-UI.md](docs/EXTRA-UI.md)。
 
-### 插件页
+### 插件页与设置页
 
-DSH 原生插件页在 **Plugins -> Installed -> MiOpIIk IUI**，两个视图：
+两个面刻意分开：
 
-- **Overview**：简短说明、用真实渲染器渲染的实时预览（渲染开启时；数据为虚构演示）、行内语义徽章，以及兼容性事实（版本、协议 `iui/1`/`miopiik-ml`、接入方式、渲染器状态）。
-- **Configuration**：唯一真实设置（在聊天中显示 IUI，浏览器本地）、诊断（渲染器已连接/未连接、插件版本、协议、偏好 key 与当前值、接入方式与补丁检测），以及可复制的 Markdown 示例。
+- **插件页**（**插件 → 已安装 → MiOpIIk IUI**，`plugins.bundle.config`）：只做说明。简短解释、用真实渲染器渲染的实时预览（渲染开启时；数据为虚构演示）、行内语义徽章、兼容性事实（版本、协议 `iui/1`/`miopiik-ml`、接入方式、渲染器状态），以及「设置在哪」的指引。没有页签，也没有控件。
+- **设置页**（**设置 → 内置插件 → MiOpIIk IUI**，`settings.plugins.tab`）：唯一真实设置（在聊天中显示 IUI，浏览器本地）、诊断（渲染器已连接/未连接、插件版本、协议、偏好 key 与当前值、接入方式与补丁检测），以及可复制的 Markdown 示例。
 
-运行中的 DSH shell 暴露官方 primitives 时页面使用它们，否则使用纯主题 token 元素。
+运行中的 DSH shell 暴露官方 primitives 时两个面都使用它们，否则使用纯主题 token 元素。
 
 ### 校验、预算与错误隔离
 
@@ -324,7 +324,7 @@ DSH 原生插件页在 **Plugins -> Installed -> MiOpIIk IUI**，两个视图：
 
 ### 回滚
 
-- **快速回滚，无需重启：** 在插件页关闭渲染，或直接写浏览器偏好后刷新：
+- **快速回滚，无需重启：** 在 **设置 → 内置插件 → MiOpIIk IUI** 关闭渲染，或直接写浏览器偏好后刷新：
 
   ```js
   localStorage.setItem("miopiik.markdownEmbeds", "0"); location.reload()
@@ -339,8 +339,8 @@ DSH 原生插件页在 **Plugins -> Installed -> MiOpIIk IUI**，两个视图：
 如果装了插件但 `ui-chat` fork 未加载：
 
 - 聊天里的 `iui` 围栏按普通代码块显示；行内 token 按字面文本显示。
-- 插件页照常工作，Overview 预览仍能渲染，因为渲染器就在页面本地运行。
-- Configuration 诊断会显示未检测到补丁，而不是静默假装渲染正常。
+- 插件页照常工作，实时预览仍能渲染，因为渲染器就在页面本地运行。
+- 设置页诊断会显示未检测到补丁，而不是静默假装渲染正常。
 - host 输出约定仍会注入，模型可能继续产出 IUI；这些块在挂钩装好前只会以代码块存在。
 
 ## 配置
@@ -350,8 +350,8 @@ DSH 原生插件页在 **Plugins -> Installed -> MiOpIIk IUI**，两个视图：
 | 项 | 位置 | 作用 |
 |---|---|---|
 | 浏览器偏好 `miopiik.markdownEmbeds` | 浏览器 `localStorage` | `"0"` 关闭当前浏览器渲染；其他值（默认：不存在）开启。切换会刷新页面，让已渲染消息按新偏好重建。 |
-| 插件页开关 | **Plugins -> Installed -> MiOpIIk IUI -> Configuration** | 同一偏好的受支持 UI：在聊天中显示 IUI。仅当前浏览器生效，不同步到其他标签页、浏览器或 profile。 |
-| 宿主补丁标记 `globalThis.__miopiikMarkdownEmbedsHost` | 浏览器 `globalThis` | `ui-chat` 挂钩加载时置为 `true`。插件页据此显示"补丁已加载"或"未检测到补丁"。 |
+| 渲染开关（UI） | **设置 → 内置插件 → MiOpIIk IUI** | 同一偏好的受支持 UI：在聊天中显示 IUI。仅当前浏览器生效，不同步到其他标签页、浏览器或 profile。 |
+| 宿主补丁标记 `globalThis.__miopiikMarkdownEmbedsHost` | 浏览器 `globalThis` | `ui-chat` 挂钩加载时置为 `true`。设置页据此显示"补丁已加载"或"未检测到补丁"。 |
 | 嵌入注册表 `globalThis.__miopiikMarkdownEmbeds` | 浏览器 `globalThis` | 插件 bundle 安装；挂钩调用其 `segments`、`renderInline` 与 `renderBlock`。缺失时挂钩返回 `null`，走原生 Markdown 路径。 |
 | bundle patch `cordis.patch.yml` | 包元数据（`dsh.bundle.patch`） | 告诉 profile 如何加载插件。 |
 
@@ -380,7 +380,7 @@ node tools/fork-chat-embeds.mjs --check
 
 - 离线套件覆盖切分器、`miopiik-ml` 解析、`iui/1` 校验、表格/图表归一、旧协议映射、设置页 bundle 与发布就绪。不需要 DSH 安装、网络或浏览器。
 - 解析不到 DSH 安装时跳过 fork 生成器回归（用 `MIOPIIK_DSH_DIR` 指向宿主即可运行）；只读的 `--check` 无宿主路径始终会被测试。
-- 插件页的隔离 Chromium DOM 测试在找不到 Chromium 二进制时跳过（可用 `CHROMIUM_PATH` 或 `MIOPIIK_CHROMIUM` 指定路径）。
+- 插件页与设置页的隔离 Chromium DOM 测试在找不到 Chromium 二进制时跳过（可用 `CHROMIUM_PATH` 或 `MIOPIIK_CHROMIUM` 指定路径）。
 - 需要真实 DSH Web 宿主或真实补丁 chat 包的验证属于开发脚本，不放进 `npm test`；它们从 `MIOPIIK_*` 环境变量读取宿主路径（见 [tools/dev-env.mjs](tools/dev-env.mjs)），不硬编码。
 - `node tools/fork-chat-embeds.mjs --check` 可离线安全运行：没有 DSH 安装或没有生成 fork 时会明确提示并成功退出。
 - CI 定义在 [.github/workflows/ci.yml](.github/workflows/ci.yml)：在 Node 23.6.0、24.x、26.x 上跑单测、发布检查、bundle 一致性检查与图标守卫，另有一个 pack/安装验证 job。
@@ -395,7 +395,7 @@ node tools/fork-chat-embeds.mjs --check
 
 **不打 chat 补丁会怎样？**
 
-插件仍能安装，插件页预览也能用，但聊天里的 `iui` 围栏按普通代码块显示，行内 token 保持字面文本。插件页会显示未检测到补丁，而不是静默失效。见[未打补丁时](#未打补丁时)。
+插件仍能安装，插件页预览也能用，但聊天里的 `iui` 围栏按普通代码块显示，行内 token 保持字面文本。设置页会显示未检测到补丁，而不是静默失效。见[未打补丁时](#未打补丁时)。
 
 **会影响历史会话吗？**
 
