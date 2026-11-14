@@ -1,65 +1,44 @@
 # MiOpIIk IUI — Release Notes
 
-`miopiik-iui` 是 MiOpIIk 家族的**纯表现层** DSH Web 插件：模型在普通 Markdown 里写受信行内
-token 与受控 `iui` 围栏，浏览器侧把它们渲染成声明式组件。它不依赖 MiOpIIk Agent，可单独安装。
+`miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.4` 是 prerelease（预发布 / release candidate），不是 stable，也不是
-> DSH 上游功能。** 内联渲染依赖一个非官方、版本耦合的实验性 `@deepseek-ai/dsh-client-ui-chat`
-> 补丁；未打补丁时聊天里只会看到 `iui` 代码块，只有插件设置页预览可用。
+> **当前版本 `0.1.0-rc.4` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
 
-## miopiik-iui 0.1.0-rc.4 — prerelease, NOT stable
+## miopiik-iui 0.1.0-rc.4 — prerelease
 
-本版本在拆分后的独立仓库 `Chillizu/miopiik-iui` 继续交付；包内容与 monorepo 时代的
-`miopiik-iui` rc.4 一致，仓库级测试/工具/文档补到根目录（拆分溯源见
-[MIGRATION.md](MIGRATION.md)）。
+本版本在拆分后的独立仓库 `Chillizu/miopiik-iui` 发布；运行时代码与 monorepo 时期的 `miopiik-iui` `0.1.0-rc.4` 一致，并在仓库根目录补齐独立的测试、工具、文档与 CI（拆分溯源见 [MIGRATION.md](MIGRATION.md)）。
 
 ### 本版内容
 
-- **独立包**：仓库根即包根（`package.json` 与 `index.js` 同级），零运行时依赖，
-  `npm test` / `npm run check` / `npm run build:check` 可在干净环境运行。
-- **旧展示层退役**：Agent 包内已无引用的旧 `renderer` / DSL / spec 校验器死代码被清理；
-  历史 `ink-view` 七 Widget spec 不会复活为模型面工具。
-- **旧数据只读兼容**：`shared/legacy-widgets.js` 把历史 fenced `ink-view` JSON 只读映射成
-  `iui/1` AST 后回放；无法映射的类型（如 mermaid）按原始文本保留显示（当前渲染路径不使用旧 spec 的 `fallback` 字段）。
-- **默认开启渲染**：安装独立 IUI 后，打上 fork 补丁的聊天默认渲染受信嵌入；在
-  **插件 → 已安装 → MiOpIIk IUI** 的配置页可关闭（仅当前浏览器、
-  `localStorage["miopiik.markdownEmbeds"] = "0"`）。关闭后历史消息回原生 Markdown，不改数据。
-- **宿主补丁诊断**：设置页显示“实验性 DSH Chat Markdown 补丁（已加载）”或
-  “未检测到补丁 · 仅设置页预览可用”，不再静默失效。
-- **安装脚本修复**：`tools/install-plugin.mjs` 的 tarball 模式按 `package.json` 版本生成真实
-  产物名并在 `--execute` 下真正调用 `dsh plugin add`；任何占位符残留都会失败，不再静默跳过。
-- **发布检查**：`tools/check-release.mjs` 真实 `npm pack` + 解包 + `node --check` + import 图
-  覆盖检查；`tools/icon-check.mjs` 静态校验根 `icon.svg`（用户设计原稿不随仓库分发）。
-- **元数据**：`repository` / `homepage` / `bugs` / `keywords` 指向独立仓库，移除 `private`。
-- **文档**：独立版 [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md)、[MIGRATION.md](MIGRATION.md)、
-  [DEV-TOOLS.md](DEV-TOOLS.md)，以及历史设计文档 [EXTRA-UI.md](EXTRA-UI.md)、
-  [IUI-V1-RELEASE-CANDIDATE.md](IUI-V1-RELEASE-CANDIDATE.md)、
-  [IUI-NATURAL-OUTPUT-AUDIT.md](IUI-NATURAL-OUTPUT-AUDIT.md)、
-  [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md)。
+- **独立仓库结构**：仓库根即包根（`package.json` 与 `index.js` 同级），零第三方运行时依赖，`npm test`、`npm run check`、`npm run build:check` 与 `npm run icon:check` 均可在干净 checkout 中离线通过。
+- **旧展示层退役**：原 `ink-view` 七 Widget 协议已退役，不再注册模型侧展示工具。
+- **历史数据只读回放**：历史数据零迁移，由 `shared/legacy-widgets.js` 将旧 fenced `ink-view` JSON 只读映射为 `iui/1` AST 回放；无法映射的 spec（如 mermaid）保留原始文本显示（不使用旧 spec 的 `fallback` 字段），不写回账本。
+- **浏览器本地开关**：挂载 fork 补丁后默认启用聊天内受信嵌入渲染；可在 **设置 → 内置插件 → MiOpIIk IUI** 关闭（对应当前浏览器 `localStorage["miopiik.markdownEmbeds"] = "0"`），关闭后消息恢复为原生 Markdown 显示。
+- **宿主补丁状态诊断**：设置页显式展示「实验性 DSH Chat Markdown 补丁（已加载）」或「未检测到补丁 · 仅设置页预览可用」。
+- **安装与发布校验脚本**：
+  - `tools/install-plugin.mjs`：支持 `link` 与 `tarball` 两种安装模式，默认 dry-run，拒绝在未确认时写入运行中的 `web` profile。
+  - `tools/check-release.mjs`：执行真实 `npm pack`、解包、语法检查与运行时 import 图比对。
+  - `tools/icon-check.mjs`：静态校验根 `icon.svg`。
+- **包元数据与文档**：补齐 `repository`、`homepage`、`bugs`、`keywords` 及独立版 [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md)、[MIGRATION.md](MIGRATION.md)、[DEV-TOOLS.md](DEV-TOOLS.md)、[EXTRA-UI.md](EXTRA-UI.md)、[IUI-V1-RELEASE-CANDIDATE.md](IUI-V1-RELEASE-CANDIDATE.md)、[IUI-NATURAL-OUTPUT-AUDIT.md](IUI-NATURAL-OUTPUT-AUDIT.md)、[UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md)。
 
-### 为什么仍是 rc，而不是 0.1.0 stable
+### 升级为 0.1.0 stable 的四项 blocker
 
-1. **内联渲染依赖非官方 patch**：需要把 profile 里的 `@deepseek-ai/dsh-client-ui-chat`
-   替换成本仓库生成的 fork。这不是可发布包能自我声明的安装方式；普通用户按标准流程安装后
-   聊天里**看不到**内联 IUI（只看到代码块），与产品承诺不一致。
-2. **跨 token 的 Markdown 无损混排未完成**：切分式嵌入会打断跨标记的强调，复制可能带出
-   额外换行。正解是 Markdown AST 级嵌入，需要 DSH 上游扩展点
-   （提案见 [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md)）；本机核实
-   `dsh-client-ui-primitives` 仅以 bundle 形式存在，插件无法 fork。
-3. **流式非增量**：围栏闭合后才物化。
-4. **尚未做一次干净的 profile 冷启动安装验证**（安装 → 启动 → 渲染 → 卸载全链路）。
+1. **非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` patch**：聊天内联渲染需将 profile 的 `ui-chat` 解析指向由 `tools/fork-chat-embeds.mjs` 基于特定 DSH 版本（`0.2.1-rc.5`）生成的本地 fork；标准插件安装流程本身无法自动挂载该钩子。
+2. **跨 token Markdown 有损**：切分式嵌入会将 Markdown 文本节点切开，跨越 token 边界的加粗/斜体格式会断开，选中复制与屏幕阅读器朗读顺序与单节点原生 Markdown 存在差异（需 DSH 上游提供 Markdown AST 级扩展点，提案见 [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md)）。
+3. **流式非增量**：未闭合的 `iui` 围栏在流式输出期间按普通文本显示，闭合后一次性渲染。
+4. **无多版本矩阵与冷启动全链路验证**：当前仅针对 DSH `0.2.1-rc.5` 基线验证，尚未建立跨多个 DSH 版本的兼容矩阵与干净 profile 冷启动（安装 → 启动 → 渲染 → 卸载）全链路验证。
 
-### 升级为 0.1.0 stable 的条件（blocker 清单）
+### 解除 blocker 的条件清单
 
-- [ ] DSH 提供官方 Markdown embed / renderer 扩展点（或把 primitives 作为可解析包发布）；
-- [ ] 或 IUI 的内联能力改为不依赖宿主 patch 的官方机制；
-- [ ] 跨 token Markdown 与复制行为达到可接受水平（或文档化为“仅行内原子标记”并默认关闭）；
-- [ ] 完成一次干净的 profile 冷启动安装验证（安装 → 启动 → 渲染 → 卸载）。
+- [ ] DSH 上游提供官方 Markdown embed / renderer 扩展点（或将 `dsh-client-ui-primitives` 作为独立可解析包发布）；
+- [ ] 或 IUI 内联渲染改用无需宿主 patch 的官方扩展机制；
+- [ ] 跨 token Markdown 排版、复制与无障碍朗读通过验收；
+- [ ] 建立多版本兼容测试矩阵并完成干净 profile 冷启动全链路验证。
 
-在上述 blocker 全部解除前，版本保持 `0.1.0-rc.x`，不发布 stable。
+在上述 blocker 解除前，版本保持 `0.1.0-rc.x`（prerelease）。
 
-## 不包含 / 边界
+## 范围与安全边界
 
-- 不包含 MiOpIIk Agent 的 Mind / Ink / Operator 功能；Agent 与 IUI 可同装，但互不依赖。
-- 不允许任意 HTML / JavaScript / CSS；IUI 控件不发起网络请求，也不触发模型回合。
-- 不迁移、不删除旧会话数据；历史兼容只在渲染层只读映射。
+- 独立于 MiOpIIk Agent（Mind / Ink / Operator），可单装或同装。
+- 禁止任意 HTML、JavaScript 与 CSS；`segmented` 等组件仅修改当前消息内的本地 React 状态，不发起网络请求，不触发模型回合。
+- 历史会话与账本数据零迁移、不改写，旧 `ink-view` 内容仅在渲染层只读回放。

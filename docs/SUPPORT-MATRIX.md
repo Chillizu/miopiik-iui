@@ -1,40 +1,36 @@
 # MiOpIIk IUI — 支持矩阵
 
-本文只描述独立包 **MiOpIIk IUI**。MiOpIIk Agent 是另一个独立包（`miopiik-dsh`），
-两者可同装、互不依赖；本表不把 Agent 的能力或版本混进 IUI。
+本文描述独立包 **MiOpIIk IUI**（`miopiik-iui`）的兼容范围与运行要求。MiOpIIk Agent（`miopiik-dsh`）位于另一独立仓库，两者互不依赖。
 
 | 项 | MiOpIIk IUI |
 |---|---|
 | 包名 | `miopiik-iui` |
-| 当前版本 | `0.1.0-rc.4`（prerelease / 预发布，不是 stable） |
-| 包类型 | 独立可安装的 DSH Web 插件包（零运行时依赖） |
-| 依赖另一个包 | 否。可与 MiOpIIk Agent 同装，也可单装（单装时只有 IUI 表现层，没有 Mind/Ink/Operator） |
-| Tarball 安装 | 支持（`npm run check` 会真实打包并校验 import 图） |
-| 运行中 profile 安装 | 支持，但**需重启该 profile 的 DSH** 后生效；安装脚本默认 dry-run，拒绝未确认写 `web` |
+| 当前版本 | `0.1.0-rc.4`（prerelease / 预发布） |
+| 包类型 | 独立可安装的 DSH Web 插件包（零第三方运行时依赖） |
+| 依赖另一个包 | 否：可单装（仅提供 IUI 表现层），也可与 MiOpIIk Agent 同装 |
+| Tarball 安装 | 支持（由 `npm run check` 执行真实打包并校验 import 图） |
+| 运行中 profile 安装 | 安装后需重启该 profile 的 DSH 进程生效；安装脚本默认 dry-run，拒绝在未确认时写入 `web` profile |
 | DSH 测试基线 | `0.2.1-rc.5` |
 | Node | `>= 23.6` |
-| 平台 | web（DSH Web GUI） |
-| 宿主补丁依赖 | **聊天内联渲染需要实验性 chat 包补丁**（见下方“额外条件”）；未打补丁时仅设置页预览可用 |
-| 数据写入 | 不写任何会话日志或图表目录；浏览器 `localStorage` 只保存一个渲染偏好 |
-| 退场方式 | 卸载插件包；如打过 fork，按 [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md) 恢复 profile 的 `ui-chat` 解析并安全重启 |
+| 平台 | web（DSH Web GUI）；仅 web profile |
+| 宿主补丁依赖 | **聊天内联渲染需要实验性 chat 包补丁**（见下方说明）；未加载补丁时仅插件页与设置页预览可用 |
+| 数据写入 | 不写会话日志或工作区文件；仅在浏览器 `localStorage` 保存一个渲染开关偏好 |
+| 退场方式 | 从 profile 移除插件；若挂载过本地 fork，按 [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md) 恢复 profile 的 `ui-chat` 软链并重启 DSH |
 
-## IUI 的“内联渲染”额外条件
+## 聊天内联渲染的宿主补丁条件
 
-IUI 的聊天内嵌能力依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**实验性 chat 包补丁**
-（见包内 `patches/chat-markdown-embeds.patch` 与 `tools/fork-chat-embeds.mjs`）。
-这是**非官方支持的安装方式**，因此 IUI 保持 rc；未打补丁时：
+IUI 的聊天内嵌渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合的实验性 chat 包补丁**（见 `patches/chat-markdown-embeds.patch` 与 `tools/fork-chat-embeds.mjs`）。这也是当前版本保持 `0.1.0-rc.4`（prerelease）的首要 blocker。未加载该补丁时：
 
-- 设置页、示例、复制、诊断全部可用；
-- 聊天里的 `iui` 围栏按普通 Markdown 代码块显示（不报错、不吞正文）；
-- 设置页诊断会显式显示“未检测到补丁 · 仅设置页预览可用”。
+- 插件页、设置页、示例复制与状态诊断均可正常使用；
+- 聊天中的 `iui` 围栏按普通 Markdown 代码块显示，行内 token 按字面文本显示；
+- 设置页诊断显式报告「未检测到补丁 · 仅设置页预览可用」。
 
-生成 fork 需要真实 DSH 安装：`tools/fork-chat-embeds.mjs` 可用 `MIOPIIK_DSH_DIR` 覆盖宿主
-位置；无宿主时 `--check` 按“无 fork 即无漂移”通过。**不要重建正在被服务加载的 fork**，
-详见 [DEV-TOOLS.md](DEV-TOOLS.md)。
+生成本地 fork 需读取已安装的 DSH 目录（可通过 `MIOPIIK_DSH_DIR` 指定）；在无 DSH 安装或未生成 fork 的环境中，`node tools/fork-chat-embeds.mjs --check` 会跳过比对并以状态码 `0` 退出。请仅在目标服务未加载该目录时生成或更新 fork，详见 [DEV-TOOLS.md](DEV-TOOLS.md)。
 
-## 已知限制
+## 已知限制（含 stable blocker）
 
-- 行内标记跨 Markdown 语法（如跨越 `**加粗**`）时会在标记处断开，复制可能带出额外换行。
-- 流式期间未闭合的 `iui` 围栏按原文显示，闭合后一次性物化。
-- 旋转/缩放后的主题切换依赖 DSH 刷新；插件不主动改宿主主题。
-- 历史 `ink-view` 内容只读回放；无法映射的类型保留原始文本显示（当前渲染路径不使用旧 spec 的 `fallback` 字段）；不承诺继续渲染旧 Widget。
+1. **非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` patch**：DSH 升级后若 `AssistantMarkdown` 结构变化，需重新运行 `tools/fork-chat-embeds.mjs` 生成 fork。
+2. **跨 token Markdown 有损**：行内标记跨越 Markdown 语法（如 `**加粗**`）时会在标记边界断开，选中复制可能带出额外换行，屏幕阅读器顺序与单节点 Markdown 存在差异。
+3. **流式非增量**：流式输出期间，未闭合的 `iui` 围栏先按纯文本展示，闭合后一次性渲染为组件。
+4. **无多版本矩阵**：当前仅在 DSH `0.2.1-rc.5` 基线上验证，尚未覆盖跨多个 DSH 版本的兼容测试矩阵。
+5. **旧 `ink-view` 只读回放**：旧协议已退役；历史数据零迁移，由 IUI 只读 adapter 回放，无法映射的 spec 保留原始文本（不使用旧 spec 的 `fallback` 字段），且不写回账本。

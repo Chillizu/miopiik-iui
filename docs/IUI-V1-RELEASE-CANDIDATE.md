@@ -1,30 +1,30 @@
 # MiOpIIk IUI v1 — 稳定候选基线与交付门禁
 
-> 初稿 2026-11-12，更新 2026-11-13。范围是独立 **MiOpIIk IUI**，不等于整个 Mind–Ink–Operator 架构版本发布。
-> 当前结论：**实验性稳定候选（RC）**；尚未满足“所有 DSH 用户默认启用”或“原生 Markdown 完全无损”标准。
-> 以 Git HEAD、运行环境和每次重新执行的测试结果为准，不把本文件当作永久健康证明。
+> 初稿 2026-11-12，更新 2026-11-13。本文覆盖独立插件包 **MiOpIIk IUI**（`miopiik-iui` `0.1.0-rc.4` prerelease）。
+> 当前状态：**预发布候选版（RC / prerelease）**；升为 stable 前仍有四项 blocker 待解除（详见第 3 节与 [RELEASE-NOTES.md](RELEASE-NOTES.md)）。
+> 实际质量状态以当前 Git HEAD 与每次执行测试的结果为准。
 
 ## 1. 落定的技术边界
 
-- **模型面向表达**：`miopiik-ml`（`\`\`\`iui` 围栏）作为首选候选，JSON AST 保留调试/兼容入口。两者统一进入 `iui/1` AST、`validateAst` 和受控 React 组件注册表；禁止任意 HTML/CSS/JS。
-- **模型输出的样式权限**：仅语义 tone、有限布局 token、数据、状态初值和安全绑定；主题、间距、颜色、事件处理、安全限制由可信客户端负责。
-- **局部状态**：`$state.foo.bar` 和 `$data.foo.bar` 是受限读取路径，不允许脚本表达式；交互仅允许声明式本地变更，不代表获得外部执行或写入授权。
-- **聊天层所有权**：DSH 原生 `AssistantMarkdown` 与 `ReasoningRow` 负责消息、思考折叠、图片和历史；独立的 `miopiik-iui` 插件只呈现受信 inline token 与 fenced `iui` 片段。MiOpIIk Agent 已撤出聊天整行接管。
-- **部署实现**：当前是本地 `dsh-client-ui-chat` fork 和 Web profile 专用覆盖链接，**不是已经合并进 DSH 上游的正式 API**。安装/回滚详情见 [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md)。
-- **旧展示工具退役**：`ink_view` / `ink_chart` 已从 MiOpIIk 的工具注册中撤下，旧整行接管入口也已取消。历史会话与 `widgets` 账本原始文件保留；不承诺继续渲染旧 Widget，也不在 IUI 发布包内附带旧协议。
+- **面向模型的语法**：以 `miopiik-ml`（````iui` 围栏）作为首选格式，`iui/1` JSON AST 保留为调试与兼容入口。两者统一进入 `iui/1` AST、`validateAst` 与受控 React 组件注册表，阻断任意 HTML、CSS 与 JavaScript。
+- **样式与交互权限**：模型仅可声明语义 `tone`、受限布局参数、结构化数据、本地状态初值与路径绑定；主题颜色、间距、事件处理与安全预算由客户端渲染器统一控制。
+- **本地状态绑定**：`$state.foo.bar` 与 `$data.foo.bar` 仅做点号路径读取，不支持脚本表达式；`segmented` 等交互仅更新当前消息内的本地状态，不触发工具调用、网络请求或模型回合。
+- **聊天层职责划分**：DSH 原生 `AssistantMarkdown` 与 `ReasoningRow` 负责消息主干、思考折叠、图片与历史；独立的 `miopiik-iui` 插件仅渲染受信行内 token 与 fenced `iui` 片段。MiOpIIk Agent 不再接管聊天消息行。
+- **宿主补丁机制**：聊天内联渲染当前基于本地生成的 `dsh-client-ui-chat` fork 与 Web profile 软链覆盖，属于非官方、版本耦合的实验性补丁，尚未合入 DSH 上游 API。安装与回滚步骤见 [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md)。
+- **旧展示协议退役**：`ink_view` 与 `ink_chart` 工具已从模型工具面移除，历史 `ink-view` 协议已退役；历史会话数据零迁移，由 `shared/legacy-widgets.js` 只读映射回放，无法映射的 spec 保留原始文本（不使用旧 spec 的 `fallback` 字段），不写回账本。
 
 ## 2. 已验证的 RC 能力
 
-| 维度 | 证据/边界 |
+| 维度 | 证据与边界 |
 |---|---|
-| 真实画廊兼容 | 原始三份 `iui` 样本固定为 `test/fixtures/gallery/`，解析、校验无非预期降级 |
-| 行内表达 | badge / icon / code 等受信 token，复合 paragraph、card、grid、table、chart、metric |
-| 表格 | 列描述符 + 对象行兼容，历史二维数组兼容，真实回放不出现 `[object Object]` |
-| 状态 | `state name/value` 兼容；本地 segmented 切换能更新绑定的指标和图表，无额外模型消息 |
-| 原生渲染 | 在 fork 启用下，旧画廊会话回放显示三展区；原生 ReasoningRow 有效展开和折叠 |
-| 错误隔离 | 受限标签与 AST 校验、非法局部降级，原生 Markdown 主路径不由 MiOpIIk 整体替换 |
+| 真实画廊兼容 | 三份画廊样本固定于 `test/fixtures/gallery/`，解析与校验零非预期降级 |
+| 行内与块级表达 | 支持 `badge`、`icon`、`code` 行内 token，以及 `paragraph`、`card`、`grid`、`table`、`chart`、`metric` 等块级组件 |
+| 表格归一 | 兼容列描述符 + 对象行与二维数组，真实回放不出现 `[object Object]` |
+| 本地状态切换 | 支持 `state name/value`；本地 `segmented` 切换可实时更新绑定的指标与图表，不产生模型消息 |
+| 原生兼容 | 开启 fork 时，历史画廊会话回放完整展示三展区，原生 `ReasoningRow` 正常展开与折叠 |
+| 错误隔离 | 非法子树局部降级，非法根节点回退为 `fallback` 文本，不影响同条消息中的其余原生 Markdown |
 
-上述事实的回归脚本：
+回归验证命令：
 
 ```sh
 npm test
@@ -35,44 +35,40 @@ node tools/e2e-playwright.mjs
 node tools/e2e-dual-settings.mjs
 ```
 
-后四项需要正在运行的本地 DSH Web、相应的受控测试环境和隔离 Playwright 浏览器。**脚本严禁发送模型测试消息到既有主会话**；画廊回放脚本只读打开旧会话并在测试浏览器内部点击状态控件。
+后四条脚本需配合运行中的本地 DSH Web 与隔离 Playwright 浏览器执行，且仅做只读回放与本地 DOM 交互，不向既有主会话发送测试消息。
 
-### 交付阻断项（必须全部满足才可称“该 RC 验收通过”）
+### RC 验收门禁清单
 
-1. `npm test` 全绿、fork `--check` 通过、工作树变更可审计。
-2. 真实画廊：恰有三个 `data-iui-output`，表格 / 状态标签 / 指标完整，无非预期降级或 JS 错误。
-3. 本地切换：真实 DOM 点击后 7 日 `12,480` → 30 日 `48,296`，不新增消息；不能只检测按钮存在。
-4. 原生思考折叠：真实 `[data-variant=think] [role=button]` 的 `aria-expanded` 能回到原状态。
-5. 覆盖 `assistant-step` 的旧实验路径不得意外成为默认；旧会话、旧 `ink-view` 内容不得消失。
-6. 服务变更前需确认无 DSH 任务运行，备份配置、检查插件 import 与日志；只有经过明确验收的变更才可重启。
-7. **安全审查不能靠绕开认证或平台拦截解决**；未来应改用正式授权的 DSH 会话连接接口，不对历史主会话发送自动化测试消息。
+1. `npm test` 全部通过，`node tools/fork-chat-embeds.mjs --check` 通过，工作树变更可审计。
+2. 画廊回放：页面渲染三个 `data-iui-output` 展区，表格、徽章与指标完整，零非预期降级、零控制台 JS 错误。
+3. 本地状态交互：真实 DOM 点击切换后，7 日 `12,480` 更新为 30 日 `48,296`，且不触发新消息。
+4. 原生思考折叠：`[data-variant=think] [role=button]` 的 `aria-expanded` 可正常展开并恢复原状态。
+5. 历史会话与旧 `ink-view` 内容保持可读回放，不丢失正文。
+6. 更新或重启服务前确认无运行中任务，并完成 profile 备份与 import 校验。
+7. 端到端测试统一在隔离浏览器或独立测试会话中进行，不向既有主会话写入测试消息。
 
-## 3. 明确不在本次 RC 完成范围内
+## 3. Stable Blocker（尚未纳入本 RC 的范围）
 
 | 项目 | 现状 | 关闭条件 |
 |---|---|---|
-| AST 级无损行内 Markdown | 仍将文本切成多个 `MarkdownText` 片段，跨 token 加粗、复制、语义朗读可能不完整 | 上游可用 renderer/remark 扩展点，真实选区复制与 a11y 测试 |
-| 流式增量 IUI | 未闭合 fence 按普通文本，闭合后一次物化 | 中间状态安全渲染，不闪烁、不重复挂载；流式/中断 E2E |
-| 旧工具清理 | `ink_view` / `ink_chart` 停止注册，MiOpIIk Agent 客户端的旧 Widget/DSL/IUI 视图及重复协议已清理；历史数据保持不变 | 保留历史账本备份，不再承诺旧 Widget 的呈现 |
-| 新格式模型默认引导 | `index.js` 已独立注入精简输出约定，不再依赖 MiOpIIk Agent；同模型 A/B 性能尚未完成 | 对普通问答、图表和交互任务做真实模型多样本合法率/退化/耗时对照 |
-| 公共上游集成 | 本地 fork、耦合打包产物和当前 DSH 版本 | 上游源码/API 可用、上游补丁审核及跨版本兼容测试 |
-| 长时运行、主题与可访问性全验收 | 已有暗色及窄屏基础测试，但不是完整矩阵 | 浅色/深色/高对比度、键盘、屏幕阅读器、复制、长会话内存与性能测试 |
+| 公共上游集成（脱离非官方补丁） | 聊天内联渲染依赖版本耦合的本地 `@deepseek-ai/dsh-client-ui-chat` patch（针对 DSH `0.2.1-rc.5`） | DSH 上游提供官方 Markdown embed / renderer 扩展点，或 `dsh-client-ui-primitives` 作为独立可解析包发布 |
+| 跨 token Markdown 无损排版 | 切分式嵌入将文本拆为多个 `MarkdownText` 片段，跨 token 的加粗/斜体、选中复制与屏幕阅读器朗读顺序有损 | 接入上游 Markdown AST 级（remark/renderer）扩展点，并通过复制与无障碍测试 |
+| 流式增量渲染 | 未闭合的 `iui` 围栏在流式期间按纯文本显示，闭合后一次性物化 | 支持流式中间态安全增量渲染与中断恢复 E2E 验证 |
+| 多版本兼容与全量矩阵 | 仅在 DSH `0.2.1-rc.5` 及基础深色/窄屏环境下验证 | 建立跨 DSH 版本兼容测试矩阵、干净 profile 冷启动全链路验证，以及完整的明/暗/高对比度与屏幕阅读器测试矩阵 |
+| 同模型输出格式 A/B 基准 | `index.js` 已注入精简输出约定，但尚未完成同模型、同任务的定量对比 | 在普通问答、数据对比、交互趋势三类任务上完成合法率、降级率与 token 开销基准测试 |
 
-**结论：目前可用于受控实验/演示与继续开发，不应把“v1 RC”宣传成“生产通用版已完全落定”。**
+在上述四项核心 blocker（非官方版本耦合补丁、跨 token Markdown 有损、流式非增量、无多版本矩阵）解除前，`miopiik-iui` 保持 `0.1.0-rc.x`（prerelease）。
 
-## 4. 保守启用与回滚
+## 4. 启用与回滚
 
-- `0.1.0-rc.3` 安装独立插件后默认开启受信 IUI 嵌入；从 **DSH → 插件 → 已安装 → miopiik-iui** 的配置页查看状态、切换开关和测试实时预览。开关保存在当前浏览器。
-- 旧整行正文接管与旧 DSL 预览已从 MiOpIIk Agent 客户端移除；不再提供旧配置开关。
-- **快速撤回**：在 IUI 插件配置页关闭渲染（对应本浏览器 `miopiik.markdownEmbeds=0`），刷新即可回到原生 Markdown，不改历史消息。
-- **完整回滚**：按 [部署说明](UPSTREAM-MARKDOWN-EMBED.md) 恢复 Web profile 的 `ui-chat` 原依赖解析后再做安全服务重启。不要改全局 DSH 安装或其他 profile 的共享依赖链接。
-- fork `--check` 是只读校验；生成器更新可能覆盖正在使用的 fork 目录，**不得在运行环境中随意重建**。
+- 安装 `miopiik-iui` 并挂载 fork 后默认启用受信 IUI 嵌入；可在 **设置 → 内置插件 → MiOpIIk IUI** 查看诊断状态并切换本浏览器的渲染开关。
+- **快速关闭（无需重启服务）**：在设置页关闭渲染开关（对应当前浏览器 `localStorage["miopiik.markdownEmbeds"] = "0"`），刷新页面即可恢复为原生 Markdown。
+- **完整回滚**：按 [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md) 移除插件并恢复 Web profile 的 `ui-chat` 原软链，随后重启 DSH Web。保持全局 DSH 安装与其他 profile 不变。
+- `node tools/fork-chat-embeds.mjs --check` 为只读校验；重新生成 fork 会重建 `upstream/dsh-client-ui-chat-embeds/` 目录，请仅在无运行中任务加载该目录时执行。
 
-## 5. 下一阶段的有限工作队列
+## 5. 后续工作队列
 
-1. **P0：可靠性**——完善 E2E 真正的交互/折叠断言（本次落地）、受限输入的状态与表格安全预算、失败诊断、跨版本 fork 自检。
-2. **P1：原生程度**——本轮修复混合 Markdown + IUI 块级组件被压窄的问题（真实两条会话全宽回放已验收）；继续争取 Markdown AST 级 block/inline 扩展、复制与朗读、流式生命周期。
-3. **P2：公开发布准备**——独立包现有本地安装、配置页和浅/深色窄屏回归；仍需同模型多场景 benchmark、跨 DSH 版本兼容矩阵及外部发布审查。
-4. **P3：推广**——稳定性矩阵、公开文档、原生插件接口，而不是继续无边界扩充 Widget 清单。
-
-旧工具入口已退役，但历史数据不做破坏性删除；未完成的 Markdown 原生性与流式限制必须继续记录。IUI 的定义不变：**让模型以受限声明在聊天中生成恰到好处的界面，其他聊天体验仍属于 DSH。**
+1. **P0（可靠性）**：维护 E2E 交互与思考折叠回归、状态与表格安全预算校验、补丁状态诊断及跨版本 fork 自检。
+2. **P1（原生体验）**：保持混合 Markdown 与块级 IUI 组件的全宽排版（`flex-basis: 100%`）；推进上游 Markdown AST 级扩展点以解决跨 token 语法、复制与流式增量渲染。
+3. **P2（版本与基准）**：补齐同模型多场景 benchmark、跨 DSH 版本兼容矩阵与干净 profile 冷启动全链路验证。
+4. **P3（生态对接）**：对接上游正式插件接口，收敛并稳定核心声明式组件集。
