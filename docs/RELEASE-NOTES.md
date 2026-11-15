@@ -2,7 +2,19 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.5` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
+> **当前版本 `0.1.0-rc.6` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
+
+## miopiik-iui 0.1.0-rc.6 — prerelease
+
+**状态**：prerelease，四项 stable blocker 未变（非官方 chat 包补丁、跨 token Markdown 有损、流式非增量、无多版本兼容矩阵）。
+
+- **渲染契约重写**：去掉「优先普通 Markdown」默认句与比较级触发条件，改为一句判断标准（读者是否更快看懂），用不用、用多少交回模型按内容决定；组件清单压成短句，配三个可直接照抄的完整形状（数据视图、本地切换、方案对比）。
+- **示例纳入回归**：`npm test` 会从 `index.js` 抽出章程里所有完整示例，逐个跑解析与校验，示例写坏即失败。
+- **自然触发探针**：新增 `tools/probe-naturalness.mjs`，6 个中性提示各开一个空白会话，按会话日志判定自发使用 IUI 的形态（围栏 / 裸 `<ui>` / 行内 token）。本版测得正向 11/15、负向对照 0/3（三轮合计）。
+- **已知开销**：正向任务中约 17% 的推理字符与 IUI 相关（负向对照 1.5%）；抽查 18 条会话有 4 条出现「这是不是评测」的元推理，成因是示例编号与探针数据撞车，下一版修正措辞与探针数据后复测。
+- **运行时不变**：渲染器、校验器、legacy `ink-view` 只读回放与宿主补丁生成逻辑均未改动；与 MiOpIIk Agent 仍互不依赖。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.6.tgz`，按 README 的 profile 补丁步骤安装后重启 DSH。
+- **验证**：`npm test`（67 项）、`npm run check`、`npm run build:check`、`npm run icon:check`。
 
 ## miopiik-iui 0.1.0-rc.5 — prerelease
 
