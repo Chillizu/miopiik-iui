@@ -17,6 +17,8 @@ function loadStandalonePlugin({ preference = null } = {}) {
     useMemo(value) { return value() },
     useState(value) { return [typeof value === 'function' ? value() : value, () => {}] },
     useEffect() {},
+    useLayoutEffect() {},
+    useRef() { return { current: null } },
     useCallback(value) { return value },
   }
   // The page prefers the official primitives; the stub keeps the same contract.

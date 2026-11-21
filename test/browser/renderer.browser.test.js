@@ -76,7 +76,7 @@ function fixture() {
       }
       return el;
     }
-    const React = {createElement:h, useState(v) {return [typeof v==='function'?v():v, ()=>{}]}, useEffect(){}, useMemo(fn){return fn()}, useCallback(fn){return fn}};
+    const React = {createElement:h, useState(v) {return [typeof v==='function'?v():v, ()=>{}]}, useEffect(){}, useLayoutEffect(){}, useMemo(fn){return fn()}, useCallback(fn){return fn()}, useRef(){return {current:null}}};
     const primitives = {
       Switch({checked,onChange,label}) {
         return React.createElement('button',{role:'switch','aria-checked':checked,'aria-label':label,onClick:()=>onChange(!checked)});

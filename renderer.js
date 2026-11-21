@@ -141,6 +141,116 @@
       return h('div', { style: { display: 'flex', flexDirection: 'column', width: '100%' } }, axis, labelsRow)
     }
 
+    function IuiDiagram({ item, key }) {
+      // 泳道图：真实浏览器挂载后一次实测锚点（等比 1:1 坐标，箭头精确落在药丸边缘）；
+      // stub / 无 DOM 环境回落到近似几何（360 逻辑坐标），保住测试通道与降级路径。
+      const props = item.props ?? {}
+      const kids = Array.isArray(item.children) ? item.children : []
+      const lanes = []
+      const notes = []
+      const edges = []
+      let implicit = null
+      for (const child of kids) {
+        if (child.type === 'lane') lanes.push(child)
+        else if (child.type === 'node') {
+          if (implicit === null) { implicit = { props: {}, children: [] }; lanes.unshift(implicit) }
+          implicit.children.push(child)
+        } else if (child.type === 'edge') edges.push(child)
+        else notes.push(child)
+      }
+      const laneCount = Math.max(1, lanes.length)
+      const PILL = 44
+      const GAP = 14
+      const HEAD = 30 // 列标签行 16 + 间距 14；此前 8px 行高曾把列标题裁成残影
+      const slots = lanes.map((lane) => (Array.isArray(lane.children) ? lane.children.filter((child) => child.type === 'node') : []))
+      const maxSlots = Math.max(1, ...slots.map((slot) => slot.length))
+      const laneOf = {}
+      const rowOf = {}
+      slots.forEach((laneNodes, li) => laneNodes.forEach((node, si) => { laneOf[node.props?.id] = li; rowOf[node.props?.id] = si }))
+      // 反向边（或多列同行正向跳跃）统一走底部弧线：静态判定即可，提前留出底部空间
+      const needsDrop = edges.some((edge) => {
+        const f = laneOf[edge.props?.from]
+        const t = laneOf[edge.props?.to]
+        if (f === undefined || t === undefined) return false
+        if (f > t) return true
+        return f < t && Math.abs(f - t) > 1 && rowOf[edge.props?.from] === rowOf[edge.props?.to]
+      })
+      const wrapRef = React.useRef(null)
+      const [geo, setGeo] = React.useState(null)
+      React.useLayoutEffect(() => {
+        const root = wrapRef.current
+        if (root === null || typeof root.querySelectorAll !== 'function') return
+        const rootRect = root.getBoundingClientRect()
+        if (rootRect.width === 0 || rootRect.height === 0) return
+        const anchors = {}
+        for (const el of root.querySelectorAll('[data-iui-diagram-node]')) {
+          const r = el.getBoundingClientRect()
+          anchors[el.getAttribute('data-iui-diagram-node')] = { cx: r.left - rootRect.left + r.width / 2, cy: r.top - rootRect.top + r.height / 2, halfW: r.width / 2, halfH: r.height / 2 }
+        }
+        const { arcs } = DIAGRAM_GEO.diagramEdges(edges, anchors, rootRect.width / laneCount)
+        // spacer 已在流内，rootRect.height 自带底部弧线空间
+        const next = { width: rootRect.width, height: rootRect.height, arcs }
+        const signature = JSON.stringify(next)
+        setGeo((prev) => (prev !== null && prev.signature === signature ? prev : { ...next, signature }))
+      })
+      const rowsHeight = HEAD + maxSlots * PILL + Math.max(0, maxSlots - 1) * GAP + (needsDrop ? 48 : 0)
+      const measured = geo !== null
+      const anchors = measured ? null : DIAGRAM_GEO.diagramFallbackAnchors(slots, laneCount, HEAD, PILL, GAP)
+      const layout = measured ? { arcs: geo.arcs } : DIAGRAM_GEO.diagramEdges(edges, anchors, 360 / laneCount)
+      const svgWidth = measured ? geo.width : 360
+      const svgHeight = measured ? geo.height : rowsHeight
+      const markerId = 'miopiik-arrow-' + String(key).replace(/[^A-Za-z0-9_-]/gu, '')
+      const markerSize = measured ? 7 : 6
+      const titleText = String(props.title ?? '')
+      return h(
+        'div',
+        { key, className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
+        h('div', { ref: wrapRef, style: { position: 'relative', width: '100%' } },
+          h('svg', {
+            viewBox: `0 0 ${svgWidth} ${svgHeight}`,
+            preserveAspectRatio: measured ? undefined : 'none',
+            role: 'img',
+            'aria-label': titleText === '' ? `泳道图，${edges.length} 条连线` : `${titleText}，${edges.length} 条连线`,
+            style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' },
+          },
+            h('defs', { key: 'defs' },
+              h('marker', { key: markerId, id: markerId, viewBox: `0 0 ${markerSize} ${markerSize}`, refX: markerSize - 0.5, refY: markerSize / 2, markerWidth: markerSize, markerHeight: markerSize, markerUnits: 'userSpaceOnUse', orient: 'auto-start-reverse' },
+                h('path', { d: `M0,0 L${markerSize},${markerSize / 2} L0,${markerSize} z`, fill: C.muted }))),
+            ...layout.arcs.map((arc, index) => h('path', { key: `edge-${index}`, d: arc.d, fill: 'none', stroke: C.muted, strokeWidth: 1.2, markerEnd: `url(#${markerId})`, strokeDasharray: arc.dashed ? '4 3' : undefined })),
+          ),
+          ...layout.arcs.map((arc, index) => arc.label === null ? null : h('div', {
+            key: `edge-label-${index}`,
+            'data-iui-diagram-edge-label': '1',
+            style: {
+              position: 'absolute',
+              left: measured ? `${arc.labelX}px` : `${Math.min(88, Math.max(12, (arc.labelX / 360) * 100))}%`,
+              top: `${arc.labelY}px`,
+              transform: 'translate(-50%, -50%)',
+              fontSize: 9.5,
+              color: C.muted,
+              whiteSpace: 'nowrap',
+              pointerEvents: 'none',
+            },
+          }, arc.label)),
+          h('div', { style: { position: 'relative', display: 'grid', gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))`, gap: 10, minWidth: 0 } },
+            ...lanes.map((lane, li) => h('div', { key: `lane-${li}`, 'data-iui-diagram-lane': String(li), style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: GAP, minWidth: 0 } },
+              h('div', { key: 'head', style: { height: 16, display: 'flex', alignItems: 'flex-end', fontSize: 11, lineHeight: '16px', color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(lane.props?.label ?? '')),
+              ...slots[li].map((child, si) => {
+                const cp = child.props ?? {}
+                const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
+                return h('div', { key: `node-${si}`, 'data-iui-diagram-node': String(cp.id ?? ''), style: { height: PILL, minWidth: 56, maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, border: `1px ${cp.tone === 'accent' ? 'dashed' : 'solid'} ${cp.tone ? toneColor : C.border}`, borderRadius: 8, padding: '2px 8px', boxSizing: 'border-box', textAlign: 'center', color: cp.tone ? toneColor : C.text } },
+                  h('div', { style: { fontSize: 11, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.label ?? '')),
+                  String(cp.note ?? '') !== '' ? h('div', { style: { fontSize: 9, lineHeight: '11px', color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.note)) : null)
+              }),
+            )),
+          ),
+          needsDrop ? h('div', { key: 'drop', style: { height: 48 } }) : null,
+        ),
+        titleText !== '' || String(props.source ?? '') !== '' ? h('div', { style: { fontSize: 10, color: C.muted } }, [titleText, props.source ? `来源：${String(props.source)}` : ''].filter((part) => part !== '').join(' · ')) : null,
+        ...notes.map((note, index) => h('div', { key: `note-${index}`, style: { fontSize: 10, color: C.muted } }, String(note.props?.text ?? ''))),
+      )
+    }
+
     function IuiSheet({ sample, format, degraded }) {
       const checked = IUI_AST.validateAst(sample)
       // 依赖必须是**内容**而不是对象引用：正文每次渲染都会产生新对象，用引用会导致状态被重置。
@@ -404,105 +514,7 @@
           const tone = TONE_COLORS[props.tone] ?? TONE_COLORS.neutral
           return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, String(props.text ?? ''))
         }
-        if (item.type === 'diagram') {
-          // 确定性几何：等宽列 + 定高药丸，坐标可算而无需测量，回放不漂移
-          const kids = Array.isArray(item.children) ? item.children : []
-          const lanes = []
-          const notes = []
-          const edges = []
-          let implicit = null
-          for (const child of kids) {
-            if (child.type === 'lane') lanes.push(child)
-            else if (child.type === 'node') {
-              if (implicit === null) { implicit = { props: {}, children: [] }; lanes.unshift(implicit) }
-              implicit.children.push(child)
-            } else if (child.type === 'edge') edges.push(child)
-            else notes.push(child)
-          }
-          const laneCount = Math.max(1, lanes.length)
-          const PILL = 44
-          const GAP = 14
-          const HEAD = 22
-          const slots = lanes.map((lane) => (Array.isArray(lane.children) ? lane.children.filter((child) => child.type === 'node') : []))
-          const maxSlots = Math.max(1, ...slots.map((slot) => slot.length))
-          const height = HEAD + maxSlots * PILL + Math.max(0, maxSlots - 1) * GAP
-          const anchorOf = (id) => {
-            for (let li = 0; li < slots.length; li += 1) {
-              const si = slots[li].findIndex((child) => child.props?.id === id)
-              if (si >= 0) return { x: ((li + 0.5) / laneCount) * 360, y: HEAD + si * (PILL + GAP) + PILL / 2 }
-            }
-            return null
-          }
-          const markerId = 'miopiik-arrow-' + String(key).replace(/[^A-Za-z0-9_-]/gu, '')
-          const edgePaths = []
-          const edgeLabels = []
-          for (const [index, edge] of edges.entries()) {
-            const p = edge.props ?? {}
-            if (p.from === p.to) continue
-            const a = anchorOf(p.from)
-            const b = anchorOf(p.to)
-            if (a === null || b === null) continue
-            const forward = b.x > a.x || (b.x === a.x && b.y >= a.y)
-            let sx, sy, ex, ey, d
-            if (Math.abs(b.x - a.x) < 1) {
-              sy = a.y + PILL / 2 + 2
-              ey = b.y - PILL / 2 - 2
-              if (ey <= sy) ey = sy + 8
-              sx = a.x
-              ex = b.x
-              d = `M ${sx},${sy} L ${ex},${ey}`
-            } else {
-              const span = Math.abs(b.x - a.x)
-              const off = Math.min(30, span * 0.3)
-              sx = a.x + (forward ? off : -off)
-              ex = b.x - (forward ? off : -off)
-              sy = a.y
-              ey = b.y
-              const bend = Math.max(10, Math.abs(ex - sx) * 0.45)
-              d = `M ${sx},${sy} C ${sx + (forward ? bend : -bend)},${sy} ${ex - (forward ? bend : -bend)},${ey} ${ex},${ey}`
-            }
-            edgePaths.push(h('path', { key: `edge-${index}`, d, fill: 'none', stroke: C.muted, strokeWidth: 1.2, markerEnd: `url(#${markerId})`, strokeDasharray: p.kind === 'dashed' ? '4 3' : undefined }))
-            // 标签走 HTML 覆盖层：SVG 在 preserveAspectRatio=none 下会非等比拉伸文字（rc.9 压扁成因）。
-            // 礼貌错位：正向边标签放线上方，反向边放线下方——一对往复边天然分开。
-            if (typeof p.label === 'string' && p.label.trim() !== '') {
-              const leftPct = Math.min(88, Math.max(12, (((sx + ex) / 2) / 360) * 100))
-              edgeLabels.push(h('div', {
-                key: `edge-label-${index}`,
-                'data-iui-diagram-edge-label': '1',
-                style: { position: 'absolute', left: `${leftPct}%`, top: `${(sy + ey) / 2 + (forward ? -7 : 13)}px`, transform: 'translate(-50%, -50%)', fontSize: 9.5, color: C.muted, whiteSpace: 'nowrap', pointerEvents: 'none' },
-              }, String(p.label)))
-            }
-          }
-          const parts = [
-            h('defs', { key: 'defs' },
-              h('marker', { key: markerId, id: markerId, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' },
-                h('path', { d: 'M0,0 L8,4 L0,8 z', fill: C.muted }))),
-            ...edgePaths,
-          ]
-          const titleText = String(props.title ?? '')
-          return h(
-            'div',
-            { key, className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
-            h('div', { style: { position: 'relative', width: '100%' } },
-              h('svg', { viewBox: `0 0 360 ${height}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': titleText === '' ? `泳道图，${edges.length} 条连线` : `${titleText}，${edges.length} 条连线`, style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' } }, ...parts),
-              ...edgeLabels,
-              h('div', { style: { position: 'relative', display: 'grid', gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))`, gap: 10, minWidth: 0 } },
-                ...lanes.map((lane, li) => h('div', { key: `lane-${li}`, style: { display: 'flex', flexDirection: 'column', gap: GAP, minWidth: 0 } },
-                  h('div', { key: 'head', style: { height: HEAD - GAP, display: 'flex', alignItems: 'flex-end', fontSize: 11, color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, String(lane.props?.label ?? '')),
-                  ...slots[li].map((child, si) => {
-                    const cp = child.props ?? {}
-                    const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
-                    return h('div', { key: `node-${si}`, 'data-iui-diagram-node': String(cp.id ?? ''), style: { height: PILL, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, border: `1px solid ${cp.tone ? toneColor : C.border}`, borderRadius: 8, padding: '2px 8px', boxSizing: 'border-box', textAlign: 'center', color: cp.tone ? toneColor : C.text } },
-                      h('div', { style: { fontSize: 11, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.label ?? '')),
-                      String(cp.note ?? '') !== '' ? h('div', { style: { fontSize: 9, lineHeight: '11px', color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.note)) : null)
-                  }),
-                )),
-              ),
-            ),
-            titleText !== '' || String(props.source ?? '') !== '' ? h('div', { style: { fontSize: 10, color: C.muted } }, [titleText, props.source ? `来源：${String(props.source)}` : ''].filter((part) => part !== '').join(' · ')) : null,
-            ...notes.map((note, index) => h('div', { key: `note-${index}`, style: { fontSize: 10, color: C.muted } }, String(note.props?.text ?? ''))),
-          )
-        }
+        if (item.type === 'diagram') return h(IuiDiagram, { key, item })
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')
           const color = (TONE_COLORS[tone] ?? TONE_COLORS.neutral)[1]
