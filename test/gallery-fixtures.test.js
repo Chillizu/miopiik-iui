@@ -12,6 +12,7 @@ const CASES = [
   ['zone2-data', { blocks: ['row', 'grid', 'card', 'chart', 'table', 'progress'] }],
   ['zone3-interactive', { blocks: ['paragraph', 'segmented', 'row', 'card', 'callout'] }],
   ['zone4-controls', { blocks: ['segmented', 'chart', 'steps', 'toggle', 'slider', 'progress', 'input', 'table'] }],
+  ['zone5-diagram', { blocks: ['diagram', 'lane', 'node', 'edge'] }],
 ]
 
 for (const [name, expect] of CASES) {

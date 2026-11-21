@@ -141,3 +141,39 @@ test('progress.value 允许 $state 绑定（渲染时解析），字面量仍要
   assert.equal(compile('3').degraded, 1, '字符串数字仍应拒绝')
   assert.equal(compile(-1).degraded, 1)
 })
+
+test('diagram：坏 id / 重复 id / 未知引用只局部降级，预算超限整图降级', () => {
+  const compile = (children) => validateAst({ fallback: 'f', root: { id: 'r', type: 'column', children: [{ id: 'd', type: 'diagram', props: {}, children }] } })
+  const nodes = (result) => result.ast.root.children[0].children.filter((child) => child.type === 'node')
+  const ok = compile([
+    { id: 'l1', type: 'lane', props: { label: 'A' }, children: [{ id: 'n1', type: 'node', props: { id: 'a', label: '甲' } }] },
+    { id: 'n2', type: 'node', props: { id: 'b', label: '乙' } },
+    { id: 'e1', type: 'edge', props: { from: 'a', to: 'b', kind: 'dashed' } },
+  ])
+  assert.equal(ok.ok, true)
+  assert.equal(ok.degraded, 0)
+  // 重复 id：后出现的降级为注释文本，先到的保留
+  const dup = compile([
+    { id: 'n1', type: 'node', props: { id: 'a', label: '甲' } },
+    { id: 'n2', type: 'node', props: { id: 'a', label: '又甲' } },
+  ])
+  assert.equal(dup.degraded, 1)
+  assert.equal(nodes(dup).length, 1)
+  // 未知引用：只降级该边，节点保留
+  const unknown = compile([
+    { id: 'n1', type: 'node', props: { id: 'a', label: '甲' } },
+    { id: 'e1', type: 'edge', props: { from: 'a', to: 'ghost' } },
+  ])
+  assert.equal(unknown.degraded, 1)
+  assert.equal(nodes(unknown).length, 1)
+  // edge.kind 枚举
+  const badKind = compile([
+    { id: 'n1', type: 'node', props: { id: 'a', label: '甲' } },
+    { id: 'n2', type: 'node', props: { id: 'b', label: '乙' } },
+    { id: 'e1', type: 'edge', props: { from: 'a', to: 'b', kind: 'wavy' } },
+  ])
+  assert.equal(badKind.degraded, 1)
+  // 泳道超过 6 列：整图降级
+  const wide = compile(Array.from({ length: 8 }, (_, i) => ({ id: `l${i}`, type: 'lane', props: {}, children: [{ id: `n${i}`, type: 'node', props: { id: 'x' + i, label: 'n' } }] })))
+  assert.equal(wide.degraded, 1)
+})

@@ -123,3 +123,34 @@ test('miopiik-ml：行内组件可带 when，table 读取 filter', () => {
   assert.equal(checked.ast.root.children[0].children[1].props.when, '$state.r.on')
   assert.equal(checked.ast.root.children[1].props.filter, '$state.r.q')
 })
+
+test('miopiik-ml：diagram/lane/node/edge 解析，散装 node 汇成首列，注释文本保留', () => {
+  const parsed = parseMiopiikMl(`<ui fallback="f">
+    <diagram title="链路">
+      <node id="a" label="拉取"/>
+      <lane label="执行"><node id="b" label="构建" tone="success" note="两阶段"/></lane>
+      注释行：虚线表示异步
+      <edge from="a" to="b" kind="dashed"/>
+    </diagram>
+  </ui>`)
+  assert.equal(parsed.ok, true)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 0)
+  const diagram = checked.ast.root
+  assert.deepEqual(diagram.children.map((child) => child.type), ['lane', 'lane', 'text', 'edge'])
+  assert.equal(diagram.children[0].props.label, undefined, '散装 node 合成的首列没有 label')
+  assert.equal(diagram.children[0].children[0].props.id, 'a')
+  assert.equal(diagram.children[1].children[0].props.tone, 'success')
+  assert.equal(diagram.children[3].props.kind, 'dashed')
+})
+
+test('miopiik-ml：lane 混入非 node 子节点整体降级，diagram 保留其余 lane', () => {
+  const parsed = parseMiopiikMl(`<ui fallback="f"><diagram><lane label="坏列"><node id="a" label="甲"/><text>混入</text></lane><lane label="好列"><node id="b" label="乙"/></lane></diagram></ui>`)
+  assert.equal(parsed.ok, true)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 1, '坏列应整体降级')
+  const diagram = checked.ast.root
+  assert.equal(diagram.children.filter((child) => child.type === 'lane').length, 1, '好列必须保留')
+})

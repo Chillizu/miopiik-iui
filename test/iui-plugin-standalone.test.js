@@ -81,26 +81,6 @@ function renderPage(slots, props = { view: 'page' }) {
   return render(slotBy(slots, 'plugins.bundle.config').render(props))
 }
 
-function renderSettingsTab(slots) {
-  return render(slotBy(slots, 'settings.plugins.tab').render({}))
-}
-
-/** 插件页节点按「是否在实时预览区内」分组：预览是演示，不是真实设置。 */
-function previewPartition(slots) {
-  const inside = []
-  const outside = []
-  const walk = (node, isIn) => {
-    if (node === null || node === undefined || typeof node !== 'object') return
-    if (Array.isArray(node)) { for (const child of node) walk(child, isIn); return }
-    const now = isIn || node.props?.['data-iui-settings-preview'] === 'live'
-    ;(now ? inside : outside).push(node)
-    if (typeof node.type === 'function') { walk(node.type({ ...node.props, children: node.children }), now); return }
-    for (const child of node.children ?? []) walk(child, now)
-  }
-  walk(slotBy(slots, 'plugins.bundle.config').render({ view: 'page' }), false)
-  return { inside, outside }
-}
-
 test('独立包不依赖 MiOpIIk Agent，也不注册旧工具', () => {
   const manifest = JSON.parse(text('package.json'))
   assert.equal(manifest.name, 'miopiik-iui')
@@ -153,59 +133,43 @@ test('客户端在没有 Mind/Ink/Operator 时可加载、渲染并注销', () =
   assert.equal(sandbox.__miopiikMarkdownEmbeds, undefined)
 })
 
-test('插件页只做介绍：真实渲染器预览 + 兼容边界，并把设置指向「设置 → 内置插件」', () => {
-  const { slots } = loadStandalonePlugin()
+test('插件页承载全部设置：一个开关 + 实时预览 + 状态行 + 可复制示例，不再注册设置页页签', async () => {
+  const { slots, storage, getReloads, getCopied } = loadStandalonePlugin()
+  assert.equal(slots.length, 1, '只应注册 plugins.bundle.config 一个插槽')
+  assert.equal(slots[0].metadata.name, 'plugins.bundle.config')
+  assert.equal(slots[0].metadata.key, 'miopiik-iui')
   const nodes = renderPage(slots)
   assert.ok(nodes.some((node) => node.props?.['data-iui-plugin-settings'] === '1'))
-  assert.equal(nodes.filter((node) => node.props?.role === 'tab').length, 0, '插件页不该再有二级页签')
-  assert.ok(nodes.some((node) => node.props?.['data-iui-overview'] === '1'))
-  assert.equal(nodes.some((node) => node.props?.['data-iui-configuration'] === '1'), false)
-  // 插件页不承载真实设置（rc.5 职责分离不变）：开关只允许出现在实时预览的演示里
-  const { inside, outside } = previewPartition(slots)
-  assert.equal(outside.filter((node) => node.props?.role === 'switch').length, 0, '插件页预览区外不应有开关')
-  assert.equal(inside.filter((node) => node.props?.role === 'switch').length > 0, true, '预览区应演示本地 toggle')
-  assert.equal(nodes.find((node) => node.props?.['data-iui-settings-preview'])?.props['data-iui-settings-preview'], 'live')
-  const text = nodes.flatMap((node) => node.children ?? []).filter((child) => typeof child === 'string').join(' ')
-  assert.match(text, /独立插件/u)
-  assert.match(text, /兼容性与边界/u)
-  assert.match(text, /MiOpIIk Agent/u)
-  assert.match(text, /无任意 HTML/u)
-  assert.match(text, /设置 → 内置插件 → MiOpIIk IUI/u)
-})
-
-test('设置页（设置 → 内置插件）只有一个真实的浏览器渲染开关，并提供诊断与可复制示例', async () => {
-  const { slots, storage, getReloads, getCopied } = loadStandalonePlugin()
-  const tab = slotBy(slots, 'settings.plugins.tab')
-  assert.equal(tab.metadata.id, 'miopiik-iui')
-  assert.equal(tab.metadata.order, 31)
-  assert.equal(tab.metadata.label(), 'MiOpIIk IUI')
-  const nodes = renderSettingsTab(slots)
-  assert.ok(nodes.some((node) => node.props?.['data-iui-configuration'] === '1'))
-  assert.equal(nodes.some((node) => node.props?.['data-iui-overview'] === '1'), false)
-  const switches = nodes.filter((node) => node.props?.role === 'switch')
-  assert.equal(switches.length, 1, '只应有一个真实开关')
+  assert.equal(nodes.filter((node) => node.props?.role === 'tab').length, 0, '插件页不该有二级页签')
+  const allSwitches = nodes.filter((node) => node.props?.role === 'switch')
+  assert.equal(allSwitches.length, 2, '一个真实开关 + 预览里的一个演示开关')
+  const switches = allSwitches.filter((node) => node.props?.['aria-label'] === '在聊天中显示 IUI')
+  assert.equal(switches.length, 1, '真实开关应可按 aria-label 定位')
   assert.equal(switches[0].props['aria-checked'], true)
-  assert.equal(nodes.filter((node) => node.type === 'input').length, 0)
-  assert.ok(nodes.some((node) => node.props?.['data-iui-registry-state'] === 'ready'))
+  assert.equal(nodes.find((node) => node.props?.['data-iui-settings-preview'])?.props['data-iui-settings-preview'], 'live')
   assert.ok(nodes.some((node) => node.props?.['data-iui-preview-source'] === '1'))
-  const body = nodes.flatMap((node) => node.children ?? []).filter((child) => typeof child === 'string').join(' ')
-  assert.match(body, /仅作用于当前浏览器/u)
-  assert.match(body, /不会改写任何历史数据/u)
-  assert.match(body, /实验性 DSH Chat Markdown 补丁|未检测到补丁/u)
-
+  assert.ok(nodes.some((node) => node.props?.['data-iui-patch-state'] === 'missing'), '无宿主补丁时应显式报告 missing（真实 fork 下才为 loaded）')
+  assert.ok(nodes.some((node) => node.props?.['data-iui-registry-state'] === 'ready'))
+  const text = nodes.flatMap((node) => node.children ?? []).flat(Infinity).filter((child) => typeof child === 'string').join(' ')
+  assert.match(text, /仅作用于当前浏览器/u)
+  assert.match(text, /粘贴到任意 DSH 会话即可测试/u)
+  // 开关真实生效：写偏好并请求刷新
   switches[0].props.onClick()
   assert.equal(storage.get('miopiik.markdownEmbeds'), '0')
   assert.equal(getReloads(), 1)
 
+  // 复制按钮真实生效
   const copy = nodes.find((node) => node.type === 'button' && (node.children ?? []).flat(Infinity).includes('复制示例'))
   assert.ok(copy)
   await copy.props.onClick()
   assert.match(getCopied(), /^```iui\n<ui /u)
 
+  // 关闭偏好下的开关行为
   const disabled = loadStandalonePlugin({ preference: '0' })
-  const disabledNodes = renderSettingsTab(disabled.slots)
-  const disabledSwitch = disabledNodes.find((node) => node.props?.role === 'switch')
+  const disabledNodes = renderPage(disabled.slots)
+  const disabledSwitch = disabledNodes.find((node) => node.props?.role === 'switch' && node.props?.['aria-label'] === '在聊天中显示 IUI')
   assert.equal(disabledSwitch.props['aria-checked'], false)
+  assert.equal(disabledNodes.find((node) => node.props?.['data-iui-settings-preview'])?.props['data-iui-settings-preview'], 'paused')
   disabledSwitch.props.onClick()
   assert.equal(disabled.storage.get('miopiik.markdownEmbeds'), '1')
   assert.equal(disabled.getReloads(), 1)

@@ -1,14 +1,10 @@
 /**
- * MiOpIIk IUI — DSH pages, deliberately split by surface:
+ * MiOpIIk IUI — the plugin's own page: Plugins → Installed → MiOpIIk IUI.
  *
- *  - Plugins page (`plugins.bundle.config`): what IUI is, a live preview and the
- *    compatibility boundary. Documentation only — no controls.
- *  - Settings → Built-in plugins (`settings.plugins.tab`): the one real
- *    preference (this browser renders iui or not), diagnostics and a copyable
- *    sample. Settings live where every other setting in DSH lives.
- *
- * Both are official slots; the plugin declares no slot of its own. Trusted
- * plugin chrome only: theme tokens, no gradients, no hero, no fake switches.
+ * One surface, no essays: the browser-local render switch, a live preview,
+ * a one-line status, and a copyable sample. No separate settings tab is
+ * registered; everything the user can adjust or wants to see lives here.
+ * Trusted plugin chrome only: theme tokens, no gradients, no fake switches.
  */
 const IUI_PREF_KEY = 'miopiik.markdownEmbeds'
 
@@ -56,39 +52,30 @@ const IuiButton = IUI_PRIMITIVES?.Button
 
 const IUI_PAGE = {
   root: {
-    display: 'flex', flexDirection: 'column', gap: 24,
+    display: 'flex', flexDirection: 'column', gap: 16,
     width: '100%', minWidth: 0, boxSizing: 'border-box',
     color: 'var(--dsw-alias-label-primary)', fontFamily: 'inherit',
   },
-  section: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 },
-  title: { margin: 0, fontSize: 14, fontWeight: 500, lineHeight: '20px' },
-  body: {
-    margin: 0, fontSize: 14, lineHeight: '22px',
-    color: 'var(--dsw-alias-label-secondary)', overflowWrap: 'anywhere',
-  },
+  section: { display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 },
+  title: { margin: 0, fontSize: 13, fontWeight: 500, lineHeight: '18px' },
   hint: {
     margin: 0, fontSize: 12, lineHeight: '18px',
     color: 'var(--dsw-alias-label-tertiary)', overflowWrap: 'anywhere',
   },
-  list: { margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', minWidth: 0 },
-  item: {
-    display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-    gap: 8, flexWrap: 'wrap', padding: '9px 2px', minWidth: 0,
+  switchRow: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '6px 0', minWidth: 0,
     borderTop: '.5px solid var(--dsw-alias-border-l2)',
+    borderBottom: '.5px solid var(--dsw-alias-border-l2)',
   },
-  itemLabel: { flex: 'none', fontSize: 13, fontWeight: 500, lineHeight: '20px' },
-  itemValue: {
-    flex: '0 1 auto', margin: 0, textAlign: 'right', overflowWrap: 'anywhere',
-    fontVariantNumeric: 'tabular-nums', fontSize: 12.5, lineHeight: '18px',
-    color: 'var(--dsw-alias-label-secondary)',
-  },
-  mono: {
-    fontFamily: 'var(--ds-font-family-code, var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace))',
-    fontSize: 11.5, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)',
-    overflowWrap: 'anywhere',
+  switchLabel: { fontSize: 13, fontWeight: 500, lineHeight: '20px', flex: 'none' },
+  status: {
+    display: 'flex', gap: 10, flexWrap: 'wrap',
+    fontSize: 11.5, lineHeight: '16px',
+    color: 'var(--dsw-alias-label-tertiary)',
   },
   pre: {
-    margin: 0, padding: '12px 14px', maxWidth: '100%', overflowX: 'auto',
+    margin: 0, padding: '10px 12px', maxWidth: '100%', overflowX: 'auto',
     border: '.5px solid var(--dsw-alias-border-l1)',
     borderRadius: 'var(--dsw-radius-md)',
     background: 'var(--dsw-alias-bg-module-platform)',
@@ -155,100 +142,14 @@ function IuiToggle({ enabled, onToggle }) {
   )
 }
 
-function IuiFact({ label, value, mono = false, badge = null }) {
-  return h(
-    'div',
-    { style: { ...IUI_PAGE.item } },
-    h('dt', { style: IUI_PAGE.itemLabel }, label),
-    h('dd', { style: { ...(mono ? IUI_PAGE.mono : IUI_PAGE.itemValue), margin: 0, textAlign: 'right' } }, badge ?? value),
-  )
-}
-
-function IuiRegistryFact({ ready }) {
-  return h(IuiFact, {
-    label: '渲染器',
-    value: ready ? '已连接' : '未连接',
-    badge: h('span', {
-      'data-iui-registry-state': ready ? 'ready' : 'unavailable',
-      style: { color: ready ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-warn-primary)' },
-    }, ready ? '已连接' : '未连接'),
-  })
-}
-
-/** Plugins page: documentation, a live preview, and where to find the setting. */
-function IuiIntro({ preview, enabled, ready, registry }) {
-  return h(
-    'div',
-    { 'data-iui-plugin-settings': '1', 'data-iui-overview': '1', style: IUI_PAGE.root },
-    h(
-      'section',
-      { style: IUI_PAGE.section },
-      h(
-        'p',
-        { style: IUI_PAGE.body },
-        'IUI 是一种声明式 Markdown 界面：模型在回复里直接书写受控的 iui 围栏或行内标记，DSH 用本地渲染器把它变成状态、可视化与本地交互。它不是工具调用，也不要求模型了解渲染器实现。',
-      ),
-    ),
-    h(
-      'section',
-      { style: IUI_PAGE.section },
-      h('h3', { style: IUI_PAGE.title }, '实时预览'),
-      h('p', { style: IUI_PAGE.hint }, '使用真实的 IUI 渲染器，不截图、不伪造数据。切换周期只改本地状态，不发起模型请求。'),
-      h(
-        'div',
-        { 'data-iui-settings-preview': preview ? 'live' : 'paused', style: IUI_PAGE.preview },
-        preview ??
-          h(
-            'div',
-            { role: 'status', style: { minHeight: 142, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 5, color: 'var(--dsw-alias-label-tertiary)' } },
-            h('strong', { style: { fontSize: 12, fontWeight: 650 } }, enabled ? '渲染器未连接' : '预览已暂停'),
-            h('span', { style: { fontSize: 11, textAlign: 'center', overflowWrap: 'anywhere' } }, enabled ? '请检查插件加载状态后刷新页面。' : '在「设置 → 内置插件 → MiOpIIk IUI」中开启渲染后即可恢复预览。'),
-          ),
-      ),
-      h(
-        'div',
-        { style: { marginTop: 12, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' } },
-        h('span', { style: { fontSize: 10, fontWeight: 650, color: 'var(--dsw-alias-label-tertiary)', letterSpacing: .3 } }, '行内语义'),
-        ready ? registry.renderInline({ type: 'badge', props: { tone: 'success', text: '已完成' } }) : null,
-        ready ? registry.renderInline({ type: 'badge', props: { tone: 'warning', text: '进行中' } }) : null,
-        h('code', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', padding: '1px 5px', background: 'var(--dsw-alias-bg-module-platform)', borderRadius: 5 } }, 'iui/1'),
-      ),
-    ),
-    h(
-      'section',
-      { style: IUI_PAGE.section },
-      h('h3', { style: IUI_PAGE.title }, '兼容性与边界'),
-      h(
-        'dl',
-        { style: IUI_PAGE.list },
-        h(IuiFact, { label: '版本', value: 'v' + IUI_PLUGIN_VERSION }),
-        h(IuiFact, { label: '协议', value: 'iui/1 · miopiik-ml', mono: true }),
-        h(IuiFact, {
-          label: '接入方式',
-          value: '实验性 DSH Chat Markdown 补丁（尚未合并进上游 API）',
-        }),
-        h(IuiRegistryFact, { ready }),
-        h(IuiFact, {
-          label: '安全边界',
-          value: '仅白名单组件；无任意 HTML/JS/CSS、无网络请求、无工具调用；坏节点只在本地降级',
-        }),
-        h(IuiFact, {
-          label: '与 MiOpIIk Agent 的关系',
-          value: '独立插件；不需要 Mind/Ink/Operator，Agent 也不需要它',
-        }),
-      ),
-    ),
-    h('p', { style: IUI_PAGE.hint }, '渲染开关、诊断与可复制示例在「设置 → 内置插件 → MiOpIIk IUI」；本页只做说明。'),
-  )
-}
-
-/** Settings → Built-in plugins: the real preference plus diagnostics. */
-function IuiSettingsPanel() {
+/** The one real page: switch, live preview, one status line, copyable sample. */
+function IuiPluginPage() {
   const [enabled, setEnabled] = React.useState(iuiIsEnabled)
   const [error, setError] = React.useState('')
   const [copyMessage, setCopyMessage] = React.useState('')
   const registry = iuiRegistry()
   const ready = registry !== null
+  const patched = hostPatchActive()
 
   const toggle = () => {
     const next = !enabled
@@ -274,56 +175,45 @@ function IuiSettingsPanel() {
 
   return h(
     'div',
-    { 'data-iui-plugin-settings': '1', 'data-iui-configuration': '1', style: IUI_PAGE.root },
+    { 'data-iui-plugin-settings': '1', style: IUI_PAGE.root },
+    h('p', { style: IUI_PAGE.hint }, '模型在回复里书写受控 iui 围栏，本插件把它渲染成界面组件；不注册工具、不产生消息。'),
     h(
-      'section',
-      { style: IUI_PAGE.section },
-      h(
-        'p',
-        { style: IUI_PAGE.body },
-        '这里只有一项真实设置：当前浏览器是否把 iui 围栏和行内标记渲染成界面。它只影响显示，不改写任何历史消息，也不改变 Host 对模型的输出约定。',
-      ),
+      'div',
+      { style: IUI_PAGE.switchRow },
+      h('span', { style: IUI_PAGE.switchLabel }, '在聊天中显示 IUI'),
+      h('span', { 'data-iui-settings-status': enabled ? 'enabled' : 'disabled', style: IUI_PAGE.hint }, enabled ? '已开启 · 仅作用于当前浏览器' : '已关闭 · iui 围栏按代码块显示'),
+      h(IuiToggle, { enabled, onToggle: toggle }),
     ),
+    error ? h('p', { role: 'alert', style: { margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' } }, error) : null,
     h(
       'section',
       { style: IUI_PAGE.section },
-      h('h3', { style: IUI_PAGE.title }, '渲染设置'),
+      h('h3', { style: IUI_PAGE.title }, '实时预览'),
       h(
         'div',
-        { style: { ...IUI_PAGE.item, borderTop: 0, padding: '4px 2px', alignItems: 'center' } },
-        h(
-          'div',
-          { style: { display: 'flex', flexDirection: 'column', gap: 3, flex: '1 1 240px', minWidth: 0 } },
-          h('span', { style: IUI_PAGE.itemLabel }, '在聊天中显示 IUI'),
-          h('span', { 'data-iui-settings-status': enabled ? 'enabled' : 'disabled', style: { ...IUI_PAGE.hint, color: 'var(--dsw-alias-label-secondary)' } },
-            enabled ? '已开启 · 仅作用于当前浏览器' : '已关闭 · iui 围栏显示为普通代码块'),
-          h('span', { style: IUI_PAGE.hint }, '切换后会刷新页面，让历史消息按新偏好重新渲染；不会改写任何历史数据。'),
-        ),
-        h(IuiToggle, { enabled, onToggle: toggle }),
+        { 'data-iui-settings-preview': enabled && ready ? 'live' : 'paused', style: IUI_PAGE.preview },
+        enabled && ready
+          ? registry.renderBlock(IUI_PREVIEW_ML)
+          : h(
+              'div',
+              { role: 'status', style: { minHeight: 142, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 5, color: 'var(--dsw-alias-label-tertiary)' } },
+              h('strong', { style: { fontSize: 12, fontWeight: 650 } }, ready ? '预览已暂停' : '渲染器未连接'),
+              h('span', { style: { fontSize: 11, textAlign: 'center', overflowWrap: 'anywhere' } }, ready ? '开启「在聊天中显示 IUI」即可恢复预览。' : '请检查插件加载状态后刷新页面。'),
+            ),
       ),
-      error ? h('p', { role: 'alert', style: { margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' } }, error) : null,
     ),
     h(
-      'section',
-      { style: IUI_PAGE.section },
-      h('h3', { style: IUI_PAGE.title }, '诊断'),
-      h(
-        'dl',
-        { style: IUI_PAGE.list },
-        h(IuiRegistryFact, { ready }),
-        h(IuiFact, { label: '插件版本', value: 'v' + IUI_PLUGIN_VERSION }),
-        h(IuiFact, { label: '协议', value: 'iui/1 · miopiik-ml', mono: true }),
-        h(IuiFact, { label: '浏览器偏好', value: IUI_PREF_KEY, mono: true }),
-        h(IuiFact, { label: '当前偏好', value: enabled ? '开启' : '关闭' }),
-        h(IuiFact, { label: '接入方式', value: hostPatchActive() ? '实验性 DSH Chat Markdown 补丁（已加载）' : '未检测到补丁 · 仅插件页预览可用' }),
-      ),
-      h('p', { style: IUI_PAGE.hint }, '此版本使用实验性 DSH Markdown 接入补丁。开关只控制当前浏览器的渲染，不会停用 Host 的模型输出指引。'),
+      'div',
+      { 'data-iui-plugin-status': '1', style: IUI_PAGE.status },
+      h('span', { 'data-iui-plugin-version': '1' }, 'v' + IUI_PLUGIN_VERSION),
+      h('span', { 'data-iui-patch-state': patched ? 'loaded' : 'missing' }, patched ? '宿主补丁已加载' : '未检测到补丁 · 仅预览可用'),
+      h('span', { 'data-iui-registry-state': ready ? 'ready' : 'unavailable' }, ready ? '渲染器已连接' : '渲染器未连接'),
     ),
     h(
       'section',
       { style: IUI_PAGE.section },
       h('h3', { style: IUI_PAGE.title }, '示例与复制'),
-      h('p', { style: IUI_PAGE.hint }, '下面这份 Markdown 可以直接粘贴到 DSH 会话中测试。'),
+      h('p', { style: IUI_PAGE.hint }, '粘贴到任意 DSH 会话即可测试。'),
       h('pre', { 'data-iui-preview-source': '1', style: IUI_PAGE.pre }, IUI_SAMPLE_MARKDOWN),
       h(
         'div',
@@ -335,30 +225,11 @@ function IuiSettingsPanel() {
   )
 }
 
-function IuiPluginIntroPage() {
-  const [enabled] = React.useState(iuiIsEnabled)
-  const registry = iuiRegistry()
-  const ready = registry !== null
-  return h(IuiIntro, {
-    preview: enabled && ready ? registry.renderBlock(IUI_PREVIEW_ML) : null,
-    enabled,
-    ready,
-    registry,
-  })
-}
-
 function registerIuiSettings(ctx) {
   if (!ctx.slots || typeof ctx.slots.inject !== 'function') return
-  // Plugins page: documentation only.
+  // 唯一入口：插件页承载全部可调项与状态；不再注册设置页页签。
   ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
     name: 'plugins.bundle.config',
     key: 'miopiik-iui',
-  }, () => h(IuiPluginIntroPage)))
-  // Settings → Built-in plugins: the actual preference lives here.
-  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-    name: 'settings.plugins.tab',
-    id: 'miopiik-iui',
-    order: 31,
-    label: () => 'MiOpIIk IUI',
-  }, () => h(IuiSettingsPanel)))
+  }, () => h(IuiPluginPage)))
 }

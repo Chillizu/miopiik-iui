@@ -1,0 +1,12 @@
+<ui title="泳道图样本" fallback="拉取 → 构建 → 校验 → 发布，虚线为跳过路径">
+  <diagram title="发布流水线（演示）" source="演示数据">
+    <node id="pull" label="拉取" note="git pull"/>
+    <lane label="构建线"><node id="build" label="构建" tone="info" note="两阶段"/><node id="verify" label="校验" tone="success" note="白名单 + 预算"/></lane>
+    <lane label="发布线"><node id="ship" label="发布" tone="warning"/></lane>
+    虚线表示可选路径
+    <edge from="pull" to="build"/>
+    <edge from="build" to="verify"/>
+    <edge from="verify" to="ship" label="通过"/>
+    <edge from="build" to="ship" label="跳过校验" kind="dashed"/>
+  </diagram>
+</ui>

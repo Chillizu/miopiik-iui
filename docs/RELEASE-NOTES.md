@@ -2,7 +2,17 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.8` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
+> **当前版本 `0.1.0-rc.9` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+
+## miopiik-iui 0.1.0-rc.9 — prerelease
+
+**状态**：prerelease，四项 stable blocker 未变；本版为泳道图 + 配置归位包，架构与理念未动。
+
+- **泳道图（本版主题，挑战「复杂图走静态图片」）**：新增 `diagram`/`lane`/`node`/`edge` 四个白名单原语——lane 是显式列，散落的 `node` 按出现顺序汇成首列（单列即纵向流程），`edge` 是唯一的方向性原语（`solid`/`dashed`），`diagram` 内纯文本行按注释渲染。**灵活原语而非图种穷举**：链路图、流程图、状态图、多列泳道均由同一组原语自由组合。渲染用确定性几何（等宽列 + 定高药丸），箭头按坐标自动布成贝塞尔曲线，无需运行时测量、回放不漂移；坏 id/重复 id/未知引用只局部降级该节点或该边，预算 6 列 / 24 节点 / 24 连线。「静态图像交付物」降级为自由美术专用。
+- **配置归位（用户裁决）**：撤销 rc.5 的双面拆分——真实渲染开关、实时预览、状态行（版本 · 宿主补丁 · 渲染器）与可复制示例全部收进 **插件 → 已安装 → MiOpIIk IUI** 单面；不再注册 `settings.plugins.tab` 页签，页面砍掉说明小作文，只留可调项与想看的状态。
+- **章程**：目录新增「图形」一行（泳道/链路/流程语法与预算），选型口诀补「结构图用 diagram」。
+- **验证**：单测 + 画廊样本 `zone5-diagram` + 真实 Chromium DOM 断言（两列泳道、节点 id 标记、连线无障碍摘要、虚线 path、注释行），测试 82 项全绿；`npm run check` / `build:check` / `icon:check` 通过。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.9.tgz`，按 README 的 profile 补丁步骤安装后重启 DSH。
 
 ## miopiik-iui 0.1.0-rc.8 — prerelease
 

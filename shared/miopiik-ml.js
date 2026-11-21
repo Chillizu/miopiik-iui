@@ -57,11 +57,15 @@ export const ML_TAGS = Object.freeze({
   input: 'input',
   steps: 'steps',
   step: 'step',
+  diagram: 'diagram',
+  lane: 'lane',
+  node: 'node',
+  edge: 'edge',
 })
 
-const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true })
-// 交互控件与 step 一律写成自闭合：<toggle …/>、<slider …/>、<input …/>、<step title="…"/>
-const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true })
+const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true })
+// 交互控件、step 与图形原语一律写成自闭合：<toggle …/>、<step …/>、<node …/>、<edge …/>
+const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true })
 
 function decodeEntities(text) {
   return String(text)
@@ -263,6 +267,10 @@ const TEXT_PROPS = Object.freeze({
   input: ['label', 'bind', 'placeholder'],
   steps: [],
   step: ['title', 'note', 'tone'],
+  diagram: ['title', 'source'],
+  lane: ['label'],
+  node: ['id', 'label', 'tone', 'note'],
+  edge: ['from', 'to', 'label', 'kind'],
   card: ['title', 'subtitle', 'gap', 'span', 'align'],
   grid: ['columns', 'gap', 'align'],
   row: ['gap', 'align'],
@@ -371,6 +379,29 @@ export function parseMiopiikMl(source) {
         .filter(Boolean)
       const props = { ...control, ...readProps(attrs, TEXT_PROPS.callout) }
       return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-callout', type: 'callout', props, children } }
+    }
+    if (element.name === 'diagram') {
+      // 结构图形：lane 是显式列；散落的 node 按出现顺序汇成最前一列；
+      // edge 是唯一的方向性原语；纯文本行作为注释保留（灵活原语，不穷举图种）。
+      const lanes = []
+      const implicit = []
+      const rest = []
+      for (const child of element.children) {
+        if (child.name === '#text') {
+          const raw = String(child.text ?? '').trim()
+          if (raw !== '') rest.push({ id: 'ml-diagram-note', type: 'text', props: { text: raw }, children: [] })
+          continue
+        }
+        const item = compile(child)
+        if (item.kind === 'node' && item.node.type === 'lane') lanes.push(item.node)
+        else if (item.kind === 'node' && item.node.type === 'node') implicit.push(item.node)
+        else if (item.kind === 'node') rest.push(item.node)
+        else rest.push({ id: 'ml-diagram-degraded', type: 'text', props: { text: item.text }, children: [] })
+      }
+      if (implicit.length > 0) lanes.unshift({ id: 'ml-lane-auto', type: 'lane', props: {}, children: implicit })
+      const children = [...lanes, ...rest]
+      if (children.length === 0) return degrade('diagram 内没有可渲染内容')
+      return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-diagram', type: 'diagram', props: { ...control, ...readProps(attrs, TEXT_PROPS.diagram) }, children } }
     }
     if (element.name === 'p' || element.name === 'paragraph') {
       const children = element.children.map((child) => {

@@ -4,7 +4,7 @@
 
 [English](README.md) | **简体中文**
 
-> **Version 0.1.0-rc.8 — 预发布（prerelease）。**
+> **Version 0.1.0-rc.9 — 预发布（prerelease）。**
 > 本版本为发布候选版（prerelease），未发布到 npm registry，属于独立插件而非 DeepSeek Harness 上游内置功能；聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
 
 MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输出包含受信行内 token 与受控 `iui` 围栏的普通 Markdown，浏览器将其渲染为声明式界面组件。本插件不依赖 MiOpIIk 的 Mind/Ink/Operator Agent，不维护账本，也不注册模型工具。
@@ -15,13 +15,13 @@ MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输�
 - `iui` 围栏：支持 `miopiik-ml` 标签语法或经校验的 `iui/1` JSON AST
 - 受控声明式组件白名单、本地 `$state` 状态绑定与浏览器内交互控件（`segmented`/`toggle`/`slider`/`input`，配合 `when`/`is` 显隐与表格 `filter`）
 - 旧 `ink-view` Widget JSON 的只读兼容回放，历史会话零迁移
-- DSH 原生插件页（说明与实时预览）与 **设置 → 内置插件** 页签（浏览器本地渲染开关、诊断信息与可复制示例）
+- DSH 原生插件页单面承载全部可调项与状态：浏览器本地渲染开关、实时预览、状态行与可复制示例
 
 模型仅能输出白名单内的声明式标签与结构化数据；任意 HTML、JavaScript、CSS、网络请求、工具调用与模型回合触发均在解析和校验层被拦截。
 
 ## 发布状态
 
-**Version 0.1.0-rc.8** 为预发布版本（prerelease）。升为 `0.1.0` stable 前存在以下四项 blocker：
+**Version 0.1.0-rc.9** 为预发布版本（prerelease）。升为 `0.1.0` stable 前存在以下四项 blocker：
 
 1. **非官方、版本耦合的宿主补丁。** 聊天内联渲染需要由 [tools/fork-chat-embeds.mjs](tools/fork-chat-embeds.mjs) 基于特定 DSH 版本（`0.2.2-rc.1`）生成的本地 `@deepseek-ai/dsh-client-ui-chat` fork。DSH 上游尚未提供 Markdown 嵌入 API。未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，插件页预览仍可使用，设置页诊断会显式报告未检测到补丁。
 2. **跨 token Markdown 有损。** 受信片段会将 Markdown 文本节点切开，跨越 token 边界的加粗/斜体格式、选中复制与屏幕阅读器朗读顺序与单节点原生 Markdown 存在差异。
@@ -36,7 +36,7 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 
 | | **MiOpIIk IUI**（本仓库） | **MiOpIIk Agent** |
 |---|---|---|
-| 包 | `miopiik-iui` 0.1.0-rc.8，prerelease | `miopiik-dsh` 0.1.2，stable |
+| 包 | `miopiik-iui` 0.1.0-rc.9，prerelease | `miopiik-dsh` 0.1.2，stable |
 | 层次 | 纯表现层：浏览器侧的受信 Markdown 片段 | host 侧：记忆、治理、后台执行 |
 | 主要面 | 行内 token、`iui` 围栏、声明式组件、本地状态 | `ink_*` 工具面、收件箱/事实/开环/鱼骨账本、Operator 派发 |
 | 状态 | 浏览器 `localStorage` 中的单个渲染偏好 | 工作区 `.dsh/miopiik/` 下的 append-only JSONL 账本 |
@@ -81,7 +81,7 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 | [shared/iui-ast.js](shared/iui-ast.js) | `iui/1` 校验器：`REGISTRY` 白名单、`LIMITS` 预算、绑定路径解析、表格/图表归一与局部降级。 |
 | [shared/legacy-widgets.js](shared/legacy-widgets.js) | 只读适配器，将已退役的七 Widget `ink-view` JSON 映射为 `iui/1` AST。 |
 | [renderer.js](renderer.js) | 校验后 AST 的 React 渲染器与行内原语，打包进 `client.js`。 |
-| [settings.js](settings.js) | DSH 界面入口：插件页（`plugins.bundle.config`，key `miopiik-iui`——说明与实时预览）与设置页（`settings.plugins.tab`——浏览器本地开关、诊断与可复制示例）。 |
+| [settings.js](settings.js) | 唯一 DSH 界面入口（`plugins.bundle.config`，key `miopiik-iui`）：渲染开关、实时预览、状态行与可复制示例。 |
 | [client.js](client.js) | 生成的浏览器 bundle；通过 `node tools/build.mjs` 重新生成。 |
 | [cordis.patch.yml](cordis.patch.yml) | 供 DSH profile 加载插件的 bundle patch。 |
 
@@ -166,6 +166,10 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 | 输入框 | `input` | 本地文本控件，写入 `$state.*`（受单节点文本预算约束）；支持 `bind`、`placeholder`、`label`。 |
 | 步骤 | `steps` | 有序过程清单；仅接受 `step` 子节点。 |
 | 步骤项 | `step` | `title`（必填）、`note`、`tone`（共用六色 tone 枚举）。 |
+| 泳道图 | `diagram` | 结构图形；`title`、`source`。泳道 ≤6 列、节点 ≤24、连线 ≤24。 |
+| 泳道列 | `lane` | 一列；仅接受 `node` 子节点（1-8 个）。 |
+| 图节点 | `node` | `id`（必填、图内唯一、安全标识符）、`label`（必填）、`tone`、`note`；也可直接写在 `diagram` 里（汇成首列）。 |
+| 图连线 | `edge` | `from`/`to`（节点 id）、`label`、`kind`（默认 `solid` / `dashed`）。未知引用只降级该边；纯文本行按注释渲染。 |
 
 任何组件都可写 `when="$state.*"`（可配 `is="值"` 做等值切换），按本地状态控制自身显隐。组件白名单由 [shared/iui-ast.js](shared/iui-ast.js) 的 `REGISTRY` 强制执行，未知标签会局部降级。
 
@@ -177,12 +181,14 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 旧 `ink-view` 七 Widget 协议（`dataset`、`graph`、`timeline`、`text`、`choice`、`media`、`layout`）已退役。历史会话数据零迁移：渲染前由 `shared/legacy-widgets.js` 将 fenced `ink-view` JSON 只读映射为 `iui/1` AST 回放。无法映射的 spec 保留原始文本显示（不使用旧 spec 的 `fallback` 字段），`choice` 动作仅显示为静态选项文本，且不写回会话或账本。旧协议的设计历史归档于 [docs/EXTRA-UI.md](docs/EXTRA-UI.md)。
 
-### 插件页与设置页
+### 插件页
 
-两个界面入口职责分明：
+插件只注册一个 DSH 界面入口：**插件 → 已安装 → MiOpIIk IUI**（`plugins.bundle.config`）。用户能调整和想看的都在这一页——不注册设置页页签，不写小作文：
 
-- **插件页**（**插件 → 已安装 → MiOpIIk IUI**，`plugins.bundle.config`）：展示功能说明、基于演示数据的实时渲染预览、行内语义徽章、兼容性信息（版本、协议 `iui/1`/`miopiik-ml`、接入方式、渲染器状态）及设置页位置指引。
-- **设置页**（**设置 → 内置插件 → MiOpIIk IUI**，`settings.plugins.tab`）：提供浏览器本地渲染开关（在聊天中显示 IUI）、运行诊断（渲染器连接状态、插件版本、协议、偏好键值、宿主补丁检测结果）及可复制的 Markdown 示例。
+- **渲染开关**：浏览器本地「在聊天中显示 IUI」偏好（单开关，存 `localStorage`，切换后刷新页面让历史消息重渲）。
+- **实时预览**：真实渲染器 + 演示数据；切换只改本地状态。
+- **状态行**：插件版本、宿主补丁状态（已加载 / 未检测到）、渲染器连接。
+- **可复制示例**：可直接粘贴测试的 Markdown 片段。
 
 ### 校验、预算与错误隔离
 
@@ -253,7 +259,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 ## 安装、升级、回滚
 
-`0.1.0-rc.8` 为**预发布（prerelease）**版本，聊天内联渲染需配置本地宿主补丁。请在受控的 DSH profile 中安装，并确保可安全重启 DSH Web 服务。
+`0.1.0-rc.9` 为**预发布（prerelease）**版本，聊天内联渲染需配置本地宿主补丁。请在受控的 DSH profile 中安装，并确保可安全重启 DSH Web 服务。
 
 ### 前置条件
 
@@ -273,7 +279,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
    ```sh
    npm pack --pack-destination .dsh/tmp/packs
-   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.1.0-rc.8.tgz
+   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.1.0-rc.9.tgz
    ```
 
    也可使用封装脚本 [tools/install-plugin.mjs](tools/install-plugin.mjs)（默认 dry-run；写入运行中的 `web` profile 需显式加 `--allow-running-profile`）：
@@ -328,7 +334,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 ### 回滚
 
-- **快速关闭渲染（无需重启服务）：** 在 **设置 → 内置插件 → MiOpIIk IUI** 关闭开关，或在浏览器控制台执行：
+- **快速关闭渲染（无需重启服务）：** 在 **插件 → 已安装 → MiOpIIk IUI** 关闭开关，或在浏览器控制台执行：
 
   ```js
   localStorage.setItem("miopiik.markdownEmbeds", "0"); location.reload()
@@ -350,7 +356,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 | 项 | 位置 | 作用 |
 |---|---|---|
 | 浏览器偏好 `miopiik.markdownEmbeds` | 浏览器 `localStorage` | `"0"` 关闭当前浏览器的聊天内 IUI 渲染；其他值或未设置时开启。切换后自动刷新页面。 |
-| 渲染开关（UI） | **设置 → 内置插件 → MiOpIIk IUI** | `miopiik.markdownEmbeds` 的界面开关，仅作用于当前浏览器。 |
+| 渲染开关（UI） | **插件 → 已安装 → MiOpIIk IUI** | `miopiik.markdownEmbeds` 的界面开关，仅作用于当前浏览器。 |
 | 宿主补丁标记 `globalThis.__miopiikMarkdownEmbedsHost` | 浏览器 `globalThis` | `ui-chat` 挂钩加载时置为 `true`，供设置页诊断读取。 |
 | 嵌入注册表 `globalThis.__miopiikMarkdownEmbeds` | 浏览器 `globalThis` | 由 `client.js` 注册（含 `segments`、`renderInline`、`renderBlock`）。 |
 | bundle patch `cordis.patch.yml` | 包根目录（`dsh.bundle.patch`） | 向 DSH 声明 host 与 client 入口。 |
@@ -386,7 +392,7 @@ node tools/fork-chat-embeds.mjs --check
 
 ## FAQ
 
-**为什么当前版本是 `0.1.0-rc.8`（prerelease）？**
+**为什么当前版本是 `0.1.0-rc.9`（prerelease）？**
 
 四项 stable blocker 尚未解除：聊天内联渲染依赖非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` 补丁；跨 token Markdown 有损；流式非增量；尚无跨版本兼容矩阵。详见 [docs/IUI-V1-RELEASE-CANDIDATE.md](docs/IUI-V1-RELEASE-CANDIDATE.md)。
 

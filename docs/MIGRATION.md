@@ -13,9 +13,9 @@
 
 ## 2. 版本与发布
 
-- 独立仓库当前版本为 `0.1.0-rc.8`（**prerelease**）；stable blocker 清单见 [RELEASE-NOTES.md](RELEASE-NOTES.md)。
+- 独立仓库当前版本为 `0.1.0-rc.9`（**prerelease**）；stable blocker 清单见 [RELEASE-NOTES.md](RELEASE-NOTES.md)。
 - 旧仓库的同名 Release `miopiik-iui-v0.1.0-rc.4` 及其资产、下载链接保持有效。
-- 新仓库已发布 `v0.1.0-rc.4`、`v0.1.0-rc.6`、`v0.1.0-rc.7` 与 `v0.1.0-rc.8` 四个 prerelease tag，各自附带独立 tarball 与 `SHA256SUMS.txt`。
+- 新仓库已发布 `v0.1.0-rc.4`、`v0.1.0-rc.6`、`v0.1.0-rc.7`、`v0.1.0-rc.8` 与 `v0.1.0-rc.9` 五个 prerelease tag，各自附带独立 tarball 与 `SHA256SUMS.txt`。
 - 包名保持 `miopiik-iui` 不变。
 
 ## 3. 历史数据兼容

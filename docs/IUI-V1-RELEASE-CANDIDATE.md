@@ -1,6 +1,6 @@
 # MiOpIIk IUI v1 — 稳定候选基线与交付门禁
 
-> 初稿 2026-11-12，更新 2026-11-15。本文覆盖独立插件包 **MiOpIIk IUI**（`miopiik-iui` `0.1.0-rc.8` prerelease）。
+> 初稿 2026-11-12，更新 2026-11-15。本文覆盖独立插件包 **MiOpIIk IUI**（`miopiik-iui` `0.1.0-rc.9` prerelease）。
 > 当前状态：**预发布候选版（RC / prerelease）**；升为 stable 前仍有四项 blocker 待解除（详见第 3 节与 [RELEASE-NOTES.md](RELEASE-NOTES.md)）。
 > 实际质量状态以当前 Git HEAD 与每次执行测试的结果为准。
 

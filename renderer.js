@@ -404,6 +404,93 @@
           const tone = TONE_COLORS[props.tone] ?? TONE_COLORS.neutral
           return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, String(props.text ?? ''))
         }
+        if (item.type === 'diagram') {
+          // 确定性几何：等宽列 + 定高药丸，坐标可算而无需测量，回放不漂移
+          const kids = Array.isArray(item.children) ? item.children : []
+          const lanes = []
+          const notes = []
+          const edges = []
+          let implicit = null
+          for (const child of kids) {
+            if (child.type === 'lane') lanes.push(child)
+            else if (child.type === 'node') {
+              if (implicit === null) { implicit = { props: {}, children: [] }; lanes.unshift(implicit) }
+              implicit.children.push(child)
+            } else if (child.type === 'edge') edges.push(child)
+            else notes.push(child)
+          }
+          const laneCount = Math.max(1, lanes.length)
+          const PILL = 44
+          const GAP = 14
+          const HEAD = 22
+          const slots = lanes.map((lane) => (Array.isArray(lane.children) ? lane.children.filter((child) => child.type === 'node') : []))
+          const maxSlots = Math.max(1, ...slots.map((slot) => slot.length))
+          const height = HEAD + maxSlots * PILL + Math.max(0, maxSlots - 1) * GAP
+          const anchorOf = (id) => {
+            for (let li = 0; li < slots.length; li += 1) {
+              const si = slots[li].findIndex((child) => child.props?.id === id)
+              if (si >= 0) return { x: ((li + 0.5) / laneCount) * 360, y: HEAD + si * (PILL + GAP) + PILL / 2 }
+            }
+            return null
+          }
+          const markerId = 'miopiik-arrow-' + String(key).replace(/[^A-Za-z0-9_-]/gu, '')
+          const parts = [
+            h('defs', { key: 'defs' },
+              h('marker', { key: markerId, id: markerId, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' },
+                h('path', { d: 'M0,0 L8,4 L0,8 z', fill: C.muted }))),
+            ...edges.flatMap((edge, index) => {
+              const p = edge.props ?? {}
+              if (p.from === p.to) return []
+              const a = anchorOf(p.from)
+              const b = anchorOf(p.to)
+              if (a === null || b === null) return []
+              let sx, sy, ex, ey, d
+              if (Math.abs(b.x - a.x) < 1) {
+                sy = a.y + PILL / 2 + 2
+                ey = b.y - PILL / 2 - 2
+                if (ey <= sy) ey = sy + 8
+                sx = a.x
+                ex = b.x
+                d = `M ${sx},${sy} L ${ex},${ey}`
+              } else {
+                const forward = b.x >= a.x
+                const span = Math.abs(b.x - a.x)
+                const off = Math.min(30, span * 0.3)
+                sx = a.x + (forward ? off : -off)
+                ex = b.x - (forward ? off : -off)
+                sy = a.y
+                ey = b.y
+                const bend = Math.max(10, Math.abs(ex - sx) * 0.45)
+                d = `M ${sx},${sy} C ${sx + (forward ? bend : -bend)},${sy} ${ex - (forward ? bend : -bend)},${ey} ${ex},${ey}`
+              }
+              const path = h('path', { key: `edge-${index}`, d, fill: 'none', stroke: C.muted, strokeWidth: 1.2, markerEnd: `url(#${markerId})`, strokeDasharray: p.kind === 'dashed' ? '4 3' : undefined })
+              const label = p.label === undefined || String(p.label) === '' ? null : h('text', { key: `edge-label-${index}`, x: (sx + ex) / 2, y: (sy + ey) / 2 - 5, fontSize: 9, fill: C.muted, fontFamily: SANS, textAnchor: 'middle' }, String(p.label))
+              return label === null ? [path] : [path, label]
+            }),
+          ]
+          const titleText = String(props.title ?? '')
+          return h(
+            'div',
+            { key, className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
+            h('div', { style: { position: 'relative', width: '100%' } },
+              h('svg', { viewBox: `0 0 360 ${height}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': titleText === '' ? `泳道图，${edges.length} 条连线` : `${titleText}，${edges.length} 条连线`, style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' } }, ...parts),
+              h('div', { style: { position: 'relative', display: 'grid', gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))`, gap: 10, minWidth: 0 } },
+                ...lanes.map((lane, li) => h('div', { key: `lane-${li}`, style: { display: 'flex', flexDirection: 'column', gap: GAP, minWidth: 0 } },
+                  h('div', { key: 'head', style: { height: HEAD - GAP, display: 'flex', alignItems: 'flex-end', fontSize: 11, color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, String(lane.props?.label ?? '')),
+                  ...slots[li].map((child, si) => {
+                    const cp = child.props ?? {}
+                    const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
+                    return h('div', { key: `node-${si}`, 'data-iui-diagram-node': String(cp.id ?? ''), style: { height: PILL, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, border: `1px solid ${cp.tone ? toneColor : C.border}`, borderRadius: 8, padding: '2px 8px', boxSizing: 'border-box', textAlign: 'center', color: cp.tone ? toneColor : C.text } },
+                      h('div', { style: { fontSize: 11, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.label ?? '')),
+                      String(cp.note ?? '') !== '' ? h('div', { style: { fontSize: 9, lineHeight: '11px', color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.note)) : null)
+                  }),
+                )),
+              ),
+            ),
+            titleText !== '' || String(props.source ?? '') !== '' ? h('div', { style: { fontSize: 10, color: C.muted } }, [titleText, props.source ? `来源：${String(props.source)}` : ''].filter((part) => part !== '').join(' · ')) : null,
+            ...notes.map((note, index) => h('div', { key: `note-${index}`, style: { fontSize: 10, color: C.muted } }, String(note.props?.text ?? ''))),
+          )
+        }
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')
           const color = (TONE_COLORS[tone] ?? TONE_COLORS.neutral)[1]

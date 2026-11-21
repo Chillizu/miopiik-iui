@@ -167,3 +167,28 @@ test('真实自然生成语法：donut、steps、toggle、input、filter、when 
   assert.deepEqual(tableMatrix(table.props).rows, [['已解析', 3], ['已校验', 2], ['待渲染', 5]])
   assert.equal(chartMatrix([{ label: '已解析', value: 3 }, { label: '已校验', value: 2 }]).length, 2)
 })
+
+test('真实自然生成语法：泳道图零降级，散装 node 合列、注释与虚线并存', () => {
+  const source = `<ui title="发布流水线" fallback="拉取 → 构建 → 校验 → 发布">
+    <diagram title="发布流水线（演示）" source="演示数据">
+      <node id="pull" label="拉取" note="git pull"/>
+      <lane label="构建线"><node id="build" label="构建" tone="info" note="两阶段"/><node id="verify" label="校验" tone="success" note="白名单 + 预算"/></lane>
+      <lane label="发布线"><node id="ship" label="发布" tone="warning"/></lane>
+      虚线表示可选路径
+      <edge from="pull" to="build"/>
+      <edge from="build" to="verify"/>
+      <edge from="verify" to="ship" label="通过"/>
+      <edge from="build" to="ship" label="跳过校验（不建议）" kind="dashed"/>
+    </diagram>
+  </ui>`
+  const { parsed, result } = compile(source)
+  assert.deepEqual(parsed.degraded, [])
+  assert.equal(result.ok, true, result.errors?.join(';'))
+  assert.equal(result.degraded, 0)
+  const diagram = walk(result.ast.root, 'diagram')
+  assert.ok(diagram !== null, '应存在 diagram 节点')
+  assert.deepEqual(diagram.children.map((child) => child.type), ['lane', 'lane', 'lane', 'text', 'edge', 'edge', 'edge', 'edge'])
+  assert.equal(diagram.children[0].children[0].props.id, 'pull', '散装 node 应汇成首列')
+  assert.equal(diagram.children[6].props.label, '通过')
+  assert.equal(diagram.children[7].props.kind, 'dashed')
+})

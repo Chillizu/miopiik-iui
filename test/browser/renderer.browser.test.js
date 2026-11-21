@@ -40,6 +40,18 @@ const DEMO_CONTROLS_ML = `<ui title="交互演示" fallback="Web 46 / CLI 32 / A
   <table columns='["渠道","次数"]' rows='[["Web",46],["CLI",32],["API",22]]' caption="演示数据" filter="$state.r.q" when="$state.r.on"/>
 </ui>`
 
+/** rc.9 泳道图演示：显式 lane、跨列连线、虚线语义、注释行。 */
+const DEMO_DIAGRAM_ML = `<ui title="派发链路" fallback="Mind 界定 → Operator 执行 → Mind 审核">
+  <diagram title="派发链路（演示）" source="演示数据">
+    <lane label="Mind"><node id="m1" label="范围界定" tone="info" note="切片合约"/><node id="m2" label="最终审核" tone="success"/></lane>
+    <lane label="Operator"><node id="o1" label="分片执行" tone="warning"/><node id="o2" label="交付合并"/></lane>
+    注释行：虚线表示异步路径
+    <edge from="m1" to="o1" label="分发"/>
+    <edge from="o1" to="o2"/>
+    <edge from="o2" to="m2" label="验收" kind="dashed"/>
+  </diagram>
+</ui>`
+
 function fixture() {
   const setup = `
     const failures = [];
@@ -75,16 +87,15 @@ function fixture() {
   const run = `
     const slots=[];
     const module=plugin.factory(name => {if(name==='react')return React;if(name==='@deepseek-ai/dsh-client-ui-primitives')return primitives;throw Error('unexpected module '+name)});
-    module.apply({effect(){},slots:{inject(name,callback){if(name!=='plugins.bundle.config'&&name!=='settings.plugins.tab')throw Error('wrong slot '+name);callback()},register(meta,render){slots.push({meta,render})}}});
-    const intro=slots.find(s=>s.meta.name==='plugins.bundle.config');
-    const tab=slots.find(s=>s.meta.name==='settings.plugins.tab');
-    document.getElementById('root').appendChild(intro.render({view:'page'}));
-    document.getElementById('root').appendChild(tab.render({}));
+    module.apply({effect(){},slots:{inject(name,callback){if(name!=='plugins.bundle.config')throw Error('wrong slot '+name);callback()},register(meta,render){slots.push({meta,render})}}});
+    const page=slots.find(s=>s.meta.name==='plugins.bundle.config');
+    document.getElementById('root').appendChild(page.render({view:'page'}));
     const embeds=globalThis.__miopiikMarkdownEmbeds;
     const demo=document.createElement('div');
     demo.appendChild(embeds.renderBlock(${JSON.stringify(DEMO_CONTROLS_ML)}));
+    demo.appendChild(embeds.renderBlock(${JSON.stringify(DEMO_DIAGRAM_ML)}));
     document.getElementById('root').appendChild(demo);
-    document.body.dataset.integration = slots.length===2 && intro.meta.key==='miopiik-iui' && tab.meta.id==='miopiik-iui' ? 'ok' : 'failed';
+    document.body.dataset.integration = slots.length===1 && page.meta.key==='miopiik-iui' ? 'ok' : 'failed';
     document.body.dataset.errors=failures.join('|');
   `
   return '<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body><main id="root" style="width:650px;max-width:100%"></main><script>' + setup + '\n' + bundle + '\n' + run + '</script></body></html>'
@@ -106,17 +117,15 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
     t.skip(`Chromium 不可用（${error.code ?? error.message}）：跳过真实 DOM 渲染检查`)
     return
   }
-  assert.match(html,/data-integration="ok"/u,'两个插槽都必须注册成功')
+  assert.match(html,/data-integration="ok"/u,'插件页插槽必须注册成功（且只注册一个）')
   assert.match(html,/data-errors=""/u,'浏览器不应有运行时错误')
   assert.match(html,/data-iui-plugin-settings="1"/u)
-  assert.match(html,/data-iui-overview="1"/u)
-  assert.match(html,/data-iui-configuration="1"/u)
-  assert.doesNotMatch(html,/role="tablist"/u,'页面里不该再有二级页签')
+  assert.doesNotMatch(html,/role="tablist"/u,'页面里不该有二级页签')
   assert.match(html,/role="switch"/u)
   assert.match(html,/data-iui-settings-preview="live"/u,'预览必须连接真实 IUI 注册表')
   assert.match(html,/data-iui-output="ok"/u,'预览应通过真正的 AST 渲染器')
   assert.match(html,/data-iui-registry-state="ready"/u)
-  assert.match(html,/data-iui-preview-source="1"/u,'设置页应给出可复制示例')
+  assert.match(html,/data-iui-preview-source="1"/u,'插件页应给出可复制示例')
   assert.doesNotMatch(html,/data-iui-chart-empty="1"/u,'预览图表不应为空')
   assert.doesNotMatch(html,/linear-gradient/u,'插件页不使用品牌渐变')
   // rc.7 交互面：新控件在真实 Chromium DOM 中全部渲染
@@ -132,4 +141,10 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/class="miopiik-enter"/u,'块与显隐内容应有入场淡入类')
   assert.match(html,/prefers-reduced-motion/u,'定妆样式应尊重减少动效偏好')
   assert.match(html,/class="miopiik-ctl"/u,'交互按钮应有 hover/active 反馈类')
+  // rc.9 泳道图：确定性几何布线在真实 DOM 中渲染
+  assert.match(html,/data-iui-diagram="2"/u,'泳道图应渲染两条 lane')
+  assert.match(html,/data-iui-diagram-node="m1"/u,'节点药丸应携带图内 id')
+  assert.match(html,/aria-label="派发链路（演示），3 条连线"/u,'连线应有可访问摘要')
+  assert.match(html,/strokeDasharray="4 3"/u,'虚线语义应落在 SVG path 上')
+  assert.match(html,/注释行：虚线表示异步路径/u,'纯文本行应按注释保留')
 })

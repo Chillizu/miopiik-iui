@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const IUI_PLUGIN_VERSION = "0.1.0-rc.8"
+    const IUI_PLUGIN_VERSION = "0.1.0-rc.9"
     const C = {
       text: 'var(--dsw-alias-label-primary, #ddd)',
       muted: 'var(--dsw-alias-label-secondary, #999)',
@@ -59,9 +59,14 @@ window.__ModuleLoader__.load({
         // 过程与清单：steps 只接受 step 子节点（与 paragraph 只接受行内组件同一校验模式）
         steps: { props: {}, children: true },
         step: { props: { title: 'string', note: 'string?', tone: 'string?' }, children: false },
+        // 结构图形：lane 是显式列，散装 node 由解析层汇成首列；edge 是唯一的方向性原语
+        diagram: { props: { title: 'string?', source: 'string?' }, children: true },
+        lane: { props: { label: 'string?' }, children: true },
+        node: { props: { id: 'string', label: 'string', tone: 'string?', note: 'string?' }, children: false },
+        edge: { props: { from: 'string', to: 'string', label: 'string?', kind: 'string?' }, children: false },
       })
 
-      const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384 })
+      const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384, diagramLanes: 6, diagramNodes: 24, diagramEdges: 24 })
 
       /** 行内原语：paragraph 只接受这些子节点，保证"同一行文字混排"的语义。 */
       const INLINE_TYPES = Object.freeze(['text', 'badge', 'icon', 'emphasis', 'code', 'link'])
@@ -199,6 +204,72 @@ window.__ModuleLoader__.load({
           if (node.type === 'step') {
             if (typeof props.title !== 'string' || props.title.trim() === '') return failNode(node, path, 'step.title 必填')
             if (props.tone !== undefined && !TONES.includes(props.tone)) return failNode(node, path, `step.tone 只能是 ${TONES.join('/')}`)
+          }
+          if (node.type === 'lane') {
+            const kids = Array.isArray(node.children) ? node.children : []
+            const bad = kids.find((child) => child === null || typeof child !== 'object' || child.type !== 'node')
+            if (bad !== undefined) return failNode(node, path, 'lane 只接受 node 子节点')
+            const count = kids.filter((child) => child.type === 'node').length
+            if (count === 0 || count > 8) return failNode(node, path, 'lane 需要 1-8 个 node')
+          }
+          if (node.type === 'node' && (typeof props.label !== 'string' || props.label.trim() === '')) {
+            return failNode(node, path, 'node.label 必填')
+          }
+          if (node.type === 'node' && props.tone !== undefined && !TONES.includes(props.tone)) {
+            return failNode(node, path, `node.tone 只能是 ${TONES.join('/')}`)
+          }
+          if (node.type === 'edge') {
+            if (typeof props.from !== 'string' || props.from === '' || typeof props.to !== 'string' || props.to === '') {
+              return failNode(node, path, 'edge 需要 from/to')
+            }
+            if (props.kind !== undefined && !['solid', 'dashed'].includes(props.kind)) {
+              return failNode(node, path, 'edge.kind 只能为 solid/dashed')
+            }
+          }
+          if (node.type === 'diagram') {
+            const kids = Array.isArray(node.children) ? node.children : []
+            const badType = kids.find((child) => child === null || typeof child !== 'object' || !['lane', 'node', 'edge', 'text'].includes(child.type))
+            if (badType !== undefined) return failNode(node, path, 'diagram 只接受 lane/node/edge 与注释文本')
+            const lanes = kids.filter((child) => child.type === 'lane')
+            const freeNodes = kids.filter((child) => child.type === 'node')
+            const edges = kids.filter((child) => child.type === 'edge')
+            // 先收幸存 id：坏 id / 重复 id 只降级该 node，图与其余内容保留
+            const seen = new Set()
+            const ids = new Set()
+            const survivors = new Set()
+            const markNode = (child) => {
+              const id = child?.props?.id
+              if (typeof id === 'string' && /^[A-Za-z_][A-Za-z0-9_-]{0,31}$/u.test(id) && !seen.has(id)) {
+                seen.add(id)
+                ids.add(id)
+                survivors.add(child)
+                return true
+              }
+              return false
+            }
+            freeNodes.forEach(markNode)
+            for (const lane of lanes) for (const child of (Array.isArray(lane.children) ? lane.children : [])) if (typeof child === 'object' && child !== null && child.type === 'node') markNode(child)
+            if (ids.size === 0) return failNode(node, path, 'diagram 至少需要一个 node')
+            if (ids.size > LIMITS.diagramNodes) return failNode(node, path, `节点最多 ${LIMITS.diagramNodes} 个`)
+            if (lanes.length + (freeNodes.length > 0 ? 1 : 0) > LIMITS.diagramLanes) return failNode(node, path, `泳道最多 ${LIMITS.diagramLanes} 列`)
+            if (edges.length > LIMITS.diagramEdges) return failNode(node, path, `连线最多 ${LIMITS.diagramEdges} 条`)
+            const brokenNode = (child) => failNode(child, `${path} node`, 'node.id 缺失、不安全或重复')
+            const brokenEdge = (child) => failNode(child, `${path} edge`, `edge 引用未知节点：${String(child?.props?.from ?? '')} → ${String(child?.props?.to ?? '')}`)
+            const rewrittenLanes = lanes.map((lane) => ({
+              ...lane,
+              children: (Array.isArray(lane.children) ? lane.children : []).map((child) =>
+                typeof child === 'object' && child !== null && child.type === 'node' && !survivors.has(child) ? brokenNode(child) : child,
+              ),
+            }))
+            node = {
+              ...node,
+              children: kids.map((child) => {
+                if (child.type === 'lane') return rewrittenLanes[lanes.indexOf(child)] ?? child
+                if (child.type === 'node') return survivors.has(child) ? child : brokenNode(child)
+                if (child.type === 'edge') return ids.has(child.props?.from ?? '') && ids.has(child.props?.to ?? '') ? child : brokenEdge(child)
+                return child
+              }),
+            }
           }
           if (node.type === 'table' && props.filter !== undefined && readBinding(props.filter).scope !== 'state') {
             return failNode(node, path, 'table.filter 只能绑定 $state.*')
@@ -380,11 +451,15 @@ window.__ModuleLoader__.load({
         input: 'input',
         steps: 'steps',
         step: 'step',
+        diagram: 'diagram',
+        lane: 'lane',
+        node: 'node',
+        edge: 'edge',
       })
 
-      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true })
-      // 交互控件与 step 一律写成自闭合：<toggle …/>、<slider …/>、<input …/>、<step title="…"/>
-      const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true })
+      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true })
+      // 交互控件、step 与图形原语一律写成自闭合：<toggle …/>、<step …/>、<node …/>、<edge …/>
+      const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true })
 
       function decodeEntities(text) {
         return String(text)
@@ -586,6 +661,10 @@ window.__ModuleLoader__.load({
         input: ['label', 'bind', 'placeholder'],
         steps: [],
         step: ['title', 'note', 'tone'],
+        diagram: ['title', 'source'],
+        lane: ['label'],
+        node: ['id', 'label', 'tone', 'note'],
+        edge: ['from', 'to', 'label', 'kind'],
         card: ['title', 'subtitle', 'gap', 'span', 'align'],
         grid: ['columns', 'gap', 'align'],
         row: ['gap', 'align'],
@@ -694,6 +773,29 @@ window.__ModuleLoader__.load({
               .filter(Boolean)
             const props = { ...control, ...readProps(attrs, TEXT_PROPS.callout) }
             return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-callout', type: 'callout', props, children } }
+          }
+          if (element.name === 'diagram') {
+            // 结构图形：lane 是显式列；散落的 node 按出现顺序汇成最前一列；
+            // edge 是唯一的方向性原语；纯文本行作为注释保留（灵活原语，不穷举图种）。
+            const lanes = []
+            const implicit = []
+            const rest = []
+            for (const child of element.children) {
+              if (child.name === '#text') {
+                const raw = String(child.text ?? '').trim()
+                if (raw !== '') rest.push({ id: 'ml-diagram-note', type: 'text', props: { text: raw }, children: [] })
+                continue
+              }
+              const item = compile(child)
+              if (item.kind === 'node' && item.node.type === 'lane') lanes.push(item.node)
+              else if (item.kind === 'node' && item.node.type === 'node') implicit.push(item.node)
+              else if (item.kind === 'node') rest.push(item.node)
+              else rest.push({ id: 'ml-diagram-degraded', type: 'text', props: { text: item.text }, children: [] })
+            }
+            if (implicit.length > 0) lanes.unshift({ id: 'ml-lane-auto', type: 'lane', props: {}, children: implicit })
+            const children = [...lanes, ...rest]
+            if (children.length === 0) return degrade('diagram 内没有可渲染内容')
+            return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-diagram', type: 'diagram', props: { ...control, ...readProps(attrs, TEXT_PROPS.diagram) }, children } }
           }
           if (element.name === 'p' || element.name === 'paragraph') {
             const children = element.children.map((child) => {
@@ -1430,6 +1532,93 @@ window.__ModuleLoader__.load({
           const tone = TONE_COLORS[props.tone] ?? TONE_COLORS.neutral
           return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, String(props.text ?? ''))
         }
+        if (item.type === 'diagram') {
+          // 确定性几何：等宽列 + 定高药丸，坐标可算而无需测量，回放不漂移
+          const kids = Array.isArray(item.children) ? item.children : []
+          const lanes = []
+          const notes = []
+          const edges = []
+          let implicit = null
+          for (const child of kids) {
+            if (child.type === 'lane') lanes.push(child)
+            else if (child.type === 'node') {
+              if (implicit === null) { implicit = { props: {}, children: [] }; lanes.unshift(implicit) }
+              implicit.children.push(child)
+            } else if (child.type === 'edge') edges.push(child)
+            else notes.push(child)
+          }
+          const laneCount = Math.max(1, lanes.length)
+          const PILL = 44
+          const GAP = 14
+          const HEAD = 22
+          const slots = lanes.map((lane) => (Array.isArray(lane.children) ? lane.children.filter((child) => child.type === 'node') : []))
+          const maxSlots = Math.max(1, ...slots.map((slot) => slot.length))
+          const height = HEAD + maxSlots * PILL + Math.max(0, maxSlots - 1) * GAP
+          const anchorOf = (id) => {
+            for (let li = 0; li < slots.length; li += 1) {
+              const si = slots[li].findIndex((child) => child.props?.id === id)
+              if (si >= 0) return { x: ((li + 0.5) / laneCount) * 360, y: HEAD + si * (PILL + GAP) + PILL / 2 }
+            }
+            return null
+          }
+          const markerId = 'miopiik-arrow-' + String(key).replace(/[^A-Za-z0-9_-]/gu, '')
+          const parts = [
+            h('defs', { key: 'defs' },
+              h('marker', { key: markerId, id: markerId, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' },
+                h('path', { d: 'M0,0 L8,4 L0,8 z', fill: C.muted }))),
+            ...edges.flatMap((edge, index) => {
+              const p = edge.props ?? {}
+              if (p.from === p.to) return []
+              const a = anchorOf(p.from)
+              const b = anchorOf(p.to)
+              if (a === null || b === null) return []
+              let sx, sy, ex, ey, d
+              if (Math.abs(b.x - a.x) < 1) {
+                sy = a.y + PILL / 2 + 2
+                ey = b.y - PILL / 2 - 2
+                if (ey <= sy) ey = sy + 8
+                sx = a.x
+                ex = b.x
+                d = `M ${sx},${sy} L ${ex},${ey}`
+              } else {
+                const forward = b.x >= a.x
+                const span = Math.abs(b.x - a.x)
+                const off = Math.min(30, span * 0.3)
+                sx = a.x + (forward ? off : -off)
+                ex = b.x - (forward ? off : -off)
+                sy = a.y
+                ey = b.y
+                const bend = Math.max(10, Math.abs(ex - sx) * 0.45)
+                d = `M ${sx},${sy} C ${sx + (forward ? bend : -bend)},${sy} ${ex - (forward ? bend : -bend)},${ey} ${ex},${ey}`
+              }
+              const path = h('path', { key: `edge-${index}`, d, fill: 'none', stroke: C.muted, strokeWidth: 1.2, markerEnd: `url(#${markerId})`, strokeDasharray: p.kind === 'dashed' ? '4 3' : undefined })
+              const label = p.label === undefined || String(p.label) === '' ? null : h('text', { key: `edge-label-${index}`, x: (sx + ex) / 2, y: (sy + ey) / 2 - 5, fontSize: 9, fill: C.muted, fontFamily: SANS, textAnchor: 'middle' }, String(p.label))
+              return label === null ? [path] : [path, label]
+            }),
+          ]
+          const titleText = String(props.title ?? '')
+          return h(
+            'div',
+            { key, className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
+            h('div', { style: { position: 'relative', width: '100%' } },
+              h('svg', { viewBox: `0 0 360 ${height}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': titleText === '' ? `泳道图，${edges.length} 条连线` : `${titleText}，${edges.length} 条连线`, style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' } }, ...parts),
+              h('div', { style: { position: 'relative', display: 'grid', gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))`, gap: 10, minWidth: 0 } },
+                ...lanes.map((lane, li) => h('div', { key: `lane-${li}`, style: { display: 'flex', flexDirection: 'column', gap: GAP, minWidth: 0 } },
+                  h('div', { key: 'head', style: { height: HEAD - GAP, display: 'flex', alignItems: 'flex-end', fontSize: 11, color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, String(lane.props?.label ?? '')),
+                  ...slots[li].map((child, si) => {
+                    const cp = child.props ?? {}
+                    const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
+                    return h('div', { key: `node-${si}`, 'data-iui-diagram-node': String(cp.id ?? ''), style: { height: PILL, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, border: `1px solid ${cp.tone ? toneColor : C.border}`, borderRadius: 8, padding: '2px 8px', boxSizing: 'border-box', textAlign: 'center', color: cp.tone ? toneColor : C.text } },
+                      h('div', { style: { fontSize: 11, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.label ?? '')),
+                      String(cp.note ?? '') !== '' ? h('div', { style: { fontSize: 9, lineHeight: '11px', color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.note)) : null)
+                  }),
+                )),
+              ),
+            ),
+            titleText !== '' || String(props.source ?? '') !== '' ? h('div', { style: { fontSize: 10, color: C.muted } }, [titleText, props.source ? `来源：${String(props.source)}` : ''].filter((part) => part !== '').join(' · ')) : null,
+            ...notes.map((note, index) => h('div', { key: `note-${index}`, style: { fontSize: 10, color: C.muted } }, String(note.props?.text ?? ''))),
+          )
+        }
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')
           const color = (TONE_COLORS[tone] ?? TONE_COLORS.neutral)[1]
@@ -1670,16 +1859,12 @@ window.__ModuleLoader__.load({
     }
 
 /**
- * MiOpIIk IUI — DSH pages, deliberately split by surface:
+ * MiOpIIk IUI — the plugin's own page: Plugins → Installed → MiOpIIk IUI.
  *
- *  - Plugins page (`plugins.bundle.config`): what IUI is, a live preview and the
- *    compatibility boundary. Documentation only — no controls.
- *  - Settings → Built-in plugins (`settings.plugins.tab`): the one real
- *    preference (this browser renders iui or not), diagnostics and a copyable
- *    sample. Settings live where every other setting in DSH lives.
- *
- * Both are official slots; the plugin declares no slot of its own. Trusted
- * plugin chrome only: theme tokens, no gradients, no hero, no fake switches.
+ * One surface, no essays: the browser-local render switch, a live preview,
+ * a one-line status, and a copyable sample. No separate settings tab is
+ * registered; everything the user can adjust or wants to see lives here.
+ * Trusted plugin chrome only: theme tokens, no gradients, no fake switches.
  */
 const IUI_PREF_KEY = 'miopiik.markdownEmbeds'
 
@@ -1727,39 +1912,30 @@ const IuiButton = IUI_PRIMITIVES?.Button
 
 const IUI_PAGE = {
   root: {
-    display: 'flex', flexDirection: 'column', gap: 24,
+    display: 'flex', flexDirection: 'column', gap: 16,
     width: '100%', minWidth: 0, boxSizing: 'border-box',
     color: 'var(--dsw-alias-label-primary)', fontFamily: 'inherit',
   },
-  section: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 },
-  title: { margin: 0, fontSize: 14, fontWeight: 500, lineHeight: '20px' },
-  body: {
-    margin: 0, fontSize: 14, lineHeight: '22px',
-    color: 'var(--dsw-alias-label-secondary)', overflowWrap: 'anywhere',
-  },
+  section: { display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 },
+  title: { margin: 0, fontSize: 13, fontWeight: 500, lineHeight: '18px' },
   hint: {
     margin: 0, fontSize: 12, lineHeight: '18px',
     color: 'var(--dsw-alias-label-tertiary)', overflowWrap: 'anywhere',
   },
-  list: { margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', minWidth: 0 },
-  item: {
-    display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-    gap: 8, flexWrap: 'wrap', padding: '9px 2px', minWidth: 0,
+  switchRow: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '6px 0', minWidth: 0,
     borderTop: '.5px solid var(--dsw-alias-border-l2)',
+    borderBottom: '.5px solid var(--dsw-alias-border-l2)',
   },
-  itemLabel: { flex: 'none', fontSize: 13, fontWeight: 500, lineHeight: '20px' },
-  itemValue: {
-    flex: '0 1 auto', margin: 0, textAlign: 'right', overflowWrap: 'anywhere',
-    fontVariantNumeric: 'tabular-nums', fontSize: 12.5, lineHeight: '18px',
-    color: 'var(--dsw-alias-label-secondary)',
-  },
-  mono: {
-    fontFamily: 'var(--ds-font-family-code, var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace))',
-    fontSize: 11.5, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)',
-    overflowWrap: 'anywhere',
+  switchLabel: { fontSize: 13, fontWeight: 500, lineHeight: '20px', flex: 'none' },
+  status: {
+    display: 'flex', gap: 10, flexWrap: 'wrap',
+    fontSize: 11.5, lineHeight: '16px',
+    color: 'var(--dsw-alias-label-tertiary)',
   },
   pre: {
-    margin: 0, padding: '12px 14px', maxWidth: '100%', overflowX: 'auto',
+    margin: 0, padding: '10px 12px', maxWidth: '100%', overflowX: 'auto',
     border: '.5px solid var(--dsw-alias-border-l1)',
     borderRadius: 'var(--dsw-radius-md)',
     background: 'var(--dsw-alias-bg-module-platform)',
@@ -1826,100 +2002,14 @@ function IuiToggle({ enabled, onToggle }) {
   )
 }
 
-function IuiFact({ label, value, mono = false, badge = null }) {
-  return h(
-    'div',
-    { style: { ...IUI_PAGE.item } },
-    h('dt', { style: IUI_PAGE.itemLabel }, label),
-    h('dd', { style: { ...(mono ? IUI_PAGE.mono : IUI_PAGE.itemValue), margin: 0, textAlign: 'right' } }, badge ?? value),
-  )
-}
-
-function IuiRegistryFact({ ready }) {
-  return h(IuiFact, {
-    label: '渲染器',
-    value: ready ? '已连接' : '未连接',
-    badge: h('span', {
-      'data-iui-registry-state': ready ? 'ready' : 'unavailable',
-      style: { color: ready ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-warn-primary)' },
-    }, ready ? '已连接' : '未连接'),
-  })
-}
-
-/** Plugins page: documentation, a live preview, and where to find the setting. */
-function IuiIntro({ preview, enabled, ready, registry }) {
-  return h(
-    'div',
-    { 'data-iui-plugin-settings': '1', 'data-iui-overview': '1', style: IUI_PAGE.root },
-    h(
-      'section',
-      { style: IUI_PAGE.section },
-      h(
-        'p',
-        { style: IUI_PAGE.body },
-        'IUI 是一种声明式 Markdown 界面：模型在回复里直接书写受控的 iui 围栏或行内标记，DSH 用本地渲染器把它变成状态、可视化与本地交互。它不是工具调用，也不要求模型了解渲染器实现。',
-      ),
-    ),
-    h(
-      'section',
-      { style: IUI_PAGE.section },
-      h('h3', { style: IUI_PAGE.title }, '实时预览'),
-      h('p', { style: IUI_PAGE.hint }, '使用真实的 IUI 渲染器，不截图、不伪造数据。切换周期只改本地状态，不发起模型请求。'),
-      h(
-        'div',
-        { 'data-iui-settings-preview': preview ? 'live' : 'paused', style: IUI_PAGE.preview },
-        preview ??
-          h(
-            'div',
-            { role: 'status', style: { minHeight: 142, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 5, color: 'var(--dsw-alias-label-tertiary)' } },
-            h('strong', { style: { fontSize: 12, fontWeight: 650 } }, enabled ? '渲染器未连接' : '预览已暂停'),
-            h('span', { style: { fontSize: 11, textAlign: 'center', overflowWrap: 'anywhere' } }, enabled ? '请检查插件加载状态后刷新页面。' : '在「设置 → 内置插件 → MiOpIIk IUI」中开启渲染后即可恢复预览。'),
-          ),
-      ),
-      h(
-        'div',
-        { style: { marginTop: 12, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' } },
-        h('span', { style: { fontSize: 10, fontWeight: 650, color: 'var(--dsw-alias-label-tertiary)', letterSpacing: .3 } }, '行内语义'),
-        ready ? registry.renderInline({ type: 'badge', props: { tone: 'success', text: '已完成' } }) : null,
-        ready ? registry.renderInline({ type: 'badge', props: { tone: 'warning', text: '进行中' } }) : null,
-        h('code', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', padding: '1px 5px', background: 'var(--dsw-alias-bg-module-platform)', borderRadius: 5 } }, 'iui/1'),
-      ),
-    ),
-    h(
-      'section',
-      { style: IUI_PAGE.section },
-      h('h3', { style: IUI_PAGE.title }, '兼容性与边界'),
-      h(
-        'dl',
-        { style: IUI_PAGE.list },
-        h(IuiFact, { label: '版本', value: 'v' + IUI_PLUGIN_VERSION }),
-        h(IuiFact, { label: '协议', value: 'iui/1 · miopiik-ml', mono: true }),
-        h(IuiFact, {
-          label: '接入方式',
-          value: '实验性 DSH Chat Markdown 补丁（尚未合并进上游 API）',
-        }),
-        h(IuiRegistryFact, { ready }),
-        h(IuiFact, {
-          label: '安全边界',
-          value: '仅白名单组件；无任意 HTML/JS/CSS、无网络请求、无工具调用；坏节点只在本地降级',
-        }),
-        h(IuiFact, {
-          label: '与 MiOpIIk Agent 的关系',
-          value: '独立插件；不需要 Mind/Ink/Operator，Agent 也不需要它',
-        }),
-      ),
-    ),
-    h('p', { style: IUI_PAGE.hint }, '渲染开关、诊断与可复制示例在「设置 → 内置插件 → MiOpIIk IUI」；本页只做说明。'),
-  )
-}
-
-/** Settings → Built-in plugins: the real preference plus diagnostics. */
-function IuiSettingsPanel() {
+/** The one real page: switch, live preview, one status line, copyable sample. */
+function IuiPluginPage() {
   const [enabled, setEnabled] = React.useState(iuiIsEnabled)
   const [error, setError] = React.useState('')
   const [copyMessage, setCopyMessage] = React.useState('')
   const registry = iuiRegistry()
   const ready = registry !== null
+  const patched = hostPatchActive()
 
   const toggle = () => {
     const next = !enabled
@@ -1945,56 +2035,45 @@ function IuiSettingsPanel() {
 
   return h(
     'div',
-    { 'data-iui-plugin-settings': '1', 'data-iui-configuration': '1', style: IUI_PAGE.root },
+    { 'data-iui-plugin-settings': '1', style: IUI_PAGE.root },
+    h('p', { style: IUI_PAGE.hint }, '模型在回复里书写受控 iui 围栏，本插件把它渲染成界面组件；不注册工具、不产生消息。'),
     h(
-      'section',
-      { style: IUI_PAGE.section },
-      h(
-        'p',
-        { style: IUI_PAGE.body },
-        '这里只有一项真实设置：当前浏览器是否把 iui 围栏和行内标记渲染成界面。它只影响显示，不改写任何历史消息，也不改变 Host 对模型的输出约定。',
-      ),
+      'div',
+      { style: IUI_PAGE.switchRow },
+      h('span', { style: IUI_PAGE.switchLabel }, '在聊天中显示 IUI'),
+      h('span', { 'data-iui-settings-status': enabled ? 'enabled' : 'disabled', style: IUI_PAGE.hint }, enabled ? '已开启 · 仅作用于当前浏览器' : '已关闭 · iui 围栏按代码块显示'),
+      h(IuiToggle, { enabled, onToggle: toggle }),
     ),
+    error ? h('p', { role: 'alert', style: { margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' } }, error) : null,
     h(
       'section',
       { style: IUI_PAGE.section },
-      h('h3', { style: IUI_PAGE.title }, '渲染设置'),
+      h('h3', { style: IUI_PAGE.title }, '实时预览'),
       h(
         'div',
-        { style: { ...IUI_PAGE.item, borderTop: 0, padding: '4px 2px', alignItems: 'center' } },
-        h(
-          'div',
-          { style: { display: 'flex', flexDirection: 'column', gap: 3, flex: '1 1 240px', minWidth: 0 } },
-          h('span', { style: IUI_PAGE.itemLabel }, '在聊天中显示 IUI'),
-          h('span', { 'data-iui-settings-status': enabled ? 'enabled' : 'disabled', style: { ...IUI_PAGE.hint, color: 'var(--dsw-alias-label-secondary)' } },
-            enabled ? '已开启 · 仅作用于当前浏览器' : '已关闭 · iui 围栏显示为普通代码块'),
-          h('span', { style: IUI_PAGE.hint }, '切换后会刷新页面，让历史消息按新偏好重新渲染；不会改写任何历史数据。'),
-        ),
-        h(IuiToggle, { enabled, onToggle: toggle }),
+        { 'data-iui-settings-preview': enabled && ready ? 'live' : 'paused', style: IUI_PAGE.preview },
+        enabled && ready
+          ? registry.renderBlock(IUI_PREVIEW_ML)
+          : h(
+              'div',
+              { role: 'status', style: { minHeight: 142, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 5, color: 'var(--dsw-alias-label-tertiary)' } },
+              h('strong', { style: { fontSize: 12, fontWeight: 650 } }, ready ? '预览已暂停' : '渲染器未连接'),
+              h('span', { style: { fontSize: 11, textAlign: 'center', overflowWrap: 'anywhere' } }, ready ? '开启「在聊天中显示 IUI」即可恢复预览。' : '请检查插件加载状态后刷新页面。'),
+            ),
       ),
-      error ? h('p', { role: 'alert', style: { margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' } }, error) : null,
     ),
     h(
-      'section',
-      { style: IUI_PAGE.section },
-      h('h3', { style: IUI_PAGE.title }, '诊断'),
-      h(
-        'dl',
-        { style: IUI_PAGE.list },
-        h(IuiRegistryFact, { ready }),
-        h(IuiFact, { label: '插件版本', value: 'v' + IUI_PLUGIN_VERSION }),
-        h(IuiFact, { label: '协议', value: 'iui/1 · miopiik-ml', mono: true }),
-        h(IuiFact, { label: '浏览器偏好', value: IUI_PREF_KEY, mono: true }),
-        h(IuiFact, { label: '当前偏好', value: enabled ? '开启' : '关闭' }),
-        h(IuiFact, { label: '接入方式', value: hostPatchActive() ? '实验性 DSH Chat Markdown 补丁（已加载）' : '未检测到补丁 · 仅插件页预览可用' }),
-      ),
-      h('p', { style: IUI_PAGE.hint }, '此版本使用实验性 DSH Markdown 接入补丁。开关只控制当前浏览器的渲染，不会停用 Host 的模型输出指引。'),
+      'div',
+      { 'data-iui-plugin-status': '1', style: IUI_PAGE.status },
+      h('span', { 'data-iui-plugin-version': '1' }, 'v' + IUI_PLUGIN_VERSION),
+      h('span', { 'data-iui-patch-state': patched ? 'loaded' : 'missing' }, patched ? '宿主补丁已加载' : '未检测到补丁 · 仅预览可用'),
+      h('span', { 'data-iui-registry-state': ready ? 'ready' : 'unavailable' }, ready ? '渲染器已连接' : '渲染器未连接'),
     ),
     h(
       'section',
       { style: IUI_PAGE.section },
       h('h3', { style: IUI_PAGE.title }, '示例与复制'),
-      h('p', { style: IUI_PAGE.hint }, '下面这份 Markdown 可以直接粘贴到 DSH 会话中测试。'),
+      h('p', { style: IUI_PAGE.hint }, '粘贴到任意 DSH 会话即可测试。'),
       h('pre', { 'data-iui-preview-source': '1', style: IUI_PAGE.pre }, IUI_SAMPLE_MARKDOWN),
       h(
         'div',
@@ -2006,32 +2085,13 @@ function IuiSettingsPanel() {
   )
 }
 
-function IuiPluginIntroPage() {
-  const [enabled] = React.useState(iuiIsEnabled)
-  const registry = iuiRegistry()
-  const ready = registry !== null
-  return h(IuiIntro, {
-    preview: enabled && ready ? registry.renderBlock(IUI_PREVIEW_ML) : null,
-    enabled,
-    ready,
-    registry,
-  })
-}
-
 function registerIuiSettings(ctx) {
   if (!ctx.slots || typeof ctx.slots.inject !== 'function') return
-  // Plugins page: documentation only.
+  // 唯一入口：插件页承载全部可调项与状态；不再注册设置页页签。
   ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
     name: 'plugins.bundle.config',
     key: 'miopiik-iui',
-  }, () => h(IuiPluginIntroPage)))
-  // Settings → Built-in plugins: the actual preference lives here.
-  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-    name: 'settings.plugins.tab',
-    id: 'miopiik-iui',
-    order: 31,
-    label: () => 'MiOpIIk IUI',
-  }, () => h(IuiSettingsPanel)))
+  }, () => h(IuiPluginPage)))
 }
 
     return {

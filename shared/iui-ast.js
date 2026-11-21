@@ -41,9 +41,14 @@ export const REGISTRY = Object.freeze({
   // 过程与清单：steps 只接受 step 子节点（与 paragraph 只接受行内组件同一校验模式）
   steps: { props: {}, children: true },
   step: { props: { title: 'string', note: 'string?', tone: 'string?' }, children: false },
+  // 结构图形：lane 是显式列，散装 node 由解析层汇成首列；edge 是唯一的方向性原语
+  diagram: { props: { title: 'string?', source: 'string?' }, children: true },
+  lane: { props: { label: 'string?' }, children: true },
+  node: { props: { id: 'string', label: 'string', tone: 'string?', note: 'string?' }, children: false },
+  edge: { props: { from: 'string', to: 'string', label: 'string?', kind: 'string?' }, children: false },
 })
 
-export const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384 })
+export const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384, diagramLanes: 6, diagramNodes: 24, diagramEdges: 24 })
 
 /** 行内原语：paragraph 只接受这些子节点，保证"同一行文字混排"的语义。 */
 export const INLINE_TYPES = Object.freeze(['text', 'badge', 'icon', 'emphasis', 'code', 'link'])
@@ -181,6 +186,72 @@ export function validateAst(input) {
     if (node.type === 'step') {
       if (typeof props.title !== 'string' || props.title.trim() === '') return failNode(node, path, 'step.title 必填')
       if (props.tone !== undefined && !TONES.includes(props.tone)) return failNode(node, path, `step.tone 只能是 ${TONES.join('/')}`)
+    }
+    if (node.type === 'lane') {
+      const kids = Array.isArray(node.children) ? node.children : []
+      const bad = kids.find((child) => child === null || typeof child !== 'object' || child.type !== 'node')
+      if (bad !== undefined) return failNode(node, path, 'lane 只接受 node 子节点')
+      const count = kids.filter((child) => child.type === 'node').length
+      if (count === 0 || count > 8) return failNode(node, path, 'lane 需要 1-8 个 node')
+    }
+    if (node.type === 'node' && (typeof props.label !== 'string' || props.label.trim() === '')) {
+      return failNode(node, path, 'node.label 必填')
+    }
+    if (node.type === 'node' && props.tone !== undefined && !TONES.includes(props.tone)) {
+      return failNode(node, path, `node.tone 只能是 ${TONES.join('/')}`)
+    }
+    if (node.type === 'edge') {
+      if (typeof props.from !== 'string' || props.from === '' || typeof props.to !== 'string' || props.to === '') {
+        return failNode(node, path, 'edge 需要 from/to')
+      }
+      if (props.kind !== undefined && !['solid', 'dashed'].includes(props.kind)) {
+        return failNode(node, path, 'edge.kind 只能为 solid/dashed')
+      }
+    }
+    if (node.type === 'diagram') {
+      const kids = Array.isArray(node.children) ? node.children : []
+      const badType = kids.find((child) => child === null || typeof child !== 'object' || !['lane', 'node', 'edge', 'text'].includes(child.type))
+      if (badType !== undefined) return failNode(node, path, 'diagram 只接受 lane/node/edge 与注释文本')
+      const lanes = kids.filter((child) => child.type === 'lane')
+      const freeNodes = kids.filter((child) => child.type === 'node')
+      const edges = kids.filter((child) => child.type === 'edge')
+      // 先收幸存 id：坏 id / 重复 id 只降级该 node，图与其余内容保留
+      const seen = new Set()
+      const ids = new Set()
+      const survivors = new Set()
+      const markNode = (child) => {
+        const id = child?.props?.id
+        if (typeof id === 'string' && /^[A-Za-z_][A-Za-z0-9_-]{0,31}$/u.test(id) && !seen.has(id)) {
+          seen.add(id)
+          ids.add(id)
+          survivors.add(child)
+          return true
+        }
+        return false
+      }
+      freeNodes.forEach(markNode)
+      for (const lane of lanes) for (const child of (Array.isArray(lane.children) ? lane.children : [])) if (typeof child === 'object' && child !== null && child.type === 'node') markNode(child)
+      if (ids.size === 0) return failNode(node, path, 'diagram 至少需要一个 node')
+      if (ids.size > LIMITS.diagramNodes) return failNode(node, path, `节点最多 ${LIMITS.diagramNodes} 个`)
+      if (lanes.length + (freeNodes.length > 0 ? 1 : 0) > LIMITS.diagramLanes) return failNode(node, path, `泳道最多 ${LIMITS.diagramLanes} 列`)
+      if (edges.length > LIMITS.diagramEdges) return failNode(node, path, `连线最多 ${LIMITS.diagramEdges} 条`)
+      const brokenNode = (child) => failNode(child, `${path} node`, 'node.id 缺失、不安全或重复')
+      const brokenEdge = (child) => failNode(child, `${path} edge`, `edge 引用未知节点：${String(child?.props?.from ?? '')} → ${String(child?.props?.to ?? '')}`)
+      const rewrittenLanes = lanes.map((lane) => ({
+        ...lane,
+        children: (Array.isArray(lane.children) ? lane.children : []).map((child) =>
+          typeof child === 'object' && child !== null && child.type === 'node' && !survivors.has(child) ? brokenNode(child) : child,
+        ),
+      }))
+      node = {
+        ...node,
+        children: kids.map((child) => {
+          if (child.type === 'lane') return rewrittenLanes[lanes.indexOf(child)] ?? child
+          if (child.type === 'node') return survivors.has(child) ? child : brokenNode(child)
+          if (child.type === 'edge') return ids.has(child.props?.from ?? '') && ids.has(child.props?.to ?? '') ? child : brokenEdge(child)
+          return child
+        }),
+      }
     }
     if (node.type === 'table' && props.filter !== undefined && readBinding(props.filter).scope !== 'state') {
       return failNode(node, path, 'table.filter 只能绑定 $state.*')
