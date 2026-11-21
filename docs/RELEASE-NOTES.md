@@ -2,7 +2,16 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.9` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+> **当前版本 `0.1.0-rc.10` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+
+## miopiik-iui 0.1.0-rc.10 — prerelease
+
+**状态**：prerelease，四项 stable blocker 未变；本版为泳道图标签热修。
+
+- **连线标签压扁修复（用户实机报告）**：泳道图 SVG 覆盖层用 `preserveAspectRatio="none"` 拉伸坐标系（布线需要），SVG `<text>` 连带被非等比横向拉宽——所有连线标注看起来被踩扁。修复：标签改为 HTML 覆盖层（等比、清晰、随宿主字体），随中点定位并左右限幅（8%–88%）。
+- **往复边标签错位（渲染层礼貌规则）**：同一对泳道之间的近平行反向边（如「验收 / 发布」）中点天然同位；现在**正向边标签放线上方、反向边放线下方**，一对往复边自动分开。
+- **验证**：真实 Chromium DOM 断言新增 HTML 标签层检查，测试 82 项全绿。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.10.tgz`，按 README 的 profile 补丁步骤安装后重启 DSH。
 
 ## miopiik-iui 0.1.0-rc.9 — prerelease
 

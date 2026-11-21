@@ -147,4 +147,5 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/aria-label="派发链路（演示），3 条连线"/u,'连线应有可访问摘要')
   assert.match(html,/strokeDasharray="4 3"/u,'虚线语义应落在 SVG path 上')
   assert.match(html,/注释行：虚线表示异步路径/u,'纯文本行应按注释保留')
+  assert.match(html,/data-iui-diagram-edge-label="1"/u,'连线标签应为 HTML 覆盖层（SVG 拉伸会压扁文字）')
 })

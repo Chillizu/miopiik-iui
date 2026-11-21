@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const IUI_PLUGIN_VERSION = "0.1.0-rc.9"
+    const IUI_PLUGIN_VERSION = "0.1.0-rc.10"
     const C = {
       text: 'var(--dsw-alias-label-primary, #ddd)',
       muted: 'var(--dsw-alias-label-secondary, #999)',
@@ -1562,39 +1562,50 @@ window.__ModuleLoader__.load({
             return null
           }
           const markerId = 'miopiik-arrow-' + String(key).replace(/[^A-Za-z0-9_-]/gu, '')
+          const edgePaths = []
+          const edgeLabels = []
+          for (const [index, edge] of edges.entries()) {
+            const p = edge.props ?? {}
+            if (p.from === p.to) continue
+            const a = anchorOf(p.from)
+            const b = anchorOf(p.to)
+            if (a === null || b === null) continue
+            const forward = b.x > a.x || (b.x === a.x && b.y >= a.y)
+            let sx, sy, ex, ey, d
+            if (Math.abs(b.x - a.x) < 1) {
+              sy = a.y + PILL / 2 + 2
+              ey = b.y - PILL / 2 - 2
+              if (ey <= sy) ey = sy + 8
+              sx = a.x
+              ex = b.x
+              d = `M ${sx},${sy} L ${ex},${ey}`
+            } else {
+              const span = Math.abs(b.x - a.x)
+              const off = Math.min(30, span * 0.3)
+              sx = a.x + (forward ? off : -off)
+              ex = b.x - (forward ? off : -off)
+              sy = a.y
+              ey = b.y
+              const bend = Math.max(10, Math.abs(ex - sx) * 0.45)
+              d = `M ${sx},${sy} C ${sx + (forward ? bend : -bend)},${sy} ${ex - (forward ? bend : -bend)},${ey} ${ex},${ey}`
+            }
+            edgePaths.push(h('path', { key: `edge-${index}`, d, fill: 'none', stroke: C.muted, strokeWidth: 1.2, markerEnd: `url(#${markerId})`, strokeDasharray: p.kind === 'dashed' ? '4 3' : undefined }))
+            // 标签走 HTML 覆盖层：SVG 在 preserveAspectRatio=none 下会非等比拉伸文字（rc.9 压扁成因）。
+            // 礼貌错位：正向边标签放线上方，反向边放线下方——一对往复边天然分开。
+            if (typeof p.label === 'string' && p.label.trim() !== '') {
+              const leftPct = Math.min(88, Math.max(12, (((sx + ex) / 2) / 360) * 100))
+              edgeLabels.push(h('div', {
+                key: `edge-label-${index}`,
+                'data-iui-diagram-edge-label': '1',
+                style: { position: 'absolute', left: `${leftPct}%`, top: `${(sy + ey) / 2 + (forward ? -7 : 13)}px`, transform: 'translate(-50%, -50%)', fontSize: 9.5, color: C.muted, whiteSpace: 'nowrap', pointerEvents: 'none' },
+              }, String(p.label)))
+            }
+          }
           const parts = [
             h('defs', { key: 'defs' },
               h('marker', { key: markerId, id: markerId, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' },
                 h('path', { d: 'M0,0 L8,4 L0,8 z', fill: C.muted }))),
-            ...edges.flatMap((edge, index) => {
-              const p = edge.props ?? {}
-              if (p.from === p.to) return []
-              const a = anchorOf(p.from)
-              const b = anchorOf(p.to)
-              if (a === null || b === null) return []
-              let sx, sy, ex, ey, d
-              if (Math.abs(b.x - a.x) < 1) {
-                sy = a.y + PILL / 2 + 2
-                ey = b.y - PILL / 2 - 2
-                if (ey <= sy) ey = sy + 8
-                sx = a.x
-                ex = b.x
-                d = `M ${sx},${sy} L ${ex},${ey}`
-              } else {
-                const forward = b.x >= a.x
-                const span = Math.abs(b.x - a.x)
-                const off = Math.min(30, span * 0.3)
-                sx = a.x + (forward ? off : -off)
-                ex = b.x - (forward ? off : -off)
-                sy = a.y
-                ey = b.y
-                const bend = Math.max(10, Math.abs(ex - sx) * 0.45)
-                d = `M ${sx},${sy} C ${sx + (forward ? bend : -bend)},${sy} ${ex - (forward ? bend : -bend)},${ey} ${ex},${ey}`
-              }
-              const path = h('path', { key: `edge-${index}`, d, fill: 'none', stroke: C.muted, strokeWidth: 1.2, markerEnd: `url(#${markerId})`, strokeDasharray: p.kind === 'dashed' ? '4 3' : undefined })
-              const label = p.label === undefined || String(p.label) === '' ? null : h('text', { key: `edge-label-${index}`, x: (sx + ex) / 2, y: (sy + ey) / 2 - 5, fontSize: 9, fill: C.muted, fontFamily: SANS, textAnchor: 'middle' }, String(p.label))
-              return label === null ? [path] : [path, label]
-            }),
+            ...edgePaths,
           ]
           const titleText = String(props.title ?? '')
           return h(
@@ -1602,6 +1613,7 @@ window.__ModuleLoader__.load({
             { key, className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
             h('div', { style: { position: 'relative', width: '100%' } },
               h('svg', { viewBox: `0 0 360 ${height}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': titleText === '' ? `泳道图，${edges.length} 条连线` : `${titleText}，${edges.length} 条连线`, style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' } }, ...parts),
+              ...edgeLabels,
               h('div', { style: { position: 'relative', display: 'grid', gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))`, gap: 10, minWidth: 0 } },
                 ...lanes.map((lane, li) => h('div', { key: `lane-${li}`, style: { display: 'flex', flexDirection: 'column', gap: GAP, minWidth: 0 } },
                   h('div', { key: 'head', style: { height: HEAD - GAP, display: 'flex', alignItems: 'flex-end', fontSize: 11, color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, String(lane.props?.label ?? '')),

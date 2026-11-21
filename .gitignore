@@ -7,3 +7,6 @@ node_modules/
 
 # 上游 fork 是生成物（node tools/fork-chat-embeds.mjs 重建），不入库
 upstream/dsh-client-ui-chat-embeds/
+
+# 子代理读图裁片等临时产物不入库
+.inspect/
