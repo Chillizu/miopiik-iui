@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const IUI_PLUGIN_VERSION = "0.1.0-rc.7"
+    const IUI_PLUGIN_VERSION = "0.1.0-rc.8"
     const C = {
       text: 'var(--dsw-alias-label-primary, #ddd)',
       muted: 'var(--dsw-alias-label-secondary, #999)',
@@ -1246,6 +1246,7 @@ window.__ModuleLoader__.load({
                 'button',
                 {
                   key: `${key}-${index}`,
+                  className: 'miopiik-ctl',
                   type: 'button',
                   'aria-pressed': index === selectedIndex,
                   onClick: () => {
@@ -1260,6 +1261,7 @@ window.__ModuleLoader__.load({
                     padding: '2px 10px',
                     fontSize: 11,
                     cursor: 'pointer',
+                    transition: 'background-color .12s ease, border-color .12s ease, color .12s ease',
                   },
                 },
                 String(option.label ?? ''),
@@ -1279,6 +1281,7 @@ window.__ModuleLoader__.load({
               'button',
               {
                 key: `${key}-ctl`,
+                className: 'miopiik-ctl',
                 type: 'button',
                 role: 'switch',
                 'aria-checked': on,
@@ -1298,6 +1301,7 @@ window.__ModuleLoader__.load({
                   borderRadius: 999,
                   background: on ? C.brand : 'rgba(127,127,127,0.35)',
                   cursor: 'pointer',
+                  transition: 'background-color .12s ease',
                 },
               },
               h('span', {
@@ -1363,7 +1367,7 @@ window.__ModuleLoader__.load({
         if (item.type === 'steps') {
           return h(
             'div',
-            { key, 'data-iui-steps': String(item.children.length), style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
+            { key, className: 'miopiik-enter', 'data-iui-steps': String(item.children.length), style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
             ...item.children.map((child, index) => {
               const cp = child.props ?? {}
               const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
@@ -1448,7 +1452,7 @@ window.__ModuleLoader__.load({
             { key, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
             props.label ? h('div', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
             h('div', { role: 'progressbar', 'aria-valuenow': String(Math.round(ratio * 100)), 'aria-valuemin': '0', 'aria-valuemax': '100', style: { height: 6, borderRadius: 999, background: 'rgba(127,127,127,0.18)', overflow: 'hidden' } },
-              h('div', { style: { width: `${ratio * 100}%`, height: '100%', background: (TONE_COLORS[props.tone] ?? [null, C.brand])[1] } })),
+              h('div', { style: { width: `${ratio * 100}%`, height: '100%', background: (TONE_COLORS[props.tone] ?? [null, C.brand])[1], transition: 'width .18s ease' } })),
           )
         }
         if (item.type === 'empty') {
@@ -1520,7 +1524,7 @@ window.__ModuleLoader__.load({
           ].filter((part) => part !== '').join(' · ')
           return h(
             'div',
-            { key, 'data-iui-table': String(filtered.length), 'data-iui-table-filtered': query === '' ? undefined : '1', 'data-iui-table-cols': String(columns.length), style: { overflowX: 'auto', maxWidth: '100%' } },
+            { key, className: 'miopiik-enter', 'data-iui-table': String(filtered.length), 'data-iui-table-filtered': query === '' ? undefined : '1', 'data-iui-table-cols': String(columns.length), style: { overflowX: 'auto', maxWidth: '100%' } },
             h(
               'table',
               { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12, color: C.text } },
@@ -1570,7 +1574,7 @@ window.__ModuleLoader__.load({
           const kind = String(props.kind ?? 'bar')
           return h(
             'div',
-            { key, 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+            { key, className: 'miopiik-enter', 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
             rows === null
               ? h('div', { 'data-iui-chart-empty': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '18px 0' } }, '暂无有效图表数据')
               : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' || kind === 'donut' ? kind : 'bar'),
@@ -1581,7 +1585,7 @@ window.__ModuleLoader__.load({
       }
       return h(
         'div',
-        { 'data-iui-output': 'ok', 'data-iui-format': format ?? 'json', 'data-iui-degraded': String(degradedCount), style: { display: 'flex', flexDirection: 'column', gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 } },
+        { className: 'miopiik-enter', 'data-iui-output': 'ok', 'data-iui-format': format ?? 'json', 'data-iui-degraded': String(degradedCount), style: { display: 'flex', flexDirection: 'column', gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 } },
         ast.title ? h('div', { style: { fontSize: 13, fontWeight: 600 } }, ast.title) : null,
         node(ast.root, 'root'),
       )
@@ -2041,11 +2045,22 @@ function registerIuiSettings(ctx) {
             return parsed.ok ? h(IuiSheet, { sample: parsed.doc, format: parsed.format, degraded: parsed.degraded }) : null
           },
         }
+        // 插件自有动效定妆：固定 keyframes / hover 反馈（模型仍不可写 CSS）。
+        let chrome = null
+        if (typeof document !== "undefined") {
+          if (document.getElementById("miopiik-iui-chrome") === null) {
+            chrome = document.createElement("style")
+            chrome.id = "miopiik-iui-chrome"
+            chrome.textContent = "@keyframes miopiik-enter{from{opacity:0}}.miopiik-enter{animation:miopiik-enter .14s ease-out}.miopiik-ctl:hover{filter:brightness(1.18)}.miopiik-ctl:active{filter:brightness(.92)}@media(prefers-reduced-motion:reduce){.miopiik-enter{animation:none}.miopiik-ctl:hover,.miopiik-ctl:active{filter:none}}"
+            document.head.appendChild(chrome)
+          }
+        }
         const previous = globalThis.__miopiikMarkdownEmbeds
         globalThis.__miopiikMarkdownEmbeds = registry
         registerIuiSettings(ctx)
         if (typeof ctx.effect === "function") {
           ctx.effect(() => () => {
+            if (chrome !== null && chrome.isConnected) chrome.remove()
             if (globalThis.__miopiikMarkdownEmbeds === registry) {
               if (previous === undefined) delete globalThis.__miopiikMarkdownEmbeds
               else globalThis.__miopiikMarkdownEmbeds = previous

@@ -2,7 +2,19 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.7` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
+> **当前版本 `0.1.0-rc.8` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
+
+## miopiik-iui 0.1.0-rc.8 — prerelease
+
+**状态**：prerelease，四项 stable blocker 未变；本版为动效定妆包，架构与理念未动。
+
+- **动效与手感（本版主题）**：整个交互面此前只有 toggle 拨钮一处 120ms 过渡，其余硬切；本版补齐——
+  - 插件注入一段**固定的**定妆样式（`<style id="miopiik-iui-chrome">`，约 6 行 keyframes/hover，随插件生命周期挂载与清理；模型仍然禁止输出 CSS）；
+  - 块级与 `when` 显隐内容挂 `miopiik-enter` 入场淡入（140ms ease-out），segmented 切换视图不再是硬切蹦现；
+  - segmented 选中换色与 toggle 底色加 `background/border/color .12s` 过渡，progress 宽度加 `.18s` 过渡（拖滑杆时进度条跟手）；
+  - 交互按钮挂 `miopiik-ctl`，获得 hover/active 的亮度反馈；全量尊重 `prefers-reduced-motion`（减少动效偏好下动画与悬停反馈全部关闭）。
+- **验证**：真实 Chromium DOM 断言新增四条（定妆样式在位、入场类挂载、reduced-motion 规则、ctl 类），测试 78 项全绿；`npm run check` / `build:check` / `icon:check` 通过。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.8.tgz`，按 README 的 profile 补丁步骤安装后重启 DSH。
 
 ## miopiik-iui 0.1.0-rc.7 — prerelease
 

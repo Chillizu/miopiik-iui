@@ -220,6 +220,7 @@
                 'button',
                 {
                   key: `${key}-${index}`,
+                  className: 'miopiik-ctl',
                   type: 'button',
                   'aria-pressed': index === selectedIndex,
                   onClick: () => {
@@ -234,6 +235,7 @@
                     padding: '2px 10px',
                     fontSize: 11,
                     cursor: 'pointer',
+                    transition: 'background-color .12s ease, border-color .12s ease, color .12s ease',
                   },
                 },
                 String(option.label ?? ''),
@@ -253,6 +255,7 @@
               'button',
               {
                 key: `${key}-ctl`,
+                className: 'miopiik-ctl',
                 type: 'button',
                 role: 'switch',
                 'aria-checked': on,
@@ -272,6 +275,7 @@
                   borderRadius: 999,
                   background: on ? C.brand : 'rgba(127,127,127,0.35)',
                   cursor: 'pointer',
+                  transition: 'background-color .12s ease',
                 },
               },
               h('span', {
@@ -337,7 +341,7 @@
         if (item.type === 'steps') {
           return h(
             'div',
-            { key, 'data-iui-steps': String(item.children.length), style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
+            { key, className: 'miopiik-enter', 'data-iui-steps': String(item.children.length), style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
             ...item.children.map((child, index) => {
               const cp = child.props ?? {}
               const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
@@ -422,7 +426,7 @@
             { key, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
             props.label ? h('div', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
             h('div', { role: 'progressbar', 'aria-valuenow': String(Math.round(ratio * 100)), 'aria-valuemin': '0', 'aria-valuemax': '100', style: { height: 6, borderRadius: 999, background: 'rgba(127,127,127,0.18)', overflow: 'hidden' } },
-              h('div', { style: { width: `${ratio * 100}%`, height: '100%', background: (TONE_COLORS[props.tone] ?? [null, C.brand])[1] } })),
+              h('div', { style: { width: `${ratio * 100}%`, height: '100%', background: (TONE_COLORS[props.tone] ?? [null, C.brand])[1], transition: 'width .18s ease' } })),
           )
         }
         if (item.type === 'empty') {
@@ -494,7 +498,7 @@
           ].filter((part) => part !== '').join(' · ')
           return h(
             'div',
-            { key, 'data-iui-table': String(filtered.length), 'data-iui-table-filtered': query === '' ? undefined : '1', 'data-iui-table-cols': String(columns.length), style: { overflowX: 'auto', maxWidth: '100%' } },
+            { key, className: 'miopiik-enter', 'data-iui-table': String(filtered.length), 'data-iui-table-filtered': query === '' ? undefined : '1', 'data-iui-table-cols': String(columns.length), style: { overflowX: 'auto', maxWidth: '100%' } },
             h(
               'table',
               { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12, color: C.text } },
@@ -544,7 +548,7 @@
           const kind = String(props.kind ?? 'bar')
           return h(
             'div',
-            { key, 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+            { key, className: 'miopiik-enter', 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
             rows === null
               ? h('div', { 'data-iui-chart-empty': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '18px 0' } }, '暂无有效图表数据')
               : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' || kind === 'donut' ? kind : 'bar'),
@@ -555,7 +559,7 @@
       }
       return h(
         'div',
-        { 'data-iui-output': 'ok', 'data-iui-format': format ?? 'json', 'data-iui-degraded': String(degradedCount), style: { display: 'flex', flexDirection: 'column', gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 } },
+        { className: 'miopiik-enter', 'data-iui-output': 'ok', 'data-iui-format': format ?? 'json', 'data-iui-degraded': String(degradedCount), style: { display: 'flex', flexDirection: 'column', gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 } },
         ast.title ? h('div', { style: { fontSize: 13, fontWeight: 600 } }, ast.title) : null,
         node(ast.root, 'root'),
       )

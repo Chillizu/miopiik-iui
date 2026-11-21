@@ -127,4 +127,9 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/aria-valuenow="60"/u,'progress 绑定值应解析为数字')
   assert.match(html,/data-iui-input="1"/u,'input 应真实渲染')
   assert.doesNotMatch(html,/data-iui-table-filtered="1"/u,'空过滤词不应标记过滤态')
+  // rc.8 动效定妆：插件自有样式与入场/hover 类
+  assert.match(html,/<style id="miopiik-iui-chrome">/u,'插件应注入固定的动效定妆样式')
+  assert.match(html,/class="miopiik-enter"/u,'块与显隐内容应有入场淡入类')
+  assert.match(html,/prefers-reduced-motion/u,'定妆样式应尊重减少动效偏好')
+  assert.match(html,/class="miopiik-ctl"/u,'交互按钮应有 hover/active 反馈类')
 })
