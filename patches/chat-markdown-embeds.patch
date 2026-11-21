@@ -1,10 +1,10 @@
 --- a/upstream/lib/client.js
 +++ b/upstream/lib/client.js
-@@ -6287,7 +6287,37 @@
+@@ -8302,7 +8302,37 @@
  			return fileMediaUrl(base, path);
  		}
  		/** Renders non-blank reasoning blocks as independent disclosures alongside the response. */
--		const AssistantMarkdown = (0, react.memo)(function AssistantMarkdown({ blocks, streaming, interrupted, loadImage, groupPart, useDisclosure, reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t }) {
+-		const AssistantMarkdown = (0, react.memo)(function AssistantMarkdown({ blocks, streaming, textInteractionSource = false, interrupted, loadImage, groupPart, useDisclosure, reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t }) {
 +				// >>> miopiik:markdown-embeds (fork patch; see docs/UPSTREAM-MARKDOWN-EMBED.md)
 +		// 能力标记：补丁被加载时置位，IUI 设置页据此显示"补丁已生效"。
 +		globalThis.__miopiikMarkdownEmbedsHost = true;
@@ -35,11 +35,11 @@
 +			return null;
 +		}
 +		// <<< miopiik:markdown-embeds
-+const AssistantMarkdown = (0, react.memo)(function AssistantMarkdown({ blocks, streaming, interrupted, loadImage, groupPart, useDisclosure, reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t }) {
++const AssistantMarkdown = (0, react.memo)(function AssistantMarkdown({ blocks, streaming, textInteractionSource = false, interrupted, loadImage, groupPart, useDisclosure, reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t }) {
  			const labels = (0, react.useMemo)(() => markdownLabels(t), [t]);
  			const pathImages = (0, react.useMemo)(() => {
  				return { resolve: (value) => localPathMediaUrl(document.baseURI, value) };
-@@ -6301,15 +6331,57 @@
+@@ -8316,16 +8346,57 @@
  				if (groupPart === "reasoning" && block.kind !== "reasoning") continue;
  				if (groupPart === "response" && block.kind === "reasoning") continue;
  				switch (block.kind) {
@@ -49,7 +49,8 @@
 -							streaming,
 -							labels,
 -							fileMentions: mentions,
--							pathImages
+-							pathImages,
+-							textInteractionSource
 +					case "text": {
 +						const segments = miopiikSegments(block.text, streaming);
 +						if (segments === null) {
