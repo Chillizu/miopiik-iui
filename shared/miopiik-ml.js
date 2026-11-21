@@ -52,10 +52,16 @@ export const ML_TAGS = Object.freeze({
   chart: 'chart',
   segmented: 'segmented',
   divider: 'divider',
+  toggle: 'toggle',
+  slider: 'slider',
+  input: 'input',
+  steps: 'steps',
+  step: 'step',
 })
 
-const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true })
-const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true })
+const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true })
+// 交互控件与 step 一律写成自闭合：<toggle …/>、<slider …/>、<input …/>、<step title="…"/>
+const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true })
 
 function decodeEntities(text) {
   return String(text)
@@ -251,7 +257,12 @@ const TEXT_PROPS = Object.freeze({
   metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
   chart: ['kind', 'type', 'series', 'source', 'title'],
   segmented: ['label', 'bind', 'options'],
-  table: ['columns', 'rows', 'caption'],
+  table: ['columns', 'rows', 'caption', 'filter'],
+  toggle: ['label', 'bind'],
+  slider: ['label', 'bind', 'min', 'max', 'step', 'unit'],
+  input: ['label', 'bind', 'placeholder'],
+  steps: [],
+  step: ['title', 'note', 'tone'],
   card: ['title', 'subtitle', 'gap', 'span', 'align'],
   grid: ['columns', 'gap', 'align'],
   row: ['gap', 'align'],
@@ -317,6 +328,8 @@ export function parseMiopiikMl(source) {
     if (element.name === '#text') return { kind: 'degraded', text: decodeEntities(String(element.text ?? '')) }
     const type = ML_TAGS[element.name]
     const attrs = normalizeAttrs(element)
+    // when/is 是通用显隐通道：任何组件都可携带；值交给校验器把关（只允许 $state 绑定）
+    const control = readProps(attrs, ['when', 'is'])
     const fallbackText = typeof attrs.fallback === 'string' ? attrs.fallback : ''
     const innerText = textOf(element)
     const degrade = (reason) => {
@@ -330,7 +343,7 @@ export function parseMiopiikMl(source) {
     const INLINE_LEAVES = { badge: 'text', emphasis: 'text', b: 'text', code: 'text', a: 'text', link: 'text', callout: 'text', progress: 'label', empty: 'text' }
     if (INLINE_LEAVES[element.name] !== undefined) {
       const key = INLINE_LEAVES[element.name]
-      const props = readProps(attrs, TEXT_PROPS[element.name] ?? [])
+      const props = { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? []) }
       if (props[key] === undefined && innerText !== '') props[key] = innerText
       // empty：text 可由 title/description 派生；三者都没有才降级
       if (element.name === 'empty' && (props[key] === undefined || props[key] === '')) {
@@ -343,7 +356,7 @@ export function parseMiopiikMl(source) {
     }
     if (element.name === 'text') {
       const text = typeof element.attrs.text === 'string' ? element.attrs.text : innerText
-      return text === '' ? degrade('没有内容') : { kind: 'node', node: { id: typeof element.attrs.id === 'string' && element.attrs.id !== '' ? element.attrs.id : 'ml-text', type: 'text', props: { text }, children: [] } }
+      return text === '' ? degrade('没有内容') : { kind: 'node', node: { id: typeof element.attrs.id === 'string' && element.attrs.id !== '' ? element.attrs.id : 'ml-text', type: 'text', props: { ...control, text }, children: [] } }
     }
     if (element.name === 'callout' && element.children.some((child) => child.name !== '#text')) {
       const children = element.children
@@ -356,7 +369,7 @@ export function parseMiopiikMl(source) {
           return item.kind === 'node' ? item.node : { id: 'ml-callout-degraded', type: 'text', props: { text: item.text }, children: [] }
         })
         .filter(Boolean)
-      const props = readProps(attrs, TEXT_PROPS.callout)
+      const props = { ...control, ...readProps(attrs, TEXT_PROPS.callout) }
       return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-callout', type: 'callout', props, children } }
     }
     if (element.name === 'p' || element.name === 'paragraph') {
@@ -369,7 +382,7 @@ export function parseMiopiikMl(source) {
         return item.kind === 'node' ? item.node : { id: 'ml-inline-degraded', type: 'text', props: { text: item.text }, children: [] }
       }).filter(Boolean)
       if (children.length === 0) return degrade('段落为空')
-      return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-p', type: 'paragraph', props: readProps(attrs, ['gap']), children } }
+      return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-p', type: 'paragraph', props: { ...control, ...readProps(attrs, ['gap']) }, children } }
     }
     if (CONTAINERS[element.name] === true) {
       const nodes = element.children.map((child) => compile(child))
@@ -383,13 +396,13 @@ export function parseMiopiikMl(source) {
         node: {
           id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`,
           type,
-          props: readProps(attrs, TEXT_PROPS[element.name] ?? []),
+          props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? []) },
           children,
         },
       }
     }
     if (element.children.length > 0) return degrade('该标签不接受子内容')
-    return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: readProps(attrs, TEXT_PROPS[element.name] ?? []), children: [] } }
+    return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? []) }, children: [] } }
   }
 
   const compiled = children.map((child) => compile(child))

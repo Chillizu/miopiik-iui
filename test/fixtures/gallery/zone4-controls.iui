@@ -1,0 +1,15 @@
+<ui title="交互面板" fallback="本周 42 项：完成 26 / 进行 9 / 阻塞 7">
+  <state name="p" value='{"view":"占比","detail":true,"q":"","cap":80,"parts":[["完成",26],["进行",9],["阻塞",7]]}'/>
+  <segmented label="视图" bind="$state.p.view" options='[{"label":"占比","value":"占比"},{"label":"清单","value":"清单"}]'/>
+  <chart kind="donut" series="$state.p.parts" source="演示数据" when="$state.p.view" is="占比"/>
+  <steps when="$state.p.view" is="清单">
+    <step title="完成" note="26 项" tone="success"/>
+    <step title="进行" note="9 项" tone="warning"/>
+    <step title="阻塞" note="7 项" tone="danger"/>
+  </steps>
+  <slider label="完成线" bind="$state.p.cap" min="0" max="100" step="5" unit="%"/>
+  <progress label="完成率（演示）" value="$state.p.cap" max="100" tone="success"/>
+  <toggle label="明细" bind="$state.p.detail"/>
+  <input bind="$state.p.q" placeholder="过滤阶段…"/>
+  <table columns='["阶段","条目","状态"]' rows='[["完成",26,"已结束"],["进行",9,"本周活跃"],["阻塞",7,"需要人看"]]' caption="演示数据" filter="$state.p.q" when="$state.p.detail"/>
+</ui>

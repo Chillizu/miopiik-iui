@@ -45,7 +45,7 @@ function mapDataset(props) {
   if (props.chart !== undefined && props.chart !== false && rows.length > 0) {
     const series = rows.map((row) => [String(row[0] ?? ''), Number(row[1]) || 0])
     const rawKind = props.chart === true ? 'bar' : String(props.chart)
-    const kind = rawKind === 'line' ? 'line' : 'bar' // donut/其他旧值降级为柱状
+    const kind = rawKind === 'line' || rawKind === 'donut' ? rawKind : 'bar' // 其他旧值降级为柱状；donut 渲染器已原生支持，历史如实回放
     const propsOut = { kind, series }
     if (typeof props.source === 'string' && props.source !== '') propsOut.source = props.source
     return { id: nextId('legacy-chart'), type: 'chart', props: propsOut, children: [] }

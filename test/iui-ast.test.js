@@ -84,3 +84,60 @@ test('防回归：客户端内联块里 return 的标识符在真源里都有定
     assert.notEqual(module[name], undefined, `${name} 在内联块里被导出，但真源没有定义`)
   }
 })
+
+test('本地交互控件：toggle/slider/input 必须绑定 $state，缺 bind 或绑到别处只降级自身', () => {
+  const compile = (children) => validateAst({ fallback: 'f', state: { r: { on: true, th: 5 } }, root: { id: 'r', type: 'column', children } })
+  const ok = compile([
+    { id: 't', type: 'toggle', props: { label: '开关', bind: '$state.r.on' } },
+    { id: 's', type: 'slider', props: { label: '阈值', bind: '$state.r.th', min: 0, max: 10, step: 1, unit: '次' } },
+    { id: 'i', type: 'input', props: { bind: '$state.r.on', placeholder: '搜索' } },
+  ])
+  assert.equal(ok.ok, true)
+  assert.equal(ok.degraded, 0)
+  for (const type of ['toggle', 'slider', 'input']) {
+    assert.equal(compile([{ id: 'x', type, props: { bind: '$data.r.on' } }]).degraded, 1, `${type} 绑定非 $state 应降级`)
+    assert.equal(compile([{ id: 'y', type, props: {} }]).degraded, 1, `${type} 缺 bind 应降级`)
+  }
+})
+
+test('slider：min/max/step 必须是数字，max 必须大于 min', () => {
+  const compile = (extra) => validateAst({ fallback: 'f', state: { r: { th: 5 } }, root: { id: 'r', type: 'column', children: [{ id: 's', type: 'slider', props: { bind: '$state.r.th', ...extra } }] } })
+  assert.equal(compile({ min: 0, max: 100 }).degraded, 0)
+  assert.equal(compile({ min: '0' }).degraded, 1, '字符串 min 应降级')
+  assert.equal(compile({ step: -1 }).degraded, 1, '负 step 应降级')
+  assert.equal(compile({ min: 10, max: 5 }).degraded, 1, 'max <= min 应降级')
+})
+
+test('steps：只接受 step 子节点，title 必填，tone 走同一枚举', () => {
+  const compile = (children) => validateAst({ fallback: 'f', root: { id: 'r', type: 'column', children: [{ id: 'st', type: 'steps', props: {}, children }] } })
+  assert.equal(compile([{ id: 's1', type: 'step', props: { title: '解析' } }, { id: 's2', type: 'step', props: { title: '校验', note: '白名单', tone: 'success' } }]).degraded, 0)
+  assert.equal(compile([]).degraded, 1, '空 steps 应降级')
+  assert.equal(compile([{ id: 's', type: 'text', props: { text: '混入' } }]).degraded, 1, '非 step 子节点应降级')
+  assert.equal(compile([{ id: 's', type: 'step', props: { note: '没有标题' } }]).degraded, 1, 'step 缺 title 应降级')
+  assert.equal(compile([{ id: 's', type: 'step', props: { title: 'x', tone: 'purple' } }]).degraded, 1, '未知 tone 应降级')
+})
+
+test('chart.kind 放行 donut，其余未知 kind 仍拒绝', () => {
+  const compile = (kind) => validateAst({ fallback: 'f', root: { id: 'r', type: 'column', children: [{ id: 'c', type: 'chart', props: { kind, series: [['a', 1], ['b', 2]] } }] } })
+  assert.equal(compile('donut').degraded, 0)
+  assert.equal(compile('line').degraded, 0)
+  assert.equal(compile('pie').degraded, 1)
+})
+
+test('when / table.filter：只接受 $state 绑定，坏值只降级自身、兄弟保留', () => {
+  const compile = (node) => validateAst({ fallback: 'f', state: { r: { cur: '7d', q: '' } }, root: { id: 'r', type: 'column', children: [node, { id: 'm', type: 'metric', props: { label: '保留', value: 1 } }] } })
+  assert.equal(compile({ id: 't', type: 'text', props: { text: '可见', when: '$state.r.cur', is: '7d' } }).degraded, 0)
+  assert.equal(compile({ id: 't', type: 'text', props: { text: '坏', when: 'true' } }).degraded, 1, 'when 字面量应降级')
+  assert.equal(compile({ id: 't', type: 'table', props: { columns: ['a'], rows: [[1]], filter: '$state.r.q' } }).degraded, 0)
+  assert.equal(compile({ id: 't', type: 'table', props: { columns: ['a'], rows: [[1]], filter: 'Web' } }).degraded, 1, 'filter 字面量应降级')
+  const sibling = compile({ id: 't', type: 'text', props: { text: '坏', when: 'true' } })
+  assert.equal(sibling.ast.root.children.at(-1).type, 'metric', '兄弟必须保留')
+})
+
+test('progress.value 允许 $state 绑定（渲染时解析），字面量仍要 >= 0 数字', () => {
+  const compile = (value) => validateAst({ fallback: 'f', state: { r: { done: 3 } }, root: { id: 'r', type: 'column', children: [{ id: 'p', type: 'progress', props: { label: '完成', value, max: 10 } }] } })
+  assert.equal(compile(3).degraded, 0)
+  assert.equal(compile('$state.r.done').degraded, 0, '绑定应放行')
+  assert.equal(compile('3').degraded, 1, '字符串数字仍应拒绝')
+  assert.equal(compile(-1).degraded, 1)
+})

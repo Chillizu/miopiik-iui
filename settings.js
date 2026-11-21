@@ -13,11 +13,14 @@
 const IUI_PREF_KEY = 'miopiik.markdownEmbeds'
 
 const IUI_PREVIEW_ML = `<ui title="活动概览" fallback="7 日活跃 1,248；30 日活跃 4,826">
-  <state name="range" value='{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]}'/>
+  <state name="v" value='{"range":{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]},"detail":true,"q":""}'/>
   <column>
-    <metric label="活跃访问" value="$state.range.total" unit="次" delta="$state.range.change"/>
-    <segmented bind="$state.range" options='[{"label":"近 7 天","value":{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]}},{"label":"近 30 天","value":{"total":"4,826","change":"+8.3%","points":[["第1周",940],["第2周",1080],["第3周",1275],["第4周",1531]]}}]'/>
-    <chart kind="line" series="$state.range.points" source="虚构演示数据"/>
+    <metric label="活跃访问" value="$state.v.range.total" unit="次" delta="$state.v.range.change"/>
+    <segmented bind="$state.v.range" options='[{"label":"近 7 天","value":{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]}},{"label":"近 30 天","value":{"total":"4,826","change":"+8.3%","points":[["第1周",940],["第2周",1080],["第3周",1275],["第4周",1531]]}}]'/>
+    <chart kind="line" series="$state.v.range.points" source="虚构演示数据"/>
+    <toggle label="明细表" bind="$state.v.detail"/>
+    <input bind="$state.v.q" placeholder="过滤渠道…"/>
+    <table columns='["渠道","活跃"]' rows='[["Web 客户端",742],["CLI",331],["API",175]]' caption="虚构演示数据" filter="$state.v.q" when="$state.v.detail"/>
   </column>
 </ui>`
 const IUI_SAMPLE_MARKDOWN = String.fromCharCode(96).repeat(3) + 'iui\n' + IUI_PREVIEW_ML + '\n' + String.fromCharCode(96).repeat(3)

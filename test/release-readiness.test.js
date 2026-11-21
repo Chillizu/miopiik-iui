@@ -48,7 +48,7 @@ test('版本策略：IUI 保持 rc 预发布，blocker 未解除前不升 stable
   assert.match(notes, /stable/iu)
 
   const matrix = readFileSync(join(root, 'docs', 'SUPPORT-MATRIX.md'), 'utf8')
-  assert.match(matrix, /0\.2\.1-rc\.5/u, '支持矩阵需写明 DSH 测试基线')
+  assert.match(matrix, /0\.2\.2-rc\.1/u, '支持矩阵需写明 DSH 测试基线')
   assert.match(matrix, /实验性 chat 包补丁/u, '支持矩阵需说明内联渲染的宿主补丁依赖')
   assert.match(matrix, /MiOpIIk IUI/u, '支持矩阵必须是 IUI 单包版')
   assert.equal(existsSync(join(root, 'docs', 'MIGRATION.md')), true, '缺少 docs/MIGRATION.md')

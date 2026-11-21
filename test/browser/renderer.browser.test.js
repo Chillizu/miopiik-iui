@@ -27,6 +27,19 @@ function findChromium() {
   return null
 }
 
+/** rc.7 交互面演示：donut / steps / toggle / slider / progress 绑定 / input / 过滤表格。 */
+const DEMO_CONTROLS_ML = `<ui title="交互演示" fallback="Web 46 / CLI 32 / API 22">
+  <state name="r" value='{"cur":"清单","on":true,"q":"","th":60,"s":[["Web",46],["CLI",32],["API",22]]}'/>
+  <segmented label="视图" bind="$state.r.cur" options='[{"label":"占比","value":"占比"},{"label":"清单","value":"清单"}]'/>
+  <chart kind="donut" series="$state.r.s" source="演示数据"/>
+  <steps><step title="Web" note="46 次" tone="success"/><step title="CLI" note="32 次"/></steps>
+  <toggle label="明细表" bind="$state.r.on"/>
+  <slider label="完成线" bind="$state.r.th" min="0" max="100" step="5" unit="%"/>
+  <progress label="完成率（演示）" value="$state.r.th" max="100" tone="success"/>
+  <input bind="$state.r.q" placeholder="过滤渠道…"/>
+  <table columns='["渠道","次数"]' rows='[["Web",46],["CLI",32],["API",22]]' caption="演示数据" filter="$state.r.q" when="$state.r.on"/>
+</ui>`
+
 function fixture() {
   const setup = `
     const failures = [];
@@ -67,6 +80,10 @@ function fixture() {
     const tab=slots.find(s=>s.meta.name==='settings.plugins.tab');
     document.getElementById('root').appendChild(intro.render({view:'page'}));
     document.getElementById('root').appendChild(tab.render({}));
+    const embeds=globalThis.__miopiikMarkdownEmbeds;
+    const demo=document.createElement('div');
+    demo.appendChild(embeds.renderBlock(${JSON.stringify(DEMO_CONTROLS_ML)}));
+    document.getElementById('root').appendChild(demo);
     document.body.dataset.integration = slots.length===2 && intro.meta.key==='miopiik-iui' && tab.meta.id==='miopiik-iui' ? 'ok' : 'failed';
     document.body.dataset.errors=failures.join('|');
   `
@@ -102,4 +119,12 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-iui-preview-source="1"/u,'设置页应给出可复制示例')
   assert.doesNotMatch(html,/data-iui-chart-empty="1"/u,'预览图表不应为空')
   assert.doesNotMatch(html,/linear-gradient/u,'插件页不使用品牌渐变')
+  // rc.7 交互面：新控件在真实 Chromium DOM 中全部渲染
+  assert.match(html,/data-iui-chart="donut"/u,'donut 应真实渲染（SVG + 图例）')
+  assert.match(html,/data-iui-steps="2"/u,'steps 轨道应真实渲染')
+  assert.match(html,/data-iui-toggle="on"/u,'toggle 初始应按 state 置为开')
+  assert.match(html,/data-iui-slider="60"/u,'slider 初始应取 state 中的 th')
+  assert.match(html,/aria-valuenow="60"/u,'progress 绑定值应解析为数字')
+  assert.match(html,/data-iui-input="1"/u,'input 应真实渲染')
+  assert.doesNotMatch(html,/data-iui-table-filtered="1"/u,'空过滤词不应标记过滤态')
 })

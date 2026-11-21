@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
-import { chartMatrix, readBinding, validateAst } from '../shared/iui-ast.js'
+import { chartMatrix, readBinding, tableMatrix, validateAst } from '../shared/iui-ast.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 
 const compile = (source) => {
@@ -130,4 +130,40 @@ test('客户端块级渲染复用受控 AST 与状态绑定', () => {
   const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   assert.match(client, /IUI_AST.chartMatrix/u)
   assert.match(client, /resolve\(props.unit\)/u)
+})
+
+test('真实自然生成语法：donut、steps、toggle、input、filter、when 全部零降级', () => {
+  const source = `<ui title="迁移进度" fallback="解析 3 项 / 校验 2 项 / 待渲染 5 项">
+    <state name="r" value='{"cur":"看板","q":"","show":true,"parts":[["已解析",3],["已校验",2],["待渲染",5]]}'/>
+    <segmented label="视图" bind="$state.r.cur" options='[{"label":"看板","value":"看板"},{"label":"清单","value":"清单"}]'/>
+    <chart kind="donut" series="$state.r.parts" source="构建日志" when="$state.r.cur" is="看板"/>
+    <steps when="$state.r.cur" is="清单">
+      <step title="解析" note="miopiik-ml → AST" tone="success"/>
+      <step title="校验" note="白名单 + 预算" tone="success"/>
+      <step title="渲染" note="等待构建日志" tone="info"/>
+    </steps>
+    <toggle label="明细表" bind="$state.r.show"/>
+    <input bind="$state.r.q" placeholder="过滤阶段…"/>
+    <table columns='[{"key":"stage","label":"阶段"},{"key":"count","label":"条目"}]' rows='[{"stage":"已解析","count":3},{"stage":"已校验","count":2},{"stage":"待渲染","count":5}]' caption="构建日志" filter="$state.r.q" when="$state.r.show"/>
+  </ui>`
+  const { parsed, result } = compile(source)
+  assert.deepEqual(parsed.degraded, [])
+  assert.equal(result.ok, true, result.errors?.join(';'))
+  assert.equal(result.degraded, 0)
+  const types = []
+  const walkAll = (node) => {
+    types.push(node.type)
+    for (const child of node.children ?? []) walkAll(child)
+  }
+  walkAll(result.ast.root)
+  for (const expected of ['segmented', 'chart', 'steps', 'step', 'toggle', 'input', 'table']) {
+    assert.ok(types.includes(expected), `缺少组件 ${expected}`)
+  }
+  const donut = walk(result.ast.root, 'chart')
+  assert.equal(donut.props.kind, 'donut')
+  assert.equal(donut.props.when, '$state.r.cur', 'when 应保留在 props 里')
+  const table = walk(result.ast.root, 'table')
+  assert.equal(table.props.filter, '$state.r.q')
+  assert.deepEqual(tableMatrix(table.props).rows, [['已解析', 3], ['已校验', 2], ['待渲染', 5]])
+  assert.equal(chartMatrix([{ label: '已解析', value: 3 }, { label: '已校验', value: 2 }]).length, 2)
 })

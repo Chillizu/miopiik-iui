@@ -2,7 +2,21 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.6` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
+> **当前版本 `0.1.0-rc.7` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页与设置页预览可用。
+
+## miopiik-iui 0.1.0-rc.7 — prerelease
+
+**状态**：prerelease，四项 stable blocker 未变（非官方 chat 包补丁、跨 token Markdown 有损、流式非增量、无多版本兼容矩阵）；宿主补丁随本版重新生成，锚定 DSH `0.2.2-rc.1` 的 chat 包。
+
+- **本地交互自由度（本版主题）**：交互收敛为一个模型——**控件写 `$state`，其余读 `$state`**。新增 `toggle`（布尔）、`slider`（数值）、`input`（文本）三个本地控件；任意组件可写 `when="$state.*"`（可配 `is="值"` 做等值切换）按本地状态控制显隐；`table` 支持 `filter="$state.*"` 浏览器内文本过滤。全部交互只在浏览器内生效，不产生消息、不调用工具；「要用户做决定的事仍用对话提问，不要在卡片里造提交表单」写进章程。
+- **模板广度**：`chart` 放行 `donut` 占比图（含图例；渲染器自旧版已内置，本版解除校验器封禁，legacy 回放同步如实恢复）；新增 `steps`/`step` 过程清单模板（仅接受 step 子节点、`title` 必填、tone 共用六色枚举）；`grid columns` 2-6 落实为真实固定列（此前文档承诺但渲染忽略）；行内图标补齐全部 11 个字形（此前 6 个退化为圆点）。
+- **契约修复**：`progress.value` 此前只收字面数字、拒绝 `$state` 绑定，与「任意属性可绑定」的章程承诺不符；本版放行绑定并在渲染时解析为数字。
+- **章程（render-contract）重写**：理念两句与预算/禁令原样保留；目录行补全已实现的自由度（card span、表格对象行、序列三形态、链接站内/锚点）；交互段改为「控件写、内容读」单模型；新增选型口诀（对比与账目用 table、趋势用 line、占比用 donut、过程用 steps）与第四个完整形状「本地小应用」（segmented 切换 donut/steps、toggle 控表格显隐、input 过滤明细）。
+- **插件页预览升级**：实时预览与可复制示例改为带 toggle/input/本地过滤表格的小应用；新增画廊样本 `zone4-controls` 与真实 Chromium DOM 断言（donut、steps、toggle、slider、progress 绑定、input、过滤标记逐一验证）。
+- **宿主补丁同步**：`patches/chat-markdown-embeds.patch` 按上游 `@deepseek-ai/dsh-client-ui-chat` `0.2.2-rc.1` 重新生成（上游 `AssistantMarkdown` 新增 `textInteractionSource` 形参，锚点行号随之偏移）；相关文档基线同步更新为 `0.2.2-rc.1`。
+- **架构不变**：三层分工（解析 → 唯一校验器 → 客户端渲染）、白名单、预算、局部降级、零运行时依赖均未改动；新组件走同一注册/校验/降级路径，外部动作仍归口工具面与提交。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.7.tgz`，按 README 的 profile 补丁步骤安装后重启 DSH。
+- **验证**：`npm test`（78 项，含真实 Chromium DOM 渲染断言）、`npm run check`、`npm run build:check`、`npm run icon:check`。
 
 ## miopiik-iui 0.1.0-rc.6 — prerelease
 

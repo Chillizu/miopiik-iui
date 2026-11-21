@@ -4,7 +4,7 @@
 
 [English](README.md) | **简体中文**
 
-> **Version 0.1.0-rc.6 — 预发布（prerelease）。**
+> **Version 0.1.0-rc.7 — 预发布（prerelease）。**
 > 本版本为发布候选版（prerelease），未发布到 npm registry，属于独立插件而非 DeepSeek Harness 上游内置功能；聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
 
 MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输出包含受信行内 token 与受控 `iui` 围栏的普通 Markdown，浏览器将其渲染为声明式界面组件。本插件不依赖 MiOpIIk 的 Mind/Ink/Operator Agent，不维护账本，也不注册模型工具。
@@ -13,7 +13,7 @@ MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输�
 
 - 行内 token：`{{badge:success:通过}}`、`{{icon:check}}`、`{{code:npm test}}`
 - `iui` 围栏：支持 `miopiik-ml` 标签语法或经校验的 `iui/1` JSON AST
-- 受控声明式组件白名单、本地 `$state` 状态绑定与本地 `segmented` 切换交互
+- 受控声明式组件白名单、本地 `$state` 状态绑定与浏览器内交互控件（`segmented`/`toggle`/`slider`/`input`，配合 `when`/`is` 显隐与表格 `filter`）
 - 旧 `ink-view` Widget JSON 的只读兼容回放，历史会话零迁移
 - DSH 原生插件页（说明与实时预览）与 **设置 → 内置插件** 页签（浏览器本地渲染开关、诊断信息与可复制示例）
 
@@ -21,12 +21,12 @@ MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输�
 
 ## 发布状态
 
-**Version 0.1.0-rc.6** 为预发布版本（prerelease）。升为 `0.1.0` stable 前存在以下四项 blocker：
+**Version 0.1.0-rc.7** 为预发布版本（prerelease）。升为 `0.1.0` stable 前存在以下四项 blocker：
 
-1. **非官方、版本耦合的宿主补丁。** 聊天内联渲染需要由 [tools/fork-chat-embeds.mjs](tools/fork-chat-embeds.mjs) 基于特定 DSH 版本（`0.2.1-rc.5`）生成的本地 `@deepseek-ai/dsh-client-ui-chat` fork。DSH 上游尚未提供 Markdown 嵌入 API。未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，插件页预览仍可使用，设置页诊断会显式报告未检测到补丁。
+1. **非官方、版本耦合的宿主补丁。** 聊天内联渲染需要由 [tools/fork-chat-embeds.mjs](tools/fork-chat-embeds.mjs) 基于特定 DSH 版本（`0.2.2-rc.1`）生成的本地 `@deepseek-ai/dsh-client-ui-chat` fork。DSH 上游尚未提供 Markdown 嵌入 API。未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，插件页预览仍可使用，设置页诊断会显式报告未检测到补丁。
 2. **跨 token Markdown 有损。** 受信片段会将 Markdown 文本节点切开，跨越 token 边界的加粗/斜体格式、选中复制与屏幕阅读器朗读顺序与单节点原生 Markdown 存在差异。
 3. **流式非增量。** 流式输出期间，未闭合的 `iui` 围栏先按纯文本展示，收到闭合围栏后一次性渲染为组件块。
-4. **无多版本兼容矩阵。** 当前仅针对 DSH `0.2.1-rc.5` 基线验证，尚未建立跨多个 DSH 版本的兼容矩阵与干净 profile 冷启动全链路验证。
+4. **无多版本兼容矩阵。** 当前仅针对 DSH `0.2.2-rc.1` 基线验证，尚未建立跨多个 DSH 版本的兼容矩阵与干净 profile 冷启动全链路验证。
 
 v1 候选门禁清单见 [docs/IUI-V1-RELEASE-CANDIDATE.md](docs/IUI-V1-RELEASE-CANDIDATE.md)，各版本 blocker 记录见 [docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md)。
 
@@ -36,7 +36,7 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 
 | | **MiOpIIk IUI**（本仓库） | **MiOpIIk Agent** |
 |---|---|---|
-| 包 | `miopiik-iui` 0.1.0-rc.6，prerelease | `miopiik-dsh` 0.1.2，stable |
+| 包 | `miopiik-iui` 0.1.0-rc.7，prerelease | `miopiik-dsh` 0.1.2，stable |
 | 层次 | 纯表现层：浏览器侧的受信 Markdown 片段 | host 侧：记忆、治理、后台执行 |
 | 主要面 | 行内 token、`iui` 围栏、声明式组件、本地状态 | `ink_*` 工具面、收件箱/事实/开环/鱼骨账本、Operator 派发 |
 | 状态 | 浏览器 `localStorage` 中的单个渲染偏好 | 工作区 `.dsh/miopiik/` 下的 append-only JSONL 账本 |
@@ -134,7 +134,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 - 根标签为 `<ui>`，`title` 与 `fallback` 可选；整块校验失败时显示 `fallback` 文本。
 - `<state>` 支持 `<state name="range" value='{"...":...}'/>` 或 JSON 正文 `<state>{"range":{...}}</state>`。
 - 属性值支持引号字符串、JSON 字面量（`options='[...]'`、`rows='[...]'`）、数字、布尔值及 `$state.*` 绑定路径。
-- `gap` 支持 `none`、`xs`、`sm`、`md`、`lg`、`xl` 或数字。`chart` 支持 `kind="bar"` 或 `kind="line"`；旧写法 `type`/`data` 会自动归一为 `kind`/`series`。
+- `gap` 支持 `none`、`xs`、`sm`、`md`、`lg`、`xl` 或数字。`chart` 支持 `kind="bar"`、`kind="line"` 或 `kind="donut"`；旧写法 `type`/`data` 会自动归一为 `kind`/`series`。
 - 当模型漏写代码围栏时，行首顶层 `<ui>...</ui>` 也可被容错识别。
 
 ### 组件清单
@@ -155,18 +155,23 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 | 卡片 | `card` | 容器；支持 `title`、`subtitle`、`gap`、`span`、`align`。 |
 | 分隔 | `divider` | 可选 `label`。 |
 | 指标 | `metric` | 支持 `label`、`value`、`unit`、`delta`、`caption`/`note`、`tone`；值可绑定 `$state`。 |
-| 表格 | `table` | `columns`（1-12 个字符串或 `{key,label}` 描述符）、`rows`（最多 200 行数组或对象）、`caption`。 |
-| 图表 | `chart` | `kind`（`bar` 或 `line`）、`series`（点列或 `$state` 绑定）、`source`；渲染为内联 SVG。 |
-| 进度 | `progress` | `value` >= 0、`max` > 0、`label`、`tone`。 |
+| 表格 | `table` | `columns`（1-12 个字符串或 `{key,label}` 描述符）、`rows`（最多 200 行数组或对象）、`caption`、`filter`（绑定 `$state.*`，浏览器内本地过滤）。 |
+| 图表 | `chart` | `kind`（`bar`、`line` 或 `donut`）、`series`（点列或 `$state` 绑定）、`source`；渲染为内联 SVG。 |
+| 进度 | `progress` | `value` >= 0（数字或 `$state` 绑定）、`max` > 0、`label`、`tone`。 |
 | 提示条 | `callout` | `tone`、`title`、`text`；可含子节点。 |
 | 空状态 | `empty` | `text`/`title`/`description`、`icon`。 |
-| 分段控件 | `segmented` | 本地状态切换控件；`bind`（必须为 `$state.*`）、1-6 个 `options`、`label`。 |
+| 分段控件 | `segmented` | 本地单选控件；`bind`（必须为 `$state.*`）、1-6 个 `options`、`label`。 |
+| 开关 | `toggle` | 本地布尔控件，写入 `$state.*`；支持 `bind`、`label`。 |
+| 滑杆 | `slider` | 本地数值控件，写入 `$state.*`；支持 `bind`、`min`、`max`、`step`（正数）、`unit`、`label`。 |
+| 输入框 | `input` | 本地文本控件，写入 `$state.*`（受单节点文本预算约束）；支持 `bind`、`placeholder`、`label`。 |
+| 步骤 | `steps` | 有序过程清单；仅接受 `step` 子节点。 |
+| 步骤项 | `step` | `title`（必填）、`note`、`tone`（共用六色 tone 枚举）。 |
 
-组件白名单由 [shared/iui-ast.js](shared/iui-ast.js) 的 `REGISTRY` 强制执行，未知标签会局部降级。
+任何组件都可写 `when="$state.*"`（可配 `is="值"` 做等值切换），按本地状态控制自身显隐。组件白名单由 [shared/iui-ast.js](shared/iui-ast.js) 的 `REGISTRY` 强制执行，未知标签会局部降级。
 
 ### 本地状态与绑定
 
-绑定仅支持点号路径读取：`$state.a.b` 与 `$data.a.b`，不支持表达式求值、函数调用或 `eval`。`segmented` 绑定到 `$state.*`，点击选项仅更新当前消息内的本地 React 状态并重算关联节点，不发送消息、不调用工具、不触发模型回合。当前客户端未接入外部数据通道，`data` 作用域为空（`$data.*` 解析为缺失值），预留给后续只读数据注入。
+绑定仅支持点号路径读取：`$state.a.b` 与 `$data.a.b`，不支持表达式求值、函数调用或 `eval`。交互只有一个模型：**控件写 `$state`，其余读 `$state`**——`segmented`（单选）、`toggle`（布尔）、`slider`（数值）、`input`（文本）把控件值写入 `$state.*` 路径；任意属性可读 `$state.*`；`when`/`is` 控制节点显隐；`table filter` 在浏览器内过滤行。所有交互只更新当前消息内的本地 React 状态并重算关联节点，不发送消息、不调用工具、不触发模型回合。当前客户端未接入外部数据通道，`data` 作用域为空（`$data.*` 解析为缺失值），预留给后续只读数据注入。
 
 ### 旧 `ink-view` 协议回放
 
@@ -239,7 +244,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 | 项 | 要求 |
 |---|---|
-| DSH | 仅 DSH Web（`web` profile）。测试基线：DSH `0.2.1-rc.5`。 |
+| DSH | 仅 DSH Web（`web` profile）。测试基线：DSH `0.2.2-rc.1`。 |
 | Node.js | `>= 23.6`（`package.json` `engines`）。 |
 | DSH CLI | `dsh plugin --profile <profile> add/remove`。 |
 | 浏览器 | Chromium（隔离 DOM 测试环境）。 |
@@ -248,11 +253,11 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 ## 安装、升级、回滚
 
-`0.1.0-rc.6` 为**预发布（prerelease）**版本，聊天内联渲染需配置本地宿主补丁。请在受控的 DSH profile 中安装，并确保可安全重启 DSH Web 服务。
+`0.1.0-rc.7` 为**预发布（prerelease）**版本，聊天内联渲染需配置本地宿主补丁。请在受控的 DSH profile 中安装，并确保可安全重启 DSH Web 服务。
 
 ### 前置条件
 
-- 可修改 profile 的 DSH Web 安装（基线 `0.2.1-rc.5`）。
+- 可修改 profile 的 DSH Web 安装（基线 `0.2.2-rc.1`）。
 - Node.js `>= 23.6`，且 `PATH` 中包含 `dsh` CLI。
 - 本仓库的本地 checkout。
 
@@ -268,7 +273,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
    ```sh
    npm pack --pack-destination .dsh/tmp/packs
-   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.1.0-rc.6.tgz
+   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.1.0-rc.7.tgz
    ```
 
    也可使用封装脚本 [tools/install-plugin.mjs](tools/install-plugin.mjs)（默认 dry-run；写入运行中的 `web` profile 需显式加 `--allow-running-profile`）：
@@ -356,7 +361,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 - **组件白名单。** 模型输出经解析和校验后生成受控 `iui/1` AST，阻断任意 HTML、`innerHTML`、`eval`、动态样式表与脚本注入。
 - **零网络请求。** 图表渲染为内联 SVG，图标使用内置字形，不发起 `fetch`、XHR、WebSocket 或外部资源加载。
-- **纯本地交互。** `segmented` 控件仅更新当前消息的本地 React 状态，不调用工具、不发送消息、不触发模型回合。
+- **纯本地交互。** `segmented`、`toggle`、`slider`、`input` 等控件仅更新当前消息的本地 React 状态，不调用工具、不发送消息、不触发模型回合。
 - **无自定义事件处理器。** 忽略模型传入的任意 `on*` 属性。
 - **资源预算与键名过滤。** 限制节点数、树深度、图表点数、选项数、文本长度及表格/状态字节大小；过滤 `__proto__`、`constructor`、`prototype` 等危险键名。
 - **受限链接协议。** 链接仅允许 `https://...`、站内 `/...` 与 `#anchor`。
@@ -381,7 +386,7 @@ node tools/fork-chat-embeds.mjs --check
 
 ## FAQ
 
-**为什么当前版本是 `0.1.0-rc.6`（prerelease）？**
+**为什么当前版本是 `0.1.0-rc.7`（prerelease）？**
 
 四项 stable blocker 尚未解除：聊天内联渲染依赖非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` 补丁；跨 token Markdown 有损；流式非增量；尚无跨版本兼容矩阵。详见 [docs/IUI-V1-RELEASE-CANDIDATE.md](docs/IUI-V1-RELEASE-CANDIDATE.md)。
 
@@ -406,10 +411,10 @@ node tools/fork-chat-embeds.mjs --check
 - **单反引号行内代码中的 token 会被识别。** 切分器在普通段落（含单反引号内文本）匹配行内 token；展示字面 token 示例请使用围栏代码块。
 - **跨 token Markdown 有损。** 行内 token 会切分 Markdown 文本块，跨越 token 边界的加粗/斜体等格式会断开，选中复制与屏幕阅读器朗读顺序与单节点 Markdown 存在差异。
 - **流式非增量。** 未闭合的 `iui` 围栏在流式期间按纯文本显示，闭合后一次性渲染。
-- **版本耦合的实验性补丁。** 宿主挂钩基于 DSH `0.2.1-rc.5` 的 `ui-chat` 包锚点生成，DSH 升级后需重新生成。
+- **版本耦合的实验性补丁。** 宿主挂钩基于 DSH `0.2.2-rc.1` 的 `ui-chat` 包锚点生成，DSH 升级后需重新生成。
 - **本地 fork 不可作为官方包发布。** `upstream/dsh-client-ui-chat-embeds/` 仅供本地受控 profile 链接使用。
 - **旧 `ink-view` 仅做只读回放。** 七 Widget 协议已退役；历史数据零迁移，由只读 legacy adapter 映射回放，`choice` 动作不执行，无法映射的 spec 保留原始文本（不使用旧 spec 的 `fallback` 字段），不写回账本。
-- **无多版本与完整无障碍矩阵。** 当前仅覆盖 DSH `0.2.1-rc.5` 及基础深色/窄屏检查，未完成完整主题与屏幕阅读器测试矩阵。
+- **无多版本与完整无障碍矩阵。** 当前仅覆盖 DSH `0.2.2-rc.1` 及基础深色/窄屏检查，未完成完整主题与屏幕阅读器测试矩阵。
 - **模型输出受提示词引导。** 输出约定通过 system prompt 注入，模型遵从率分析见 [docs/IUI-NATURAL-OUTPUT-AUDIT.md](docs/IUI-NATURAL-OUTPUT-AUDIT.md)。
 
 ## 贡献

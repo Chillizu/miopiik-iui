@@ -1,6 +1,6 @@
 # 上游提案：Markdown 受信嵌入扩展点（草案 v1）
 
-> 状态：2026-11-13 已拆分为独立插件包 `miopiik-iui`（`0.1.0-rc.6` prerelease），本地 Web profile 已通过真实回放验收；聊天内联渲染当前仍使用版本耦合的实验性 `ui-chat` fork（挂载后浏览器开关默认开启，可在插件设置页关闭），上游 PR 尚未提交。本文记录面向 DSH 上游的接口提案与当前本地 fork 的实现细节；日常安装步骤以 [`README.md`](../README.md) 为准。
+> 状态：2026-11-13 已拆分为独立插件包 `miopiik-iui`（`0.1.0-rc.7` prerelease），本地 Web profile 已通过真实回放验收；聊天内联渲染当前仍使用版本耦合的实验性 `ui-chat` fork（挂载后浏览器开关默认开启，可在插件设置页关闭），上游 PR 尚未提交。本文记录面向 DSH 上游的接口提案与当前本地 fork 的实现细节；日常安装步骤以 [`README.md`](../README.md) 为准。
 > 目标：允许插件将**受信任的声明式嵌入组件**挂载进 DSH 原生 Markdown 渲染流，同时保持 `assistant-step` 与 `ReasoningRow` 的原生所有权。
 > 非目标：不改变标准 Markdown 语法语义、不执行模型输出的 HTML/JS/CSS、不改动会话日志格式。
 
@@ -11,7 +11,7 @@
 | `conversation.chat.node` 是按键名互斥的 keyed 槽，注册同名 key 会替换整个 `ChatNodeKind` 渲染器 | `dsh-client-ui-chat/lib/types/client/contract/slots.d.ts` |
 | 替换 `assistant-step` 后，原生 `ReasoningRow`（折叠壳、摘要、流式状态、无障碍属性）不再参与该行渲染 | 同上 + `ReasoningRow.d.ts` |
 | `conversation.chat.reasoning.body` 仅替换思考展开区域；`conversation.chat.reasoning.content` 为思考内容工厂槽 | 同上 |
-| 结论：DSH `0.2.1-rc.5` 尚未暴露「仅替换正文内匹配的 Markdown 片段、其余保持原生渲染」的公开插件接口 | — |
+| 结论：DSH `0.2.2-rc.1` 尚未暴露「仅替换正文内匹配的 Markdown 片段、其余保持原生渲染」的公开插件接口 | — |
 
 ## 2. 建议的最小上游接口
 
@@ -82,11 +82,11 @@ ctx.markdownEmbeds.register(registration): () => void   // 返回 disposer
 
 ## 5. 本地实验补丁实现（当前方案）
 
-### 5.1 宿主依赖树结构（基于 DSH `0.2.1-rc.5` 核对）
+### 5.1 宿主依赖树结构（基于 DSH `0.2.2-rc.1` 核对）
 
 | 项 | 核对结果 |
 |---|---|
-| `profiles/web/node_modules/@deepseek-ai/dsh-client-ui-chat` | 默认软链至全局安装目录 `.../dsh/node_modules/@deepseek-ai/dsh-client-ui-chat`（`0.2.1-rc.5`），含预构建 `lib/`、`lib/types` 与 `locale` |
+| `profiles/web/node_modules/@deepseek-ai/dsh-client-ui-chat` | 默认软链至全局安装目录 `.../dsh/node_modules/@deepseek-ai/dsh-client-ui-chat`（`0.2.2-rc.1`），含预构建 `lib/`、`lib/types` 与 `locale` |
 | `dsh-client-ui-primitives` | 运行时由前端主 bundle 注入，磁盘上无独立可修改的源码包 |
 | DSH Web 前端加载方式 | `/assets/index-*.js` 为预构建主包；`dsh-client-ui-chat` 作为客户端插件由服务端动态加载其 `lib/client.js` |
 | 落地方式 | 不修改全局 DSH 安装目录；通过脚本在仓库本地生成带钩子的 `ui-chat` fork，并仅在目标 profile 的 `node_modules` 下替换软链 |
@@ -143,7 +143,7 @@ localStorage.setItem('miopiik.markdownEmbeds', '0'); location.reload()
 
 ### 5.6 已知限制（Stable Blocker 来源）
 
-1. **版本耦合的实验性补丁**：生成脚本依赖 DSH `0.2.1-rc.5` 中 `AssistantMarkdown` 的代码锚点；上游升级改变结构时脚本会报错退出，需重新适配锚点并生成 fork。
+1. **版本耦合的实验性补丁**：生成脚本依赖 DSH `0.2.2-rc.1` 中 `AssistantMarkdown` 的代码锚点；上游升级改变结构时脚本会报错退出，需重新适配锚点并生成 fork。
 2. **跨 token Markdown 有损**：
    - 行内 token 跨越 Markdown 强调语法（如 `**加粗 {{badge:x}} 继续**`）时，两侧文本被切分为独立片段，加粗在 token 处断开；
    - 行内片段通过外层 flex 容器（`data-miopiik-segments="inline"`）排布，块级 IUI 组件通过 `data-miopiik-block-wrap`（`flex-basis: 100%`）占满整行（实测宽度 680/680 px），但底层仍由多个独立 `MarkdownText` 组成，段落间距、跨片段复制选区（可能带出换行）与屏幕阅读器朗读顺序与单节点 Markdown AST 存在差异；

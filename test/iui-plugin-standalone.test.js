@@ -85,6 +85,22 @@ function renderSettingsTab(slots) {
   return render(slotBy(slots, 'settings.plugins.tab').render({}))
 }
 
+/** 插件页节点按「是否在实时预览区内」分组：预览是演示，不是真实设置。 */
+function previewPartition(slots) {
+  const inside = []
+  const outside = []
+  const walk = (node, isIn) => {
+    if (node === null || node === undefined || typeof node !== 'object') return
+    if (Array.isArray(node)) { for (const child of node) walk(child, isIn); return }
+    const now = isIn || node.props?.['data-iui-settings-preview'] === 'live'
+    ;(now ? inside : outside).push(node)
+    if (typeof node.type === 'function') { walk(node.type({ ...node.props, children: node.children }), now); return }
+    for (const child of node.children ?? []) walk(child, now)
+  }
+  walk(slotBy(slots, 'plugins.bundle.config').render({ view: 'page' }), false)
+  return { inside, outside }
+}
+
 test('独立包不依赖 MiOpIIk Agent，也不注册旧工具', () => {
   const manifest = JSON.parse(text('package.json'))
   assert.equal(manifest.name, 'miopiik-iui')
@@ -144,7 +160,10 @@ test('插件页只做介绍：真实渲染器预览 + 兼容边界，并把设�
   assert.equal(nodes.filter((node) => node.props?.role === 'tab').length, 0, '插件页不该再有二级页签')
   assert.ok(nodes.some((node) => node.props?.['data-iui-overview'] === '1'))
   assert.equal(nodes.some((node) => node.props?.['data-iui-configuration'] === '1'), false)
-  assert.equal(nodes.filter((node) => node.props?.role === 'switch').length, 0, '插件页不应有开关')
+  // 插件页不承载真实设置（rc.5 职责分离不变）：开关只允许出现在实时预览的演示里
+  const { inside, outside } = previewPartition(slots)
+  assert.equal(outside.filter((node) => node.props?.role === 'switch').length, 0, '插件页预览区外不应有开关')
+  assert.equal(inside.filter((node) => node.props?.role === 'switch').length > 0, true, '预览区应演示本地 toggle')
   assert.equal(nodes.find((node) => node.props?.['data-iui-settings-preview'])?.props['data-iui-settings-preview'], 'live')
   const text = nodes.flatMap((node) => node.children ?? []).filter((child) => typeof child === 'string').join(' ')
   assert.match(text, /独立插件/u)

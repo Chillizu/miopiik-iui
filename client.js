@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const IUI_PLUGIN_VERSION = "0.1.0-rc.6"
+    const IUI_PLUGIN_VERSION = "0.1.0-rc.7"
     const C = {
       text: 'var(--dsw-alias-label-primary, #ddd)',
       muted: 'var(--dsw-alias-label-secondary, #999)',
@@ -23,6 +23,8 @@ window.__ModuleLoader__.load({
        *  - 模型/示例只产出**结构**（组件树 + 属性 + 状态初值 + 声明式绑定），不产出 CSS/JS；
        *  - 组件类型必须在 REGISTRY 白名单内，未知类型→所在子树降级为 fallback 文本；
        *  - 绑定只允许 `$state.<key>` 与 `$data.<key>` 两种形式，不做表达式求值；
+       *  - 本地交互控件（segmented/toggle/slider/input）只**写** $state；when/filter 只**读** $state，
+       *    一切交互停留在浏览器内，外部动作仍归口工具面；
        *  - 预算（节点数/深度/数据量）在这里统一拒绝，由调用方决定降级策略。
        */
 
@@ -35,7 +37,7 @@ window.__ModuleLoader__.load({
         column: { props: { gap: 'number?' }, children: true },
         card: { props: { title: 'string?', subtitle: 'string?', gap: 'number?', span: 'number?', align: 'string?' }, children: true },
         grid: { props: { columns: 'number?', gap: 'number?', align: 'string?' }, children: true },
-        table: { props: { columns: 'value', rows: 'value', caption: 'string?' }, children: false },
+        table: { props: { columns: 'value', rows: 'value', caption: 'string?', filter: 'string?' }, children: false },
         // 行内原语：与文字同处一行，顺序即 AST 顺序（不是另开卡片）
         paragraph: { props: { gap: 'number?' }, children: true },
         badge: { props: { text: 'string', tone: 'string?' }, children: false },
@@ -50,6 +52,13 @@ window.__ModuleLoader__.load({
         chart: { props: { kind: 'string', series: 'value', source: 'string?' }, children: false },
         segmented: { props: { label: 'string?', options: 'value', bind: 'string' }, children: false },
         divider: { props: { label: 'string?' }, children: false },
+        // 本地交互控件：只写 $state，与 segmented 同一模型，不产生消息/工具调用
+        toggle: { props: { label: 'string?', bind: 'string' }, children: false },
+        slider: { props: { label: 'string?', bind: 'string', min: 'number?', max: 'number?', step: 'number?', unit: 'string?' }, children: false },
+        input: { props: { label: 'string?', bind: 'string', placeholder: 'string?' }, children: false },
+        // 过程与清单：steps 只接受 step 子节点（与 paragraph 只接受行内组件同一校验模式）
+        steps: { props: {}, children: true },
+        step: { props: { title: 'string', note: 'string?', tone: 'string?' }, children: false },
       })
 
       const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384 })
@@ -167,8 +176,38 @@ window.__ModuleLoader__.load({
           if (node.type === 'segmented' && (!Array.isArray(props.options) || props.options.length === 0 || props.options.length > LIMITS.options)) {
             return failNode(node, path, `options 需要 1–${LIMITS.options} 项`)
           }
+          if (node.type === 'toggle' || node.type === 'slider' || node.type === 'input') {
+            if (readBinding(props.bind).scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
+          }
+          if (node.type === 'slider') {
+            for (const key of ['min', 'max', 'step']) {
+              if (props[key] !== undefined && (typeof props[key] !== 'number' || !Number.isFinite(props[key]))) {
+                return failNode(node, path, `slider.${key} 需要数字`)
+              }
+            }
+            if (typeof props.step === 'number' && props.step <= 0) return failNode(node, path, 'slider.step 需为正数')
+            if (typeof props.min === 'number' && typeof props.max === 'number' && props.max <= props.min) {
+              return failNode(node, path, 'slider.max 需大于 slider.min')
+            }
+          }
+          if (node.type === 'steps') {
+            const kids = Array.isArray(node.children) ? node.children : []
+            if (kids.length === 0) return failNode(node, path, 'steps 至少需要一个 step')
+            const bad = kids.find((child) => child === null || typeof child !== 'object' || child.type !== 'step')
+            if (bad !== undefined) return failNode(node, path, 'steps 只接受 step 子节点')
+          }
+          if (node.type === 'step') {
+            if (typeof props.title !== 'string' || props.title.trim() === '') return failNode(node, path, 'step.title 必填')
+            if (props.tone !== undefined && !TONES.includes(props.tone)) return failNode(node, path, `step.tone 只能是 ${TONES.join('/')}`)
+          }
+          if (node.type === 'table' && props.filter !== undefined && readBinding(props.filter).scope !== 'state') {
+            return failNode(node, path, 'table.filter 只能绑定 $state.*')
+          }
+          if (props.when !== undefined && readBinding(props.when).scope !== 'state') {
+            return failNode(node, path, 'when 只能绑定 $state.*')
+          }
           if (node.type === 'chart') {
-            if (!['bar', 'line'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line')
+            if (!['bar', 'line', 'donut'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut')
             const binding = readBinding(props.series)
             if (binding.scope === undefined && chartMatrix(binding.literal) === null) return failNode(node, path, 'chart.series 需要有效点列或状态绑定')
           }
@@ -211,8 +250,10 @@ window.__ModuleLoader__.load({
             if (!/^(https:\/\/[^\s]+|\/(?!\/)[^\s]*|#[A-Za-z][A-Za-z0-9_-]*)$/u.test(href)) return failNode(node, path, 'link 只接受 https、站内路径或安全锚点')
           }
           if (node.type === 'progress') {
-            if (typeof props.value !== 'number' || !Number.isFinite(props.value) || props.value < 0) {
-              return failNode(node, path, 'progress.value 需要 >= 0 的数字')
+            // value 允许 $state 绑定（渲染时解析为数字）；字面量则必须是 >= 0 的数字
+            const bound = typeof props.value === 'string' && readBinding(props.value).scope === 'state'
+            if (!bound && (typeof props.value !== 'number' || !Number.isFinite(props.value) || props.value < 0)) {
+              return failNode(node, path, 'progress.value 需要 >= 0 的数字或 $state 绑定')
             }
             if (props.max !== undefined && (typeof props.max !== 'number' || props.max <= 0)) {
               return failNode(node, path, 'progress.max 需要正数')
@@ -334,10 +375,16 @@ window.__ModuleLoader__.load({
         chart: 'chart',
         segmented: 'segmented',
         divider: 'divider',
+        toggle: 'toggle',
+        slider: 'slider',
+        input: 'input',
+        steps: 'steps',
+        step: 'step',
       })
 
-      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true })
-      const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true })
+      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true })
+      // 交互控件与 step 一律写成自闭合：<toggle …/>、<slider …/>、<input …/>、<step title="…"/>
+      const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true })
 
       function decodeEntities(text) {
         return String(text)
@@ -533,7 +580,12 @@ window.__ModuleLoader__.load({
         metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
         chart: ['kind', 'type', 'series', 'source', 'title'],
         segmented: ['label', 'bind', 'options'],
-        table: ['columns', 'rows', 'caption'],
+        table: ['columns', 'rows', 'caption', 'filter'],
+        toggle: ['label', 'bind'],
+        slider: ['label', 'bind', 'min', 'max', 'step', 'unit'],
+        input: ['label', 'bind', 'placeholder'],
+        steps: [],
+        step: ['title', 'note', 'tone'],
         card: ['title', 'subtitle', 'gap', 'span', 'align'],
         grid: ['columns', 'gap', 'align'],
         row: ['gap', 'align'],
@@ -599,6 +651,8 @@ window.__ModuleLoader__.load({
           if (element.name === '#text') return { kind: 'degraded', text: decodeEntities(String(element.text ?? '')) }
           const type = ML_TAGS[element.name]
           const attrs = normalizeAttrs(element)
+          // when/is 是通用显隐通道：任何组件都可携带；值交给校验器把关（只允许 $state 绑定）
+          const control = readProps(attrs, ['when', 'is'])
           const fallbackText = typeof attrs.fallback === 'string' ? attrs.fallback : ''
           const innerText = textOf(element)
           const degrade = (reason) => {
@@ -612,7 +666,7 @@ window.__ModuleLoader__.load({
           const INLINE_LEAVES = { badge: 'text', emphasis: 'text', b: 'text', code: 'text', a: 'text', link: 'text', callout: 'text', progress: 'label', empty: 'text' }
           if (INLINE_LEAVES[element.name] !== undefined) {
             const key = INLINE_LEAVES[element.name]
-            const props = readProps(attrs, TEXT_PROPS[element.name] ?? [])
+            const props = { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? []) }
             if (props[key] === undefined && innerText !== '') props[key] = innerText
             // empty：text 可由 title/description 派生；三者都没有才降级
             if (element.name === 'empty' && (props[key] === undefined || props[key] === '')) {
@@ -625,7 +679,7 @@ window.__ModuleLoader__.load({
           }
           if (element.name === 'text') {
             const text = typeof element.attrs.text === 'string' ? element.attrs.text : innerText
-            return text === '' ? degrade('没有内容') : { kind: 'node', node: { id: typeof element.attrs.id === 'string' && element.attrs.id !== '' ? element.attrs.id : 'ml-text', type: 'text', props: { text }, children: [] } }
+            return text === '' ? degrade('没有内容') : { kind: 'node', node: { id: typeof element.attrs.id === 'string' && element.attrs.id !== '' ? element.attrs.id : 'ml-text', type: 'text', props: { ...control, text }, children: [] } }
           }
           if (element.name === 'callout' && element.children.some((child) => child.name !== '#text')) {
             const children = element.children
@@ -638,7 +692,7 @@ window.__ModuleLoader__.load({
                 return item.kind === 'node' ? item.node : { id: 'ml-callout-degraded', type: 'text', props: { text: item.text }, children: [] }
               })
               .filter(Boolean)
-            const props = readProps(attrs, TEXT_PROPS.callout)
+            const props = { ...control, ...readProps(attrs, TEXT_PROPS.callout) }
             return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-callout', type: 'callout', props, children } }
           }
           if (element.name === 'p' || element.name === 'paragraph') {
@@ -651,7 +705,7 @@ window.__ModuleLoader__.load({
               return item.kind === 'node' ? item.node : { id: 'ml-inline-degraded', type: 'text', props: { text: item.text }, children: [] }
             }).filter(Boolean)
             if (children.length === 0) return degrade('段落为空')
-            return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-p', type: 'paragraph', props: readProps(attrs, ['gap']), children } }
+            return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-p', type: 'paragraph', props: { ...control, ...readProps(attrs, ['gap']) }, children } }
           }
           if (CONTAINERS[element.name] === true) {
             const nodes = element.children.map((child) => compile(child))
@@ -665,13 +719,13 @@ window.__ModuleLoader__.load({
               node: {
                 id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`,
                 type,
-                props: readProps(attrs, TEXT_PROPS[element.name] ?? []),
+                props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? []) },
                 children,
               },
             }
           }
           if (element.children.length > 0) return degrade('该标签不接受子内容')
-          return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: readProps(attrs, TEXT_PROPS[element.name] ?? []), children: [] } }
+          return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? []) }, children: [] } }
         }
 
         const compiled = children.map((child) => compile(child))
@@ -865,7 +919,7 @@ window.__ModuleLoader__.load({
         if (props.chart !== undefined && props.chart !== false && rows.length > 0) {
           const series = rows.map((row) => [String(row[0] ?? ''), Number(row[1]) || 0])
           const rawKind = props.chart === true ? 'bar' : String(props.chart)
-          const kind = rawKind === 'line' ? 'line' : 'bar' // donut/其他旧值降级为柱状
+          const kind = rawKind === 'line' || rawKind === 'donut' ? rawKind : 'bar' // 其他旧值降级为柱状；donut 渲染器已原生支持，历史如实回放
           const propsOut = { kind, series }
           if (typeof props.source === 'string' && props.source !== '') propsOut.source = props.source
           return { id: nextId('legacy-chart'), type: 'chart', props: propsOut, children: [] }
@@ -1142,6 +1196,12 @@ window.__ModuleLoader__.load({
       const resolve = (value) => IUI_AST.resolveValue(value, scope)
       const node = (item, key) => {
         const props = item.props ?? {}
+        // when/is：本地显隐（可选 is 做等值切换）。只读 $state，不执行任何表达式。
+        if (props.when !== undefined) {
+          const actual = resolve(props.when)
+          const visible = props.is === undefined ? Boolean(actual) : sameValue(actual, resolve(props.is))
+          if (!visible) return null
+        }
         if (item.type === 'text') {
           return h('div', { key, style: { fontSize: 12, lineHeight: '18px', color: C.text } }, String(resolve(props.text) ?? ''))
         }
@@ -1207,6 +1267,127 @@ window.__ModuleLoader__.load({
             ),
           )
         }
+        if (item.type === 'toggle') {
+          const binding = IUI_AST.readBinding(props.bind)
+          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          const on = current === true || current === 'true'
+          return h(
+            'div',
+            { key, 'data-iui-toggle': on ? 'on' : 'off', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            h(
+              'button',
+              {
+                key: `${key}-ctl`,
+                type: 'button',
+                role: 'switch',
+                'aria-checked': on,
+                'aria-label': String(props.label ?? props.bind ?? ''),
+                onClick: () => {
+                  if (binding.scope !== 'state') return
+                  setState((prev) => writeStatePath(prev, binding.key, !on))
+                },
+                style: {
+                  boxSizing: 'border-box',
+                  position: 'relative',
+                  flex: 'none',
+                  width: 28,
+                  height: 16,
+                  padding: 2,
+                  border: 0,
+                  borderRadius: 999,
+                  background: on ? C.brand : 'rgba(127,127,127,0.35)',
+                  cursor: 'pointer',
+                },
+              },
+              h('span', {
+                'aria-hidden': true,
+                style: { display: 'block', width: 12, height: 12, borderRadius: '50%', background: on ? '#fff' : C.text, transform: on ? 'translateX(12px)' : 'translateX(0)', transition: 'transform .12s ease' },
+              }),
+            ),
+          )
+        }
+        if (item.type === 'slider') {
+          const binding = IUI_AST.readBinding(props.bind)
+          const min = typeof props.min === 'number' && Number.isFinite(props.min) ? props.min : 0
+          const max = typeof props.max === 'number' && Number.isFinite(props.max) && props.max > min ? props.max : Math.max(100, min + 1)
+          const stepSize = typeof props.step === 'number' && Number.isFinite(props.step) && props.step > 0 ? props.step : 1
+          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          const raw = Number(current)
+          const value = Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : min
+          const unit = resolve(props.unit)
+          return h(
+            'div',
+            { key, 'data-iui-slider': String(value), style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            h('input', {
+              key: `${key}-ctl`,
+              type: 'range',
+              min,
+              max,
+              step: stepSize,
+              value,
+              'aria-label': String(props.label ?? props.bind ?? ''),
+              onChange: (event) => {
+                if (binding.scope !== 'state') return
+                const next = Number(event.target.value)
+                if (Number.isFinite(next)) setState((prev) => writeStatePath(prev, binding.key, next))
+              },
+              style: { flex: '1 1 120px', minWidth: 120, accentColor: C.brand },
+            }),
+            h('span', { style: { fontSize: 11, fontVariantNumeric: 'tabular-nums', color: C.text } }, `${value}${unit === undefined || unit === null || String(unit) === '' ? '' : String(unit)}`),
+          )
+        }
+        if (item.type === 'input') {
+          const binding = IUI_AST.readBinding(props.bind)
+          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          return h(
+            'div',
+            { key, 'data-iui-input': '1', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            h('input', {
+              key: `${key}-ctl`,
+              type: 'text',
+              value: current === undefined || current === null ? '' : String(current),
+              maxLength: IUI_AST.LIMITS.text,
+              placeholder: String(props.placeholder ?? ''),
+              'aria-label': String(props.label ?? props.bind ?? ''),
+              onChange: (event) => {
+                if (binding.scope !== 'state') return
+                setState((prev) => writeStatePath(prev, binding.key, event.target.value))
+              },
+              style: { flex: '1 1 140px', minWidth: 140, border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', padding: '3px 8px', fontSize: 12, color: C.text, lineHeight: '18px' },
+            }),
+          )
+        }
+        if (item.type === 'steps') {
+          return h(
+            'div',
+            { key, 'data-iui-steps': String(item.children.length), style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
+            ...item.children.map((child, index) => {
+              const cp = child.props ?? {}
+              const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
+              const glyph = { success: '✓', warning: '!', danger: '✕' }[cp.tone] ?? String(index + 1)
+              const last = index === item.children.length - 1
+              return h(
+                'div',
+                { key: `${key}-${index}`, style: { display: 'flex', gap: 10 } },
+                h(
+                  'div',
+                  { key: 'rail', style: { display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' } },
+                  h('span', { key: 'dot', style: { boxSizing: 'border-box', width: 18, height: 18, borderRadius: 999, border: `1px solid ${cp.tone ? toneColor : C.border}`, color: cp.tone ? toneColor : C.muted, fontSize: 10, lineHeight: '16px', textAlign: 'center', flex: 'none' } }, glyph),
+                  last ? null : h('span', { key: 'line', style: { width: 1, flex: '1 1 auto', minHeight: 8, background: C.border, marginTop: 2 } }),
+                ),
+                h(
+                  'div',
+                  { key: 'body', style: { paddingBottom: last ? 0 : 10, minWidth: 0 } },
+                  h('div', { key: 'title', style: { fontSize: 12, fontWeight: 600, color: C.text, lineHeight: '18px' } }, String(cp.title ?? '')),
+                  String(cp.note ?? '') !== '' ? h('div', { key: 'note', style: { fontSize: 11, color: C.muted, lineHeight: '17px', marginTop: 1 } }, String(cp.note)) : null,
+                ),
+              )
+            }),
+          )
+        }
         if (item.type === 'paragraph') {
           const TONE = {
             neutral: { bg: 'rgba(127,127,127,0.14)', fg: C.text },
@@ -1216,9 +1397,14 @@ window.__ModuleLoader__.load({
             info: { bg: 'rgba(65,118,230,0.16)', fg: C.brand },
             accent: { bg: 'rgba(65,118,230,0.16)', fg: C.brand },
           }
-          const ICON_GLYPH = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳' }
+          const ICON_GLYPH = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }
           const inline = (child, index) => {
             const key2 = `${key}-${index}`
+            if (child.props?.when !== undefined) {
+              const actual = resolve(child.props.when)
+              const visible = child.props.is === undefined ? Boolean(actual) : sameValue(actual, resolve(child.props.is))
+              if (!visible) return null
+            }
             if (child.type === 'text') return h('span', { key: key2 }, String(child.props.text ?? ''))
             if (child.type === 'badge') {
               const tone = TONE[child.props.tone] ?? TONE.neutral
@@ -1253,8 +1439,10 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'progress') {
+          const shown = resolve(props.value)
+          const numeric = Number(shown)
           const max = Number(props.max ?? 1)
-          const ratio = Math.max(0, Math.min(1, Number(props.value) / (max === 0 ? 1 : max)))
+          const ratio = Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric / (max === 0 ? 1 : max))) : 0
           return h(
             'div',
             { key, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
@@ -1307,8 +1495,9 @@ window.__ModuleLoader__.load({
               'data-iui-container': 'grid',
               style: {
                 display: 'grid',
+                // columns 2-6 落实为固定列；columns 缺省或 <=1 时保持自适应单列流
                 gridTemplateColumns: props.columns && Number(props.columns) > 1
-                  ? `repeat(auto-fit, minmax(160px, 1fr))`
+                  ? `repeat(${Math.round(Number(props.columns))}, minmax(0, 1fr))`
                   : 'repeat(auto-fit, minmax(160px, 1fr))',
                 alignItems: props.align === 'stretch' ? 'stretch' : undefined,
                 gap: Number(props.gap ?? 10),
@@ -1320,10 +1509,18 @@ window.__ModuleLoader__.load({
         if (item.type === 'table') {
           const normalized = IUI_AST.tableMatrix(props)
           const columns = normalized.columns
-          const rows = normalized.rows
+          // filter：本地文本过滤（大小写不敏感、全字段匹配）。只读绑定值，不过滤即全量。
+          const query = props.filter === undefined ? '' : String(resolve(props.filter) ?? '').trim().toLowerCase()
+          const allRows = normalized.rows
+          const filtered = query === '' ? allRows : allRows.filter((row) => row.some((cell) => String(cell ?? '').toLowerCase().includes(query)))
+          const rows = filtered.length === 0 && query !== '' ? [columns.map((_, cellIndex) => (cellIndex === 0 ? '无匹配项' : ''))] : filtered
+          const captionText = [
+            props.caption ? String(props.caption) : '',
+            query !== '' ? `已过滤 ${filtered.length}/${allRows.length} 行` : '',
+          ].filter((part) => part !== '').join(' · ')
           return h(
             'div',
-            { key, 'data-iui-table': String(rows.length), 'data-iui-table-cols': String(columns.length), style: { overflowX: 'auto', maxWidth: '100%' } },
+            { key, 'data-iui-table': String(filtered.length), 'data-iui-table-filtered': query === '' ? undefined : '1', 'data-iui-table-cols': String(columns.length), style: { overflowX: 'auto', maxWidth: '100%' } },
             h(
               'table',
               { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12, color: C.text } },
@@ -1352,7 +1549,7 @@ window.__ModuleLoader__.load({
                 ),
               ),
             ),
-            props.caption ? h('div', { style: { fontSize: 10, color: C.muted, paddingTop: 4 } }, String(props.caption)) : null,
+            captionText !== '' ? h('div', { style: { fontSize: 10, color: C.muted, paddingTop: 4 } }, captionText) : null,
           )
         }
         if (item.type === 'row' || item.type === 'column') {
@@ -1376,7 +1573,7 @@ window.__ModuleLoader__.load({
             { key, 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
             rows === null
               ? h('div', { 'data-iui-chart-empty': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '18px 0' } }, '暂无有效图表数据')
-              : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' ? 'line' : 'bar'),
+              : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' || kind === 'donut' ? kind : 'bar'),
             props.source ? h('div', { style: { fontSize: 10, color: C.muted } }, `来源：${String(props.source)}`) : null,
           )
         }
@@ -1436,7 +1633,7 @@ window.__ModuleLoader__.load({
         const tone = TONE_COLORS[props.tone] ?? TONE_COLORS.neutral
         return h('span', { 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, lineHeight: '18px', background: tone[0], color: tone[1] } }, String(props.text ?? ''))
       }
-      if (node?.type === 'icon') return h('span', { 'data-iui-icon': String(props.name ?? ''), role: 'img', 'aria-label': String(props.label ?? props.name ?? '') }, { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳' }[props.name] ?? '•')
+      if (node?.type === 'icon') return h('span', { 'data-iui-icon': String(props.name ?? ''), role: 'img', 'aria-label': String(props.label ?? props.name ?? '') }, { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }[props.name] ?? '•')
       if (node?.type === 'code') return h('code', { style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, background: 'rgba(127,127,127,0.14)', borderRadius: 4, padding: '0 4px' } }, String(props.text ?? ''))
       if (node?.type === 'link') return h('a', { href: String(props.href ?? ''), target: '_blank', rel: 'noreferrer noopener', style: { color: C.brand, textDecoration: 'underline' } }, String(props.text ?? ''))
       if (node?.type === 'emphasis') return h(props.strong === false ? 'em' : 'strong', null, String(props.text ?? ''))
@@ -1483,11 +1680,14 @@ window.__ModuleLoader__.load({
 const IUI_PREF_KEY = 'miopiik.markdownEmbeds'
 
 const IUI_PREVIEW_ML = `<ui title="活动概览" fallback="7 日活跃 1,248；30 日活跃 4,826">
-  <state name="range" value='{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]}'/>
+  <state name="v" value='{"range":{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]},"detail":true,"q":""}'/>
   <column>
-    <metric label="活跃访问" value="$state.range.total" unit="次" delta="$state.range.change"/>
-    <segmented bind="$state.range" options='[{"label":"近 7 天","value":{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]}},{"label":"近 30 天","value":{"total":"4,826","change":"+8.3%","points":[["第1周",940],["第2周",1080],["第3周",1275],["第4周",1531]]}}]'/>
-    <chart kind="line" series="$state.range.points" source="虚构演示数据"/>
+    <metric label="活跃访问" value="$state.v.range.total" unit="次" delta="$state.v.range.change"/>
+    <segmented bind="$state.v.range" options='[{"label":"近 7 天","value":{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]}},{"label":"近 30 天","value":{"total":"4,826","change":"+8.3%","points":[["第1周",940],["第2周",1080],["第3周",1275],["第4周",1531]]}}]'/>
+    <chart kind="line" series="$state.v.range.points" source="虚构演示数据"/>
+    <toggle label="明细表" bind="$state.v.detail"/>
+    <input bind="$state.v.q" placeholder="过滤渠道…"/>
+    <table columns='["渠道","活跃"]' rows='[["Web 客户端",742],["CLI",331],["API",175]]' caption="虚构演示数据" filter="$state.v.q" when="$state.v.detail"/>
   </column>
 </ui>`
 const IUI_SAMPLE_MARKDOWN = String.fromCharCode(96).repeat(3) + 'iui\n' + IUI_PREVIEW_ML + '\n' + String.fromCharCode(96).repeat(3)

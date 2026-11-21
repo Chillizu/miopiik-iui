@@ -87,3 +87,39 @@ test('miopiik-ml：id 稳定唯一，重复解析结果一致（回放/状态不
   walk(a.doc.root)
   assert.equal(new Set(ids).size, ids.length)
 })
+
+test('miopiik-ml：toggle/slider/input/steps/step 解析成对应组件，when/is 进入 props', () => {
+  const parsed = parseMiopiikMl(`<ui fallback="f">
+    <state name="r" value='{"on":true,"th":5,"cur":"7d"}'/>
+    <toggle label="明细" bind="$state.r.on" when="$state.r.cur" is="7d"/>
+    <slider label="阈值" bind="$state.r.th" min="0" max="10" unit="次"/>
+    <input bind="$state.r.on" placeholder="搜索…"/>
+    <steps><step title="解析" note="miopiik-ml" tone="success"/><step title="校验"/></steps>
+  </ui>`)
+  assert.equal(parsed.ok, true)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 0)
+  assert.deepEqual(checked.ast.root.children.map((node) => node.type), ['toggle', 'slider', 'input', 'steps'])
+  assert.equal(checked.ast.root.children[0].props.is, '7d', 'when/is 必须进入 props')
+  assert.deepEqual(checked.ast.root.children[3].children.map((node) => node.props.title), ['解析', '校验'])
+})
+
+test('miopiik-ml：steps 混入非 step 子节点整体降级，兄弟保留', () => {
+  const parsed = parseMiopiikMl('<ui fallback="f"><column><steps><step title="一"/><text>混入</text></steps><metric label="保留" value="1"/></column></ui>')
+  assert.equal(parsed.ok, true)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 1, 'steps 混入非 step 子节点应整体降级')
+  assert.equal(checked.ast.root.children.at(-1).type, 'metric', '兄弟必须保留')
+})
+
+test('miopiik-ml：行内组件可带 when，table 读取 filter', () => {
+  const parsed = parseMiopiikMl(`<ui fallback="f"><p>前 <badge text="签" tone="success" when="$state.r.on"/> 后</p><table columns='["a"]' rows='[[1]]' filter="$state.r.q"/></ui>`)
+  assert.equal(parsed.ok, true)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 0)
+  assert.equal(checked.ast.root.children[0].children[1].props.when, '$state.r.on')
+  assert.equal(checked.ast.root.children[1].props.filter, '$state.r.q')
+})

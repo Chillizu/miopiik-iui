@@ -170,6 +170,12 @@
       const resolve = (value) => IUI_AST.resolveValue(value, scope)
       const node = (item, key) => {
         const props = item.props ?? {}
+        // when/is：本地显隐（可选 is 做等值切换）。只读 $state，不执行任何表达式。
+        if (props.when !== undefined) {
+          const actual = resolve(props.when)
+          const visible = props.is === undefined ? Boolean(actual) : sameValue(actual, resolve(props.is))
+          if (!visible) return null
+        }
         if (item.type === 'text') {
           return h('div', { key, style: { fontSize: 12, lineHeight: '18px', color: C.text } }, String(resolve(props.text) ?? ''))
         }
@@ -235,6 +241,127 @@
             ),
           )
         }
+        if (item.type === 'toggle') {
+          const binding = IUI_AST.readBinding(props.bind)
+          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          const on = current === true || current === 'true'
+          return h(
+            'div',
+            { key, 'data-iui-toggle': on ? 'on' : 'off', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            h(
+              'button',
+              {
+                key: `${key}-ctl`,
+                type: 'button',
+                role: 'switch',
+                'aria-checked': on,
+                'aria-label': String(props.label ?? props.bind ?? ''),
+                onClick: () => {
+                  if (binding.scope !== 'state') return
+                  setState((prev) => writeStatePath(prev, binding.key, !on))
+                },
+                style: {
+                  boxSizing: 'border-box',
+                  position: 'relative',
+                  flex: 'none',
+                  width: 28,
+                  height: 16,
+                  padding: 2,
+                  border: 0,
+                  borderRadius: 999,
+                  background: on ? C.brand : 'rgba(127,127,127,0.35)',
+                  cursor: 'pointer',
+                },
+              },
+              h('span', {
+                'aria-hidden': true,
+                style: { display: 'block', width: 12, height: 12, borderRadius: '50%', background: on ? '#fff' : C.text, transform: on ? 'translateX(12px)' : 'translateX(0)', transition: 'transform .12s ease' },
+              }),
+            ),
+          )
+        }
+        if (item.type === 'slider') {
+          const binding = IUI_AST.readBinding(props.bind)
+          const min = typeof props.min === 'number' && Number.isFinite(props.min) ? props.min : 0
+          const max = typeof props.max === 'number' && Number.isFinite(props.max) && props.max > min ? props.max : Math.max(100, min + 1)
+          const stepSize = typeof props.step === 'number' && Number.isFinite(props.step) && props.step > 0 ? props.step : 1
+          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          const raw = Number(current)
+          const value = Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : min
+          const unit = resolve(props.unit)
+          return h(
+            'div',
+            { key, 'data-iui-slider': String(value), style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            h('input', {
+              key: `${key}-ctl`,
+              type: 'range',
+              min,
+              max,
+              step: stepSize,
+              value,
+              'aria-label': String(props.label ?? props.bind ?? ''),
+              onChange: (event) => {
+                if (binding.scope !== 'state') return
+                const next = Number(event.target.value)
+                if (Number.isFinite(next)) setState((prev) => writeStatePath(prev, binding.key, next))
+              },
+              style: { flex: '1 1 120px', minWidth: 120, accentColor: C.brand },
+            }),
+            h('span', { style: { fontSize: 11, fontVariantNumeric: 'tabular-nums', color: C.text } }, `${value}${unit === undefined || unit === null || String(unit) === '' ? '' : String(unit)}`),
+          )
+        }
+        if (item.type === 'input') {
+          const binding = IUI_AST.readBinding(props.bind)
+          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          return h(
+            'div',
+            { key, 'data-iui-input': '1', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            h('input', {
+              key: `${key}-ctl`,
+              type: 'text',
+              value: current === undefined || current === null ? '' : String(current),
+              maxLength: IUI_AST.LIMITS.text,
+              placeholder: String(props.placeholder ?? ''),
+              'aria-label': String(props.label ?? props.bind ?? ''),
+              onChange: (event) => {
+                if (binding.scope !== 'state') return
+                setState((prev) => writeStatePath(prev, binding.key, event.target.value))
+              },
+              style: { flex: '1 1 140px', minWidth: 140, border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', padding: '3px 8px', fontSize: 12, color: C.text, lineHeight: '18px' },
+            }),
+          )
+        }
+        if (item.type === 'steps') {
+          return h(
+            'div',
+            { key, 'data-iui-steps': String(item.children.length), style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
+            ...item.children.map((child, index) => {
+              const cp = child.props ?? {}
+              const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
+              const glyph = { success: '✓', warning: '!', danger: '✕' }[cp.tone] ?? String(index + 1)
+              const last = index === item.children.length - 1
+              return h(
+                'div',
+                { key: `${key}-${index}`, style: { display: 'flex', gap: 10 } },
+                h(
+                  'div',
+                  { key: 'rail', style: { display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' } },
+                  h('span', { key: 'dot', style: { boxSizing: 'border-box', width: 18, height: 18, borderRadius: 999, border: `1px solid ${cp.tone ? toneColor : C.border}`, color: cp.tone ? toneColor : C.muted, fontSize: 10, lineHeight: '16px', textAlign: 'center', flex: 'none' } }, glyph),
+                  last ? null : h('span', { key: 'line', style: { width: 1, flex: '1 1 auto', minHeight: 8, background: C.border, marginTop: 2 } }),
+                ),
+                h(
+                  'div',
+                  { key: 'body', style: { paddingBottom: last ? 0 : 10, minWidth: 0 } },
+                  h('div', { key: 'title', style: { fontSize: 12, fontWeight: 600, color: C.text, lineHeight: '18px' } }, String(cp.title ?? '')),
+                  String(cp.note ?? '') !== '' ? h('div', { key: 'note', style: { fontSize: 11, color: C.muted, lineHeight: '17px', marginTop: 1 } }, String(cp.note)) : null,
+                ),
+              )
+            }),
+          )
+        }
         if (item.type === 'paragraph') {
           const TONE = {
             neutral: { bg: 'rgba(127,127,127,0.14)', fg: C.text },
@@ -244,9 +371,14 @@
             info: { bg: 'rgba(65,118,230,0.16)', fg: C.brand },
             accent: { bg: 'rgba(65,118,230,0.16)', fg: C.brand },
           }
-          const ICON_GLYPH = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳' }
+          const ICON_GLYPH = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }
           const inline = (child, index) => {
             const key2 = `${key}-${index}`
+            if (child.props?.when !== undefined) {
+              const actual = resolve(child.props.when)
+              const visible = child.props.is === undefined ? Boolean(actual) : sameValue(actual, resolve(child.props.is))
+              if (!visible) return null
+            }
             if (child.type === 'text') return h('span', { key: key2 }, String(child.props.text ?? ''))
             if (child.type === 'badge') {
               const tone = TONE[child.props.tone] ?? TONE.neutral
@@ -281,8 +413,10 @@
           )
         }
         if (item.type === 'progress') {
+          const shown = resolve(props.value)
+          const numeric = Number(shown)
           const max = Number(props.max ?? 1)
-          const ratio = Math.max(0, Math.min(1, Number(props.value) / (max === 0 ? 1 : max)))
+          const ratio = Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric / (max === 0 ? 1 : max))) : 0
           return h(
             'div',
             { key, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
@@ -335,8 +469,9 @@
               'data-iui-container': 'grid',
               style: {
                 display: 'grid',
+                // columns 2-6 落实为固定列；columns 缺省或 <=1 时保持自适应单列流
                 gridTemplateColumns: props.columns && Number(props.columns) > 1
-                  ? `repeat(auto-fit, minmax(160px, 1fr))`
+                  ? `repeat(${Math.round(Number(props.columns))}, minmax(0, 1fr))`
                   : 'repeat(auto-fit, minmax(160px, 1fr))',
                 alignItems: props.align === 'stretch' ? 'stretch' : undefined,
                 gap: Number(props.gap ?? 10),
@@ -348,10 +483,18 @@
         if (item.type === 'table') {
           const normalized = IUI_AST.tableMatrix(props)
           const columns = normalized.columns
-          const rows = normalized.rows
+          // filter：本地文本过滤（大小写不敏感、全字段匹配）。只读绑定值，不过滤即全量。
+          const query = props.filter === undefined ? '' : String(resolve(props.filter) ?? '').trim().toLowerCase()
+          const allRows = normalized.rows
+          const filtered = query === '' ? allRows : allRows.filter((row) => row.some((cell) => String(cell ?? '').toLowerCase().includes(query)))
+          const rows = filtered.length === 0 && query !== '' ? [columns.map((_, cellIndex) => (cellIndex === 0 ? '无匹配项' : ''))] : filtered
+          const captionText = [
+            props.caption ? String(props.caption) : '',
+            query !== '' ? `已过滤 ${filtered.length}/${allRows.length} 行` : '',
+          ].filter((part) => part !== '').join(' · ')
           return h(
             'div',
-            { key, 'data-iui-table': String(rows.length), 'data-iui-table-cols': String(columns.length), style: { overflowX: 'auto', maxWidth: '100%' } },
+            { key, 'data-iui-table': String(filtered.length), 'data-iui-table-filtered': query === '' ? undefined : '1', 'data-iui-table-cols': String(columns.length), style: { overflowX: 'auto', maxWidth: '100%' } },
             h(
               'table',
               { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12, color: C.text } },
@@ -380,7 +523,7 @@
                 ),
               ),
             ),
-            props.caption ? h('div', { style: { fontSize: 10, color: C.muted, paddingTop: 4 } }, String(props.caption)) : null,
+            captionText !== '' ? h('div', { style: { fontSize: 10, color: C.muted, paddingTop: 4 } }, captionText) : null,
           )
         }
         if (item.type === 'row' || item.type === 'column') {
@@ -404,7 +547,7 @@
             { key, 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
             rows === null
               ? h('div', { 'data-iui-chart-empty': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '18px 0' } }, '暂无有效图表数据')
-              : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' ? 'line' : 'bar'),
+              : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' || kind === 'donut' ? kind : 'bar'),
             props.source ? h('div', { style: { fontSize: 10, color: C.muted } }, `来源：${String(props.source)}`) : null,
           )
         }
@@ -464,7 +607,7 @@
         const tone = TONE_COLORS[props.tone] ?? TONE_COLORS.neutral
         return h('span', { 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, lineHeight: '18px', background: tone[0], color: tone[1] } }, String(props.text ?? ''))
       }
-      if (node?.type === 'icon') return h('span', { 'data-iui-icon': String(props.name ?? ''), role: 'img', 'aria-label': String(props.label ?? props.name ?? '') }, { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳' }[props.name] ?? '•')
+      if (node?.type === 'icon') return h('span', { 'data-iui-icon': String(props.name ?? ''), role: 'img', 'aria-label': String(props.label ?? props.name ?? '') }, { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }[props.name] ?? '•')
       if (node?.type === 'code') return h('code', { style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, background: 'rgba(127,127,127,0.14)', borderRadius: 4, padding: '0 4px' } }, String(props.text ?? ''))
       if (node?.type === 'link') return h('a', { href: String(props.href ?? ''), target: '_blank', rel: 'noreferrer noopener', style: { color: C.brand, textDecoration: 'underline' } }, String(props.text ?? ''))
       if (node?.type === 'emphasis') return h(props.strong === false ? 'em' : 'strong', null, String(props.text ?? ''))

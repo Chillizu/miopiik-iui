@@ -5,6 +5,8 @@
  *  - 模型/示例只产出**结构**（组件树 + 属性 + 状态初值 + 声明式绑定），不产出 CSS/JS；
  *  - 组件类型必须在 REGISTRY 白名单内，未知类型→所在子树降级为 fallback 文本；
  *  - 绑定只允许 `$state.<key>` 与 `$data.<key>` 两种形式，不做表达式求值；
+ *  - 本地交互控件（segmented/toggle/slider/input）只**写** $state；when/filter 只**读** $state，
+ *    一切交互停留在浏览器内，外部动作仍归口工具面；
  *  - 预算（节点数/深度/数据量）在这里统一拒绝，由调用方决定降级策略。
  */
 
@@ -17,7 +19,7 @@ export const REGISTRY = Object.freeze({
   column: { props: { gap: 'number?' }, children: true },
   card: { props: { title: 'string?', subtitle: 'string?', gap: 'number?', span: 'number?', align: 'string?' }, children: true },
   grid: { props: { columns: 'number?', gap: 'number?', align: 'string?' }, children: true },
-  table: { props: { columns: 'value', rows: 'value', caption: 'string?' }, children: false },
+  table: { props: { columns: 'value', rows: 'value', caption: 'string?', filter: 'string?' }, children: false },
   // 行内原语：与文字同处一行，顺序即 AST 顺序（不是另开卡片）
   paragraph: { props: { gap: 'number?' }, children: true },
   badge: { props: { text: 'string', tone: 'string?' }, children: false },
@@ -32,6 +34,13 @@ export const REGISTRY = Object.freeze({
   chart: { props: { kind: 'string', series: 'value', source: 'string?' }, children: false },
   segmented: { props: { label: 'string?', options: 'value', bind: 'string' }, children: false },
   divider: { props: { label: 'string?' }, children: false },
+  // 本地交互控件：只写 $state，与 segmented 同一模型，不产生消息/工具调用
+  toggle: { props: { label: 'string?', bind: 'string' }, children: false },
+  slider: { props: { label: 'string?', bind: 'string', min: 'number?', max: 'number?', step: 'number?', unit: 'string?' }, children: false },
+  input: { props: { label: 'string?', bind: 'string', placeholder: 'string?' }, children: false },
+  // 过程与清单：steps 只接受 step 子节点（与 paragraph 只接受行内组件同一校验模式）
+  steps: { props: {}, children: true },
+  step: { props: { title: 'string', note: 'string?', tone: 'string?' }, children: false },
 })
 
 export const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384 })
@@ -149,8 +158,38 @@ export function validateAst(input) {
     if (node.type === 'segmented' && (!Array.isArray(props.options) || props.options.length === 0 || props.options.length > LIMITS.options)) {
       return failNode(node, path, `options 需要 1–${LIMITS.options} 项`)
     }
+    if (node.type === 'toggle' || node.type === 'slider' || node.type === 'input') {
+      if (readBinding(props.bind).scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
+    }
+    if (node.type === 'slider') {
+      for (const key of ['min', 'max', 'step']) {
+        if (props[key] !== undefined && (typeof props[key] !== 'number' || !Number.isFinite(props[key]))) {
+          return failNode(node, path, `slider.${key} 需要数字`)
+        }
+      }
+      if (typeof props.step === 'number' && props.step <= 0) return failNode(node, path, 'slider.step 需为正数')
+      if (typeof props.min === 'number' && typeof props.max === 'number' && props.max <= props.min) {
+        return failNode(node, path, 'slider.max 需大于 slider.min')
+      }
+    }
+    if (node.type === 'steps') {
+      const kids = Array.isArray(node.children) ? node.children : []
+      if (kids.length === 0) return failNode(node, path, 'steps 至少需要一个 step')
+      const bad = kids.find((child) => child === null || typeof child !== 'object' || child.type !== 'step')
+      if (bad !== undefined) return failNode(node, path, 'steps 只接受 step 子节点')
+    }
+    if (node.type === 'step') {
+      if (typeof props.title !== 'string' || props.title.trim() === '') return failNode(node, path, 'step.title 必填')
+      if (props.tone !== undefined && !TONES.includes(props.tone)) return failNode(node, path, `step.tone 只能是 ${TONES.join('/')}`)
+    }
+    if (node.type === 'table' && props.filter !== undefined && readBinding(props.filter).scope !== 'state') {
+      return failNode(node, path, 'table.filter 只能绑定 $state.*')
+    }
+    if (props.when !== undefined && readBinding(props.when).scope !== 'state') {
+      return failNode(node, path, 'when 只能绑定 $state.*')
+    }
     if (node.type === 'chart') {
-      if (!['bar', 'line'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line')
+      if (!['bar', 'line', 'donut'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut')
       const binding = readBinding(props.series)
       if (binding.scope === undefined && chartMatrix(binding.literal) === null) return failNode(node, path, 'chart.series 需要有效点列或状态绑定')
     }
@@ -193,8 +232,10 @@ export function validateAst(input) {
       if (!/^(https:\/\/[^\s]+|\/(?!\/)[^\s]*|#[A-Za-z][A-Za-z0-9_-]*)$/u.test(href)) return failNode(node, path, 'link 只接受 https、站内路径或安全锚点')
     }
     if (node.type === 'progress') {
-      if (typeof props.value !== 'number' || !Number.isFinite(props.value) || props.value < 0) {
-        return failNode(node, path, 'progress.value 需要 >= 0 的数字')
+      // value 允许 $state 绑定（渲染时解析为数字）；字面量则必须是 >= 0 的数字
+      const bound = typeof props.value === 'string' && readBinding(props.value).scope === 'state'
+      if (!bound && (typeof props.value !== 'number' || !Number.isFinite(props.value) || props.value < 0)) {
+        return failNode(node, path, 'progress.value 需要 >= 0 的数字或 $state 绑定')
       }
       if (props.max !== undefined && (typeof props.max !== 'number' || props.max <= 0)) {
         return failNode(node, path, 'progress.max 需要正数')
