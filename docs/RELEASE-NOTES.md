@@ -2,7 +2,19 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.13` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+> **当前版本 `0.1.0-rc.14` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+
+## miopiik-iui 0.1.0-rc.14 — prerelease
+
+**状态**：prerelease，剩余两项 stable blocker（非官方宿主补丁、无多版本矩阵）；本版为沙箱文档帧的收尾打磨。
+
+- **沙箱帧自动高度**：`html` 围栏的帧不再写死高度——父页面读文档 `scrollHeight` 后收紧到内容高度（120–1600，超出则帧内滚动），`<!-- height: 480 -->` 降级为「首次绘制高度」。
+- **沙箱属性调整（用户点头）**：`sandbox` 从留空改为 `allow-same-origin`，**绝不含 `allow-scripts` 与 `allow-top-navigation`**——文档里的 JS 依旧一行都不执行（浏览器引擎级），无脚本即无法读 cookie/DOM 外泄路径，CSP `default-src 'none'` 的零网络约束不变；父页面仅获得「读尺寸」能力。
+- **预设修正**：`.mi-metric .mi-value` 改为 `inline-block`，模型把 `mi-unit` 写成兄弟节点时不再换行。
+- **文档同步**：rc.13 后的 blocker 记录清理（四项 → 两项，跨 token 有损与流式非增量标注为 rc.12 已解除）并入本版，tarball 内 README 与 HEAD 一致。
+- **验证**：97 项全绿；真 Chromium 新增断言——`sandbox` 只含 `allow-same-origin` 且不含 `allow-scripts`、帧高与内容高度一致（虚拟时间预算下测量）、无 resize、预设注入、令牌解析为绝对色值。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.14.tgz` 安装并重启 DSH；宿主补丁经 profile 的 ui-chat 软链随重启生效。
+- **实机验收点**：聊天里发一条 `html` 围栏文档，帧高应与内容贴合（不再有大片空白）、无拖拽角；文档里 JS 仍不执行。
 
 ## miopiik-iui 0.1.0-rc.13 — prerelease
 

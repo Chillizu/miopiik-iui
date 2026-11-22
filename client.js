@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const IUI_PLUGIN_VERSION = "0.1.0-rc.13"
+    const IUI_PLUGIN_VERSION = "0.1.0-rc.14"
     const C = {
       text: 'var(--dsw-alias-label-primary, #ddd)',
       muted: 'var(--dsw-alias-label-secondary, #999)',
@@ -1328,7 +1328,8 @@ window.__ModuleLoader__.load({
           '.mi-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}',
           '.mi-metric{padding:10px 12px;border:1px solid var(--mi-border);border-radius:var(--mi-r-lg);background:var(--mi-surface1)}',
           '.mi-metric .mi-label{display:block;font-size:11px;letter-spacing:.2px;color:var(--mi-muted)}',
-          '.mi-metric .mi-value{display:block;margin-top:2px;font-size:21px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}',
+          // value 用 inline-block：unit 作为兄弟节点写时也能并排（实测模型常写成 <span class="mi-value">0</span><span class="mi-unit">次</span>）
+          '.mi-metric .mi-value{display:inline-block;margin-top:2px;font-size:21px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}',
           '.mi-metric .mi-unit{margin-left:3px;font-size:12px;font-weight:400;color:var(--mi-muted)}',
           '.mi-badge{display:inline-block;padding:0 8px;border:1px solid var(--mi-border);border-radius:99px;background:var(--mi-surface2);color:var(--mi-muted);font-size:11px;line-height:18px;vertical-align:1px}',
           '.mi-callout{padding:9px 12px;border:1px solid var(--mi-border);border-left:2px solid var(--mi-border-strong);border-radius:var(--mi-r-md);background:var(--mi-surface1);color:var(--mi-muted);font-size:12.5px}',
@@ -2226,8 +2227,52 @@ window.__ModuleLoader__.load({
       danger: ['rgba(218,54,51,0.16)', '#d1242f'],
     }
 
-    /** ```html 沙箱文档（F-42）：完整静态 HTML 经无脚本 iframe 渲染——JS 一行不执行（浏览器引擎级强制），
-     *  CSP 强制零网络；脚本块双保险剔除；高度支持 <!-- height: 480 --> 提示；超出 256KB 预算降级为提示文本。
+    const HTML_FRAME_MIN = 120
+    const HTML_FRAME_MAX = 1600
+
+    /** 沙箱文档帧：高度按内容自动收紧（rc.14）。sandbox 只加 allow-same-origin、绝不加 allow-scripts——
+     *  文档里的 JS 仍然一行都不执行，父页面仅获得「读尺寸」的能力。 */
+    function IuiHtmlFrame(props) {
+      const frameRef = React.useRef(null)
+      const [frameHeight, setFrameHeight] = React.useState(props.initial)
+      const measure = React.useCallback(() => {
+        const frame = frameRef.current
+        if (frame === null || frame === undefined) return
+        try {
+          const inner = frame.contentDocument
+          if (inner === null || inner === undefined) return
+          const root = inner.documentElement
+          const body = inner.body
+          const next = Math.max(root === null ? 0 : root.scrollHeight, body === null ? 0 : body.scrollHeight)
+          if (next > 0) setFrameHeight(Math.min(HTML_FRAME_MAX, Math.max(HTML_FRAME_MIN, Math.ceil(next))))
+        } catch {
+          // 读不到尺寸（跨源/未就绪）：保持初始高度，不影响文档本身
+        }
+      }, [])
+      React.useEffect(() => {
+        measure()
+        if (typeof setTimeout !== 'function') return undefined
+        // 字体与 data: 图片可能在 load 之后才定高，补两次
+        const timers = [setTimeout(measure, 120), setTimeout(measure, 600)]
+        return () => {
+          for (const timer of timers) clearTimeout(timer)
+        }
+      }, [measure])
+      return h('iframe', {
+        ref: frameRef,
+        'data-miopiik-html-doc': '1',
+        sandbox: 'allow-same-origin',
+        srcdoc: props.doc,
+        title: props.title,
+        loading: 'lazy',
+        onLoad: measure,
+        style: { ...props.frameStyle, height: frameHeight },
+      })
+    }
+
+    /** ```html 沙箱文档（F-42）：完整静态 HTML 经 iframe 渲染——JS 一行不执行（浏览器引擎级强制），
+     *  CSP 强制零网络；脚本块双保险剔除；高度自动按内容收紧（<!-- height: 480 --> 仅作首次绘制高度）；
+     *  超出 256KB 预算降级为提示文本。
      *  风格统一：渲染时从宿主采样设计令牌，注入 mi-* 预设样式（文档自有 <style> 在后，永远能覆盖预设）。 */
     function renderHtmlBlock(raw) {
       if (typeof raw !== 'string' || raw.trim() === '') return null
@@ -2235,7 +2280,7 @@ window.__ModuleLoader__.load({
         return h('div', { 'data-miopiik-html-fallback': 'oversize', style: { fontSize: 12, color: C.muted } }, '（HTML 文档超出 256KB 预算，未渲染）')
       }
       const hint = /<!--\s*height:\s*([0-9]{2,4})\s*-->/.exec(raw.slice(0, 600))
-      const height = Math.min(1600, Math.max(200, hint === null ? 560 : Number(hint[1])))
+      const initial = Math.min(HTML_FRAME_MAX, Math.max(HTML_FRAME_MIN, hint === null ? 320 : Number(hint[1])))
       const stripped = raw.replace(/<script[\s\S]*?<\/script\s*>/giu, '')
       const titleMatch = /<title>([\s\S]{0,120}?)<\/title>/iu.exec(stripped)
       const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">'
@@ -2249,13 +2294,11 @@ window.__ModuleLoader__.load({
       // srcdoc 是「属性值 → 文档」的二次解析：再转义一次会让 &lt; 变成字面量、
       // 并把 class="x" 洗成未加引号的 class=&quot;x&quot;（类名带引号 → 所有 class 选择器静默失效）。
       // 直接交给 srcdoc（setAttribute 不做实体解码），文档里的实体与引号原样生效。
-      return h('iframe', {
-        'data-miopiik-html-doc': '1',
-        sandbox: '',
-        srcdoc: doc,
+      return h(IuiHtmlFrame, {
+        doc,
         title: titleMatch === null ? '内嵌 HTML 文档（无脚本沙箱）' : String(titleMatch[1]).trim(),
-        loading: 'lazy',
-        style: { width: '100%', height, border: `1px solid ${theme.border}`, borderRadius: theme.rlg, background: 'transparent', display: 'block', minWidth: 0, maxWidth: '100%' },
+        initial,
+        frameStyle: { width: '100%', border: `1px solid ${theme.border}`, borderRadius: theme.rlg, background: 'transparent', display: 'block', minWidth: 0, maxWidth: '100%' },
       })
     }
 

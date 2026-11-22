@@ -158,7 +158,8 @@ export function framePresetCss(theme) {
     '.mi-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}',
     '.mi-metric{padding:10px 12px;border:1px solid var(--mi-border);border-radius:var(--mi-r-lg);background:var(--mi-surface1)}',
     '.mi-metric .mi-label{display:block;font-size:11px;letter-spacing:.2px;color:var(--mi-muted)}',
-    '.mi-metric .mi-value{display:block;margin-top:2px;font-size:21px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}',
+    // value 用 inline-block：unit 作为兄弟节点写时也能并排（实测模型常写成 <span class="mi-value">0</span><span class="mi-unit">次</span>）
+    '.mi-metric .mi-value{display:inline-block;margin-top:2px;font-size:21px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}',
     '.mi-metric .mi-unit{margin-left:3px;font-size:12px;font-weight:400;color:var(--mi-muted)}',
     '.mi-badge{display:inline-block;padding:0 8px;border:1px solid var(--mi-border);border-radius:99px;background:var(--mi-surface2);color:var(--mi-muted);font-size:11px;line-height:18px;vertical-align:1px}',
     '.mi-callout{padding:9px 12px;border:1px solid var(--mi-border);border-left:2px solid var(--mi-border-strong);border-radius:var(--mi-r-md);background:var(--mi-surface1);color:var(--mi-muted);font-size:12.5px}',

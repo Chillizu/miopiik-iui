@@ -141,8 +141,19 @@ function fixture() {
       && themedSrc.indexOf('--mi-bg:#0d1117') === -1;
     document.documentElement.style.removeProperty('--dsw-alias-bg-base');
     document.documentElement.style.removeProperty('--dsw-alias-brand-primary');
+    // rc.14 自动高度：沙箱帧应把自身高度收紧到内容高度（120–1600 夹取）
+    setTimeout(() => {
+      const live = document.querySelector('iframe[data-miopiik-html-doc="1"]');
+      const inner = live !== null && live.contentDocument !== null && live.contentDocument !== undefined
+        ? Math.max(live.contentDocument.documentElement.scrollHeight || 0, (live.contentDocument.body || {}).scrollHeight || 0)
+        : 0;
+      const applied = live === null ? 0 : parseFloat(live.style.height || '0');
+      const want = Math.min(1600, Math.max(120, inner));
+      document.body.dataset.autosize = (inner > 0 && Math.abs(applied - want) <= 2) ? 'ok' : ('failed:' + applied + '/' + inner);
+    }, 700);
     const frameOk = frame !== null
-      && frame.getAttribute('sandbox') === ''
+      && frame.getAttribute('sandbox') === 'allow-same-origin'
+      && String(frame.getAttribute('sandbox')).indexOf('allow-scripts') === -1
       && srcdoc.indexOf('Content-Security-Policy') >= 0
       && srcdoc.indexOf('<script') === -1
       && frame.getAttribute('title') === '沙箱演示'
@@ -170,7 +181,7 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   writeFileSync(file,fixture())
   let html
   try {
-    html = execFileSync(chromium,['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--user-data-dir='+join(folder,'settings-profile'),'--dump-dom','file://'+file],{encoding:'utf8',timeout:60000,stdio:['ignore','pipe','ignore']})
+    html = execFileSync(chromium,['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--user-data-dir='+join(folder,'settings-profile'),'--virtual-time-budget=3000','--dump-dom','file://'+file],{encoding:'utf8',timeout:60000,stdio:['ignore','pipe','ignore']})
   } catch (error) {
     t.skip(`Chromium 不可用（${error.code ?? error.message}）：跳过真实 DOM 渲染检查`)
     return
@@ -210,4 +221,5 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-graft-ok="ok"/u,'行内嫁接应保留加粗并把 token 原位替换（幂等）')
   assert.match(html,/data-streaming-ok="ok"/u,'流式部分渲染应无入场动画并带流式标记')
   assert.match(html,/data-html-ok="ok"/u,'```html 应渲染为无脚本沙箱 iframe：sandbox 空、CSP 注入、脚本剔除、超预算降级')
+  assert.match(html,/data-autosize="ok"/u,'沙箱帧高度应按文档内容自动收紧（rc.14）')
 })
