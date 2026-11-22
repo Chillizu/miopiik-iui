@@ -65,6 +65,8 @@ test('fork 补丁与当前上游对齐，安装后默认开启，明确关闭时
   // L-11：行内 token 改为原生先渲染后 DOM 嫁接；流式围栏有专门路由
   assert.match(forked, /MiopiikGraftText/u)
   assert.match(forked, /miopiikStreamSplit/u)
+  // F-42：```html 沙箱文档通道经 lang 分支进 renderHtmlBlock
+  assert.match(forked, /renderHtmlBlock/u)
   // 原生 ReasoningRow 仍在（没有被我们替换）
   assert.match(forked, /function ReasoningRow/u)
   assert.match(forked, /case "reasoning":/u)
@@ -139,4 +141,36 @@ test('块级专用切分：没有块级标记时整段是一个文本段；裸 <
   assert.equal(bare.some((part) => part.kind === 'block' && part.lang === 'ml-bare'), true)
   const guarded = splitTrustedBlocks('```js\nconst s = "<ui title=\\"a\\"></ui>"\n```')
   assert.equal(guarded.some((part) => part.kind === 'block'), false, '代码围栏里的 <ui> 不识别')
+})
+
+test('```html 围栏：成为 lang=html 的块级段；流式期间不参与围栏路由（保持文本）', () => {
+  const parts = splitTrustedBlocks('前文\n```html\n<html><body>x</body></html>\n```\n后文')
+  assert.deepEqual(parts.map((part) => part.kind), ['text', 'block', 'text'])
+  assert.equal(parts[1].lang, 'html')
+  const open = splitStreamingFence('```html\n<html><body>部分</body>')
+  assert.equal(open.hasOpen, false, 'html 围栏不做流式增量，闭合才成块')
+  const legacy = splitTrustedMarkdown('```html\n<html></html>\n```')
+  assert.equal(legacy.some((part) => part.kind === 'block'), true, '旧切分路径同样识别 html 围栏')
+})
+
+test('围栏收尾必须独占一行：文档里行内的 ``` 不再把围栏腰斩（rc.13 实测翻车回归）', () => {
+  // 沙箱文档正文里写了 "```html" 字样（例如讲解围栏语法），旧的正则在这里提前收尾，
+  // 结果前半截进 iframe、后半截漏成聊天正文。
+  const doc = '```html\n<html><body><td>```html 示例</td><p>尾巴</p></body></html>\n```\n后文'
+  const parts = splitTrustedBlocks(doc)
+  assert.deepEqual(parts.map((part) => part.kind), ['block', 'text'])
+  assert.equal(parts[0].lang, 'html')
+  assert.match(parts[0].raw, /```html 示例/u, '行内反引号应留在文档内容里')
+  assert.match(parts[0].raw, /<p>尾巴<\/p>/u, '收尾之后的内容不能被切走')
+  assert.match(parts[1].text, /后文/u)
+  // 行内提及 ```html 不算开启围栏（开启也必须独占一行）
+  const inlineMention = '这段讲 ```html\n<html></html>\n``` 怎么写'
+  assert.equal(splitTrustedBlocks(inlineMention).some((part) => part.kind === 'block'), false)
+})
+
+test('流式增量同样只认行首收尾：行内 ``` 期间不结束围栏', () => {
+  const streaming = splitStreamingFence('```iui\n<ui title="a">\n```这不是收尾\n')
+  assert.equal(streaming.hasOpen, true, '行内 ``` 不应被当作闭合')
+  const closed = splitStreamingFence('```iui\n<ui title="a"></ui>\n```\n')
+  assert.equal(closed.hasOpen, false, '独占一行的 ``` 正常闭合')
 })

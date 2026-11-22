@@ -2,7 +2,18 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.12` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+> **当前版本 `0.1.0-rc.13` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+
+## miopiik-iui 0.1.0-rc.13 — prerelease
+
+**状态**：prerelease，四项 stable blocker 未变；本版为 F-42 沙箱帧通道（用户「直接内嵌 HTML 渲染」理想的可信实现）。
+
+- **```html 沙箱文档通道**：完整静态 HTML 文档经**无脚本沙箱 iframe** 内嵌——`sandbox` 属性留空（无 allow-scripts/allow-same-origin，浏览器引擎级强制），注入 CSP `default-src 'none'`（零网络，样式仅内联、图片仅 data:），脚本块双保险剔除，≤256KB 预算超限降级为提示文本，高度支持 `<!-- height: 480 -->` 提示（默认 560，尺寸不可拖拽）。**宿主主题预设**：渲染时从宿主 DOM 采样设计令牌（`--dsw-alias-*` / `--dsw-radius-*` / `--dsw-font-*`），经探针解析成绝对色值后注入沙箱文档，并预置 `mi-*` 组件词汇（`mi-card` / `mi-row` / `mi-grid` / `mi-metric` / `mi-badge` / `mi-callout` / `mi-progress` / `mi-divider` + `data-tone`）——文档默认与 DSH 本体同风格，文档自有 `<style>` 排在其后，可完全覆盖。宿主补丁 lang 分支路由；流式期间 html 围栏保持文本、闭合成块。「模型输出永不执行」的执行禁区不变——从校验器挡升级为浏览器挡。
+- **章程更新**：目录新增「沙箱文档」一行；禁令行改写为「完整 HTML 文档仅经 ```html 无脚本沙箱围栏内嵌」。
+- **实机翻车修复（两个真 bug）**：① 围栏收尾未锚行首——文档正文里出现行内 ``` 会把围栏当场腰斩、后半截漏成聊天正文，现在开启与收尾都必须独占一行（流式切分同步对齐）；② srcdoc 二次转义——`class="x"` 被洗成 `class=&quot;x&quot;`（类名带引号），导致所有 class 选择器静默失效、`&lt;` 显示成字面量，改为文档原文直传。
+- **验证**：围栏切分单测（lang=html、行首收尾、流式不路由、旧路径兼容）+ frame-theme 单测（回退色板、令牌探针解析）+ 真实 Chromium DOM 断言（sandbox 空、CSP 注入、脚本剔除、标题提取、超预算降级、预设注入、宿主令牌解析成绝对色值、无 resize），97 项全绿；宿主补丁随模板重生成（patch 约 7KB 入库）。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.13.tgz` 安装并重启 DSH；宿主补丁经 profile 的 ui-chat 软链随重启生效。
+- **实机验收点**：聊天里发出一条 ```html 围栏消息（如 archify 画板级排版），文档在沙箱帧内全量呈现、JS 不执行、尺寸不可拖拽（高度由 `<!-- height -->` 提示）；只用 `mi-*` 类写的文档应与 DSH 本体同风格，自带 `<style>` 可覆盖预设。
 
 ## miopiik-iui 0.1.0-rc.12 — prerelease
 

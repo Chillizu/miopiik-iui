@@ -14,8 +14,10 @@
  */
 
 export const INLINE_TOKEN = /\{\{(badge|icon|code):([^{}\n]{1,120}?)\}\}/gu
-// 新主路径是 ```iui；```ink-view 只为历史消息保留只读兼容（渲染前会转成新 AST）。
-export const BLOCK_FENCE = /```(iui|ink-view)[ \t]*\r?\n([\s\S]*?)```/gu
+// 新主路径是 ```iui；```html 是无脚本沙箱文档通道（F-42）；```ink-view 只为历史消息保留只读兼容。
+// 收尾围栏必须独占一行（≤3 空格缩进）：否则围栏内容里行内的 ```（例如示例代码、表格里的
+// "```html" 字样）会把文档当场腰斩，前半截进沙箱帧、后半截漏成聊天正文（rc.13 实测翻车）。
+export const BLOCK_FENCE = /^[ \t]{0,3}```(iui|ink-view|html)[ \t]*\r?\n([\s\S]*?)^[ \t]{0,3}```[ \t]*\r?$/gmu
 
 function readInline(kind, payload) {
   if (kind === 'icon') {
@@ -161,13 +163,13 @@ export function splitTrustedBlocks(text) {
  */
 export function splitStreamingFence(text) {
   const source = String(text ?? '')
-  const starts = [...source.matchAll(/```iui[ \t]*(?:\r?\n)/gu)]
+  const starts = [...source.matchAll(/^[ \t]{0,3}```iui[ \t]*\r?\n/gmu)]
   if (starts.length === 0) return { pre: source, live: '', hasOpen: false }
   const last = starts[starts.length - 1]
   const contentStart = last.index + last[0].length
   const tail = source.slice(contentStart)
-  const closeIdx = tail.indexOf('```')
-  if (closeIdx >= 0) return { pre: source, live: '', hasOpen: false }
+  // 收尾与块级切分同规则：独占一行才算闭合，行内 ``` 不结束围栏。
+  if (/^[ \t]{0,3}```[ \t]*\r?$/mu.test(tail)) return { pre: source, live: '', hasOpen: false }
   return { pre: source.slice(0, last.index), live: tail, hasOpen: true }
 }
 

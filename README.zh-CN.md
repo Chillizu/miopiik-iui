@@ -4,7 +4,7 @@
 
 [English](README.md) | **简体中文**
 
-> **Version 0.1.0-rc.12 — 预发布（prerelease）。**
+> **Version 0.1.0-rc.13 — 预发布（prerelease）。**
 > 本版本为发布候选版（prerelease），未发布到 npm registry，属于独立插件而非 DeepSeek Harness 上游内置功能；聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
 
 MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输出包含受信行内 token 与受控 `iui` 围栏的普通 Markdown，浏览器将其渲染为声明式界面组件。本插件不依赖 MiOpIIk 的 Mind/Ink/Operator Agent，不维护账本，也不注册模型工具。
@@ -21,7 +21,7 @@ MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输�
 
 ## 发布状态
 
-**Version 0.1.0-rc.12** 为预发布版本（prerelease）。升为 `0.1.0` stable 前存在以下四项 blocker：
+**Version 0.1.0-rc.13** 为预发布版本（prerelease）。升为 `0.1.0` stable 前存在以下四项 blocker：
 
 1. **非官方、版本耦合的宿主补丁。** 聊天内联渲染需要由 [tools/fork-chat-embeds.mjs](tools/fork-chat-embeds.mjs) 基于特定 DSH 版本（`0.2.2-rc.1`）生成的本地 `@deepseek-ai/dsh-client-ui-chat` fork。DSH 上游尚未提供 Markdown 嵌入 API。未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，插件页预览仍可使用，设置页诊断会显式报告未检测到补丁。
 2. **跨 token Markdown 有损。** 受信片段会将 Markdown 文本节点切开，跨越 token 边界的加粗/斜体格式、选中复制与屏幕阅读器朗读顺序与单节点原生 Markdown 存在差异。
@@ -36,7 +36,7 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 
 | | **MiOpIIk IUI**（本仓库） | **MiOpIIk Agent** |
 |---|---|---|
-| 包 | `miopiik-iui` 0.1.0-rc.12，prerelease | `miopiik-dsh` 0.1.2，stable |
+| 包 | `miopiik-iui` 0.1.0-rc.13，prerelease | `miopiik-dsh` 0.1.2，stable |
 | 层次 | 纯表现层：浏览器侧的受信 Markdown 片段 | host 侧：记忆、治理、后台执行 |
 | 主要面 | 行内 token、`iui` 围栏、声明式组件、本地状态 | `ink_*` 工具面、收件箱/事实/开环/鱼骨账本、Operator 派发 |
 | 状态 | 浏览器 `localStorage` 中的单个渲染偏好 | 工作区 `.dsh/miopiik/` 下的 append-only JSONL 账本 |
@@ -116,6 +116,8 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 - **`miopiik-ml`**（首选）：小型类 XML 标签语法，先编译为 AST，再进入 `validateAst` 校验。
 - **`iui/1` JSON AST**：包含 `root` 节点的 JSON 对象，供调试与兼容使用，经同一套校验器校验。
+
+另有第三条围栏通道承载完整静态 HTML 文档：**`html` 围栏**渲染为**无脚本沙箱 iframe**（`sandbox` 属性留空 + 注入 CSP `default-src 'none'`）——文档的 CSS/SVG 排版全量呈现，JavaScript 一行不执行、零网络、≤256KB，高度可用 `<!-- height: 480 -->` 提示（默认 560，尺寸不可拖拽）。渲染时从宿主采样设计令牌注入预设样式，并预置 `mi-card` / `mi-row` / `mi-grid` / `mi-metric` / `mi-badge` / `mi-callout` / `mi-progress` / `mi-divider` 等组件类与 `data-tone=success|warn|danger|brand`——文档天然与 DSH 本体同风格，文档自带 `<style>` 仍可覆盖预设。「模型输出永不执行」的规则不变，只是由浏览器引擎在文档级强制执行。
 
 `miopiik-ml` 使用标签表示组件、属性表示 props、JSON 字面量表示结构化数据、`$state.*` 表示本地状态绑定：
 
@@ -259,7 +261,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 ## 安装、升级、回滚
 
-`0.1.0-rc.12` 为**预发布（prerelease）**版本，聊天内联渲染需配置本地宿主补丁。请在受控的 DSH profile 中安装，并确保可安全重启 DSH Web 服务。
+`0.1.0-rc.13` 为**预发布（prerelease）**版本，聊天内联渲染需配置本地宿主补丁。请在受控的 DSH profile 中安装，并确保可安全重启 DSH Web 服务。
 
 ### 前置条件
 
@@ -279,7 +281,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
    ```sh
    npm pack --pack-destination .dsh/tmp/packs
-   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.1.0-rc.12.tgz
+   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.1.0-rc.13.tgz
    ```
 
    也可使用封装脚本 [tools/install-plugin.mjs](tools/install-plugin.mjs)（默认 dry-run；写入运行中的 `web` profile 需显式加 `--allow-running-profile`）：
@@ -392,7 +394,7 @@ node tools/fork-chat-embeds.mjs --check
 
 ## FAQ
 
-**为什么当前版本是 `0.1.0-rc.12`（prerelease）？**
+**为什么当前版本是 `0.1.0-rc.13`（prerelease）？**
 
 四项 stable blocker 尚未解除：聊天内联渲染依赖非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` 补丁；跨 token Markdown 有损；流式非增量；尚无跨版本兼容矩阵。详见 [docs/IUI-V1-RELEASE-CANDIDATE.md](docs/IUI-V1-RELEASE-CANDIDATE.md)。
 

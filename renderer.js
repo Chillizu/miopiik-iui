@@ -716,6 +716,39 @@
       danger: ['rgba(218,54,51,0.16)', '#d1242f'],
     }
 
+    /** ```html 沙箱文档（F-42）：完整静态 HTML 经无脚本 iframe 渲染——JS 一行不执行（浏览器引擎级强制），
+     *  CSP 强制零网络；脚本块双保险剔除；高度支持 <!-- height: 480 --> 提示；超出 256KB 预算降级为提示文本。
+     *  风格统一：渲染时从宿主采样设计令牌，注入 mi-* 预设样式（文档自有 <style> 在后，永远能覆盖预设）。 */
+    function renderHtmlBlock(raw) {
+      if (typeof raw !== 'string' || raw.trim() === '') return null
+      if (raw.length > 262144) {
+        return h('div', { 'data-miopiik-html-fallback': 'oversize', style: { fontSize: 12, color: C.muted } }, '（HTML 文档超出 256KB 预算，未渲染）')
+      }
+      const hint = /<!--\s*height:\s*([0-9]{2,4})\s*-->/.exec(raw.slice(0, 600))
+      const height = Math.min(1600, Math.max(200, hint === null ? 560 : Number(hint[1])))
+      const stripped = raw.replace(/<script[\s\S]*?<\/script\s*>/giu, '')
+      const titleMatch = /<title>([\s\S]{0,120}?)<\/title>/iu.exec(stripped)
+      const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">'
+      const theme = FRAME_THEME.readHostTheme(typeof document === 'undefined' ? null : document)
+      const injection = csp + FRAME_THEME.framePresetStyle(theme)
+      const doc = /<head[^>]*>/iu.test(stripped)
+        ? stripped.replace(/<head([^>]*)>/iu, (match) => match + injection)
+        : /<html[^>]*>/iu.test(stripped)
+          ? stripped.replace(/<html([^>]*)>/iu, (match) => match + '<head>' + injection + '</head>')
+          : injection + stripped
+      // srcdoc 是「属性值 → 文档」的二次解析：再转义一次会让 &lt; 变成字面量、
+      // 并把 class="x" 洗成未加引号的 class=&quot;x&quot;（类名带引号 → 所有 class 选择器静默失效）。
+      // 直接交给 srcdoc（setAttribute 不做实体解码），文档里的实体与引号原样生效。
+      return h('iframe', {
+        'data-miopiik-html-doc': '1',
+        sandbox: '',
+        srcdoc: doc,
+        title: titleMatch === null ? '内嵌 HTML 文档（无脚本沙箱）' : String(titleMatch[1]).trim(),
+        loading: 'lazy',
+        style: { width: '100%', height, border: `1px solid ${theme.border}`, borderRadius: theme.rlg, background: 'transparent', display: 'block', minWidth: 0, maxWidth: '100%' },
+      })
+    }
+
     /** 嫁接专用的纯 DOM 工厂：与 renderInlinePrimitive 同视觉，但产出 document 节点（ graft 后插入原生 Markdown 的 DOM）。 */
     function renderInlineDom(kind, payload) {
       if (typeof document === 'undefined' || document === null || typeof document.createElement !== 'function') return null

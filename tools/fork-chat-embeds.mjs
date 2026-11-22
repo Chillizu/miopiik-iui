@@ -142,10 +142,12 @@ const HELPER = `${MARK_BEGIN}
 				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text, streaming, labels, fileMentions: mentions, pathImages })
 			});
 		}
-		function MiopiikBlockSegment({ raw, streaming, labels, mentions, pathImages }) {
+		function MiopiikBlockSegment({ raw, lang, streaming, labels, mentions, pathImages }) {
 			const registry = miopiikRegistry();
 			try {
-				const node = registry.renderBlock(raw);
+				const node = lang === "html" && typeof registry.renderHtmlBlock === "function"
+					? registry.renderHtmlBlock(raw)
+					: registry.renderBlock(raw);
 				return node ?? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: raw, streaming, labels, fileMentions: mentions, pathImages });
 			} catch (error) {
 				// 局部降级：块渲染失败只影响这一段，交回纯文本
@@ -208,7 +210,7 @@ const PATCHED_TEXT_CASE = `\t\t\t\t\tcase "text": {
 							segmentNodes.push((0, react_jsx_runtime.jsx)("div", {
 								"data-miopiik-block-wrap": "1",
 								style: { width: "100%", flexBasis: "100%", minWidth: 0 },
-								children: (0, react_jsx_runtime.jsx)(MiopiikBlockSegment, { raw: part.raw, streaming, labels, mentions, pathImages })
+								children: (0, react_jsx_runtime.jsx)(MiopiikBlockSegment, { raw: part.raw, lang: part.lang, streaming, labels, mentions, pathImages })
 							}, i + ":" + partIndex + ":block"));
 						});
 						rendered.push((0, react_jsx_runtime.jsx)("div", {

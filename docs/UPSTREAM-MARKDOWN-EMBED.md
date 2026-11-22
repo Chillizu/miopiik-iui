@@ -1,6 +1,6 @@
 # 上游提案：Markdown 受信嵌入扩展点（草案 v1）
 
-> 状态：2026-11-13 已拆分为独立插件包 `miopiik-iui`（`0.1.0-rc.12` prerelease），本地 Web profile 已通过真实回放验收；聊天内联渲染当前仍使用版本耦合的实验性 `ui-chat` fork（挂载后浏览器开关默认开启，可在插件设置页关闭），上游 PR 尚未提交。本文记录面向 DSH 上游的接口提案与当前本地 fork 的实现细节；日常安装步骤以 [`README.md`](../README.md) 为准。
+> 状态：2026-11-13 已拆分为独立插件包 `miopiik-iui`（`0.1.0-rc.13` prerelease），本地 Web profile 已通过真实回放验收；聊天内联渲染当前仍使用版本耦合的实验性 `ui-chat` fork（挂载后浏览器开关默认开启，可在插件设置页关闭），上游 PR 尚未提交。本文记录面向 DSH 上游的接口提案与当前本地 fork 的实现细节；日常安装步骤以 [`README.md`](../README.md) 为准。
 > 目标：允许插件将**受信任的声明式嵌入组件**挂载进 DSH 原生 Markdown 渲染流，同时保持 `assistant-step` 与 `ReasoningRow` 的原生所有权。
 > 非目标：不改变标准 Markdown 语法语义、不执行模型输出的 HTML/JS/CSS、不改动会话日志格式。
 

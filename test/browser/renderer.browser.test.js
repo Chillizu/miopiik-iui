@@ -111,6 +111,48 @@ function fixture() {
     document.getElementById('root').appendChild(live);
     const streamRoot=document.querySelector('[data-iui-streaming="1"]');
     document.body.dataset.streamingOk = (streamRoot !== null && String(streamRoot.className) === '' && streamRoot.getAttribute('data-iui-output') === 'ok') ? 'ok' : 'failed';
+    // F-42：html 围栏沙箱文档——无脚本 iframe + CSP 注入 + 脚本剔除 + 超预算降级
+    const htmlDoc = '<!doctype html><html><head><title>沙箱演示</title><script>alert(1)</'+'script><style>.chip{border:1px solid red}</style></head><body><span class="chip">A</span><code>&lt;diagram&gt;</code></body></html>';
+    const htmlHost = document.createElement('div');
+    htmlHost.appendChild(embeds.renderHtmlBlock(htmlDoc));
+    document.getElementById('root').appendChild(htmlHost);
+    const frame = document.querySelector('iframe[data-miopiik-html-doc="1"]');
+    const srcdoc = frame === null ? '' : String(frame.getAttribute('srcdoc') ?? '');
+    // srcdoc 必须是「文档原文」而不是再转义一遍：class 引号与 &lt; 实体都要原样交给文档解析器
+    const srcdocOk = srcdoc.indexOf('class="chip"') >= 0
+      && srcdoc.indexOf('&lt;diagram&gt;') >= 0
+      && srcdoc.indexOf('&quot;') === -1
+      && srcdoc.indexOf('&amp;lt;') === -1;
+    // 宿主主题预设：令牌 + mi-* 组件词汇内联进文档；文档自有 <style> 在其后（可覆盖）
+    const presetOk = srcdoc.indexOf('data-miopiik-frame-preset="1"') >= 0
+      && srcdoc.indexOf('--mi-accent:') >= 0
+      && srcdoc.indexOf('.mi-card{') >= 0
+      && srcdoc.indexOf('[data-tone=success]') >= 0
+      && srcdoc.indexOf('<style data-miopiik-frame-preset="1">') < srcdoc.indexOf('<style>.chip{')
+    const frameStyle = String(frame === null ? '' : (frame.getAttribute('style') ?? ''));
+    const noResizeOk = frameStyle.indexOf('resize') === -1;
+    // 真宿主令牌采样：把 dsw-* 变量挂到 documentElement，渲染时必须解析成绝对色值注入文档
+    document.documentElement.style.setProperty('--dsw-alias-bg-base', 'rgb(11, 22, 33)');
+    document.documentElement.style.setProperty('--dsw-alias-brand-primary', 'rgb(4, 5, 6)');
+    const themed = embeds.renderHtmlBlock('<html><head></head><body><p>x</p></body></html>');
+    const themedSrc = String((themed === null ? null : themed.getAttribute('srcdoc')) ?? '');
+    const hostThemeOk = themedSrc.indexOf('--mi-bg:rgb(11, 22, 33)') >= 0
+      && themedSrc.indexOf('--mi-accent:rgb(4, 5, 6)') >= 0
+      && themedSrc.indexOf('--mi-bg:#0d1117') === -1;
+    document.documentElement.style.removeProperty('--dsw-alias-bg-base');
+    document.documentElement.style.removeProperty('--dsw-alias-brand-primary');
+    const frameOk = frame !== null
+      && frame.getAttribute('sandbox') === ''
+      && srcdoc.indexOf('Content-Security-Policy') >= 0
+      && srcdoc.indexOf('<script') === -1
+      && frame.getAttribute('title') === '沙箱演示'
+      && srcdocOk
+      && presetOk
+      && noResizeOk
+      && hostThemeOk;
+    const big = embeds.renderHtmlBlock('<html>' + 'x'.repeat(262200) + '</html>');
+    const oversizeOk = big !== null && typeof big.getAttribute === 'function' && big.getAttribute('data-miopiik-html-fallback') === 'oversize';
+    document.body.dataset.htmlOk = (frameOk && oversizeOk) ? 'ok' : 'failed';
     document.body.dataset.integration = slots.length===1 && page.meta.key==='miopiik-iui' ? 'ok' : 'failed';
     document.body.dataset.errors=failures.join('|');
   `
@@ -167,4 +209,5 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   // L-11 基础：DOM 级嫁接与流式部分渲染
   assert.match(html,/data-graft-ok="ok"/u,'行内嫁接应保留加粗并把 token 原位替换（幂等）')
   assert.match(html,/data-streaming-ok="ok"/u,'流式部分渲染应无入场动画并带流式标记')
+  assert.match(html,/data-html-ok="ok"/u,'```html 应渲染为无脚本沙箱 iframe：sandbox 空、CSP 注入、脚本剔除、超预算降级')
 })
