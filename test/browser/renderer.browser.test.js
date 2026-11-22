@@ -95,6 +95,22 @@ function fixture() {
     demo.appendChild(embeds.renderBlock(${JSON.stringify(DEMO_CONTROLS_ML)}));
     demo.appendChild(embeds.renderBlock(${JSON.stringify(DEMO_DIAGRAM_ML)}));
     document.getElementById('root').appendChild(demo);
+    // L-11 基础：DOM 级行内嫁接——原生先渲染（加粗跨 token 保留），再原位替换受信 token
+    const graftHost=document.createElement('div');
+    graftHost.innerHTML='<p>状态 <strong>是 {{badge:success:完成}} 与 {{icon:check}} 收尾</strong>，后面的普通文本 {{code:npm test}} 也应嫁接。</p>';
+    const grafted=embeds.graftInline(graftHost);
+    const strongEl=graftHost.querySelector('strong');
+    const badgeInStrong=strongEl !== null && strongEl.querySelector('[data-miopiik-graft="badge"]') !== null;
+    const codeGrafted=graftHost.querySelectorAll('[data-miopiik-graft="code"]').length === 1;
+    const idempotent=embeds.graftInline(graftHost) === 0;
+    document.body.dataset.graftOk = (grafted === 3 && badgeInStrong && codeGrafted && idempotent) ? 'ok' : 'failed';
+    // L-11 基础：流式部分渲染——未闭合围栏可渲染、不带入场动画、带流式标记
+    const live=document.createElement('div');
+    const streamNode=embeds.renderBlockStreaming('<ui title="流式" fallback="F"><row><metric label="A" value="1"/>');
+    live.appendChild(streamNode);
+    document.getElementById('root').appendChild(live);
+    const streamRoot=document.querySelector('[data-iui-streaming="1"]');
+    document.body.dataset.streamingOk = (streamRoot !== null && String(streamRoot.className) === '' && streamRoot.getAttribute('data-iui-output') === 'ok') ? 'ok' : 'failed';
     document.body.dataset.integration = slots.length===1 && page.meta.key==='miopiik-iui' ? 'ok' : 'failed';
     document.body.dataset.errors=failures.join('|');
   `
@@ -148,4 +164,7 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/strokeDasharray="4 3"/u,'虚线语义应落在 SVG path 上')
   assert.match(html,/注释行：虚线表示异步路径/u,'纯文本行应按注释保留')
   assert.match(html,/data-iui-diagram-edge-label="1"/u,'连线标签应为 HTML 覆盖层（SVG 拉伸会压扁文字）')
+  // L-11 基础：DOM 级嫁接与流式部分渲染
+  assert.match(html,/data-graft-ok="ok"/u,'行内嫁接应保留加粗并把 token 原位替换（幂等）')
+  assert.match(html,/data-streaming-ok="ok"/u,'流式部分渲染应无入场动画并带流式标记')
 })

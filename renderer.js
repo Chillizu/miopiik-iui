@@ -251,7 +251,7 @@
       )
     }
 
-    function IuiSheet({ sample, format, degraded }) {
+    function IuiSheet({ sample, format, degraded, streaming }) {
       const checked = IUI_AST.validateAst(sample)
       // 依赖必须是**内容**而不是对象引用：正文每次渲染都会产生新对象，用引用会导致状态被重置。
       const sampleKey = React.useMemo(() => {
@@ -670,7 +670,8 @@
       }
       return h(
         'div',
-        { className: 'miopiik-enter', 'data-iui-output': 'ok', 'data-iui-format': format ?? 'json', 'data-iui-degraded': String(degradedCount), style: { display: 'flex', flexDirection: 'column', gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 } },
+        // 流式分片期间不挂入场动画：逐分片重挂载会让淡入闪成频闪
+        { className: streaming === true ? undefined : 'miopiik-enter', 'data-iui-output': 'ok', 'data-iui-format': format ?? 'json', 'data-iui-degraded': String(degradedCount), 'data-iui-streaming': streaming === true ? '1' : undefined, style: { display: 'flex', flexDirection: 'column', gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 } },
         ast.title ? h('div', { style: { fontSize: 13, fontWeight: 600 } }, ast.title) : null,
         node(ast.root, 'root'),
       )
@@ -713,6 +714,48 @@
       success: ['rgba(46,160,67,0.16)', '#2ea043'],
       warning: ['rgba(210,153,34,0.18)', '#b08800'],
       danger: ['rgba(218,54,51,0.16)', '#d1242f'],
+    }
+
+    /** 嫁接专用的纯 DOM 工厂：与 renderInlinePrimitive 同视觉，但产出 document 节点（ graft 后插入原生 Markdown 的 DOM）。 */
+    function renderInlineDom(kind, payload) {
+      if (typeof document === 'undefined' || document === null || typeof document.createElement !== 'function') return null
+      if (kind === 'icon') {
+        const name = String(payload ?? '').trim()
+        const span = document.createElement('span')
+        span.setAttribute('data-iui-icon', name)
+        span.setAttribute('role', 'img')
+        span.setAttribute('aria-label', name)
+        span.style.margin = '0 2px'
+        span.textContent = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }[name] ?? '•'
+        return span
+      }
+      if (kind === 'code') {
+        const code = document.createElement('code')
+        code.style.fontFamily = 'ui-monospace, monospace'
+        code.style.fontSize = '12px'
+        code.style.background = 'rgba(127,127,127,0.14)'
+        code.style.borderRadius = '4px'
+        code.style.padding = '0 4px'
+        code.textContent = String(payload ?? '')
+        return code
+      }
+      // badge: tone:文本；tone 省略时按 neutral（与 readInline 同语义）
+      const raw = String(payload ?? '').trim()
+      const match = /^(neutral|success|warning|danger):([\s\S]+)$/u.exec(raw)
+      const tone = match === null ? 'neutral' : match[1]
+      const label = match === null ? raw : match[2].trim()
+      const colors = TONE_COLORS[tone] ?? TONE_COLORS.neutral
+      const badge = document.createElement('span')
+      badge.setAttribute('data-iui-badge', tone)
+      badge.style.display = 'inline-block'
+      badge.style.padding = '0 6px'
+      badge.style.borderRadius = '999px'
+      badge.style.fontSize = '11px'
+      badge.style.lineHeight = '18px'
+      badge.style.background = colors[0]
+      badge.style.color = colors[1]
+      badge.textContent = label
+      return badge
     }
 
     function renderInlinePrimitive(node) {

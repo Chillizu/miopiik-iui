@@ -2,7 +2,18 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.11` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+> **当前版本 `0.1.0-rc.12` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+
+## miopiik-iui 0.1.0-rc.12 — prerelease
+
+**状态**：prerelease，四项 stable blocker 未变；本版为 L-11 流式增量 + 跨 token 完整性（fork 手术 + 仓库基础同船发布）。
+
+- **跨 token 完整性（根修）**：行内 token 从「预切分」改为「**原生先渲染，DOM 级嫁接**」——加粗/斜体/选中复制/屏幕阅读顺序跨 token 保留，受信 token 在原生渲染完成后原位替换（幂等，`code/pre` 内不识别）。React 安全护栏：嫁接仅在该消息非流式终态执行一次，流式期间不做 DOM 突变。
+- **流式增量渲染**：新增 `splitStreamingFence`（识别尾部未闭合 iui 围栏）与 `renderBlockStreaming`（部分 ML 可渲染：未闭合子树按降级语义保留已写文本；流式期间不挂入场动画防频闪）。宿主补丁在每个流式分片把 `pre` 段交原生、`live` 段实时渲染——围栏闭合即无缝换成正式块。
+- **宿主补丁重生成**：`MiopiikGraftText`（原生 + 嫁接宿主组件）、`MiopiikBlockSegment`、`miopiikStreamSplit` 三件新钩子；块级切分改 `segmentsBlocks`（行内 token 不再预切）。旧 `MiopiikEmbedSegment` 预切分路径退役。
+- **验证**：`splitTrustedBlocks`/`splitStreamingFence` 单测 + 真实 Chromium DOM 断言（加粗跨 token 嫁接、幂等、流式无动画标记），fork 生成回归含新钩子钉子，92 项全绿；fork 已按上游 0.2.2-rc.1 重新生成（node --check 过）。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.12.tgz` 安装并重启 DSH；本版**必须与重新生成的宿主补丁同船**（profile 的 ui-chat 软链指向仓库 fork 目录，重启自动生效）。
+- **实机验收点**：① 流式输出 iui 围栏时块随分片渐次成形，闭合后定稿；② `**加粗 {{badge:success:完成}} 继续加粗**` 一行里 badge 在加粗文本中间原位出现，加粗跨 token 不断裂。
 
 ## miopiik-iui 0.1.0-rc.11 — prerelease
 

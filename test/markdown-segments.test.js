@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { hasTrustedMarkup, splitTrustedMarkdown } from '../shared/markdown-segments.js'
+import { hasTrustedMarkup, splitStreamingFence, splitTrustedBlocks, splitTrustedMarkdown } from '../shared/markdown-segments.js'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 // fork 是生成物（.gitignore），干净 clone / CI 里不存在；存在时才校验补丁对齐。
@@ -60,8 +60,11 @@ test('fork 补丁与当前上游对齐，安装后默认开启，明确关闭时
   const forked = readFileSync(forkClient, 'utf8')
   // 挂钩必须存在，且显式关闭时恢复原生 Markdown；try/catch 确保局部降级。
   assert.match(forked, /__miopiikMarkdownEmbeds/u)
-  assert.match(forked, /miopiik\.markdownEmbeds"\) === "0"\) return null/u)
+  assert.match(forked, /miopiik\.markdownEmbeds"\) === "0"\) return false/u)
   assert.match(forked, /data-miopiik-embed-fallback/u)
+  // L-11：行内 token 改为原生先渲染后 DOM 嫁接；流式围栏有专门路由
+  assert.match(forked, /MiopiikGraftText/u)
+  assert.match(forked, /miopiikStreamSplit/u)
   // 原生 ReasoningRow 仍在（没有被我们替换）
   assert.match(forked, /function ReasoningRow/u)
   assert.match(forked, /case "reasoning":/u)
@@ -94,4 +97,46 @@ test('容错仍受安全边界：裸 <ui> 解析失败时渲染层回退为文�
   assert.equal(parts[0].kind, 'block')
   // 内容原样交给受信解析器；不会有任何 HTML/脚本执行路径
   assert.match(parts[0].raw, /script/u)
+})
+
+test('流式围栏切分：识别尾部未闭合的 iui 围栏，已闭合的不算', () => {
+  // 没有围栏：整段是 pre
+  assert.deepEqual(splitStreamingFence('普通回复文字'), { pre: '普通回复文字', live: '', hasOpen: false })
+  // 已闭合：不流式
+  const closed = '前言\n```iui\n<ui fallback="f"><metric label="A" value="1"/></ui>\n```\n'
+  assert.equal(splitStreamingFence(closed).hasOpen, false)
+  // 流式中：pre 是围栏之前的文本，live 是围栏内已到达的部分
+  const open = '前言\n```iui\n<ui title="流式" fallback="f"><metric label="A" value'
+  const split = splitStreamingFence(open)
+  assert.equal(split.hasOpen, true)
+  assert.equal(split.pre, '前言\n')
+  assert.match(split.live, /^<ui title="流式"/u)
+  // 多个围栏时只认最后一个
+  const two = '```iui\n<ui>1</ui>\n```\n中段\n```iui\n<ui>2</u'
+  const split2 = splitStreamingFence(two)
+  assert.equal(split2.hasOpen, true)
+  assert.match(split2.pre, /中段\n$/u)
+  assert.match(split2.live, /^<ui>2<\/u$/u)
+})
+
+test('流式围栏切分：闭栏 ``` 之后视为已完成（即使后面还有文字）', () => {
+  const done = '```iui\n<ui>ok</ui>\n```\n收尾文字'
+  assert.equal(splitStreamingFence(done).hasOpen, false)
+})
+
+test('块级专用切分：行内 token 保持字面量留在文本段（交给 DOM 嫁接），围栏照常成块', () => {
+  const md = '状态 {{badge:success:完成}}。\n```iui\n<ui fallback="f"><metric label="A" value="1"/></ui>\n```\n收尾'
+  const parts = splitTrustedBlocks(md)
+  assert.deepEqual(parts.map((part) => part.kind), ['text', 'block', 'text'])
+  assert.match(parts[0].text, /\{\{badge:success:完成\}\}/u, '行内 token 不再被预切分')
+  assert.equal(parts[1].kind, 'block')
+  assert.match(parts[2].text.trim(), /^收尾$/u)
+})
+
+test('块级专用切分：没有块级标记时整段是一个文本段；裸 <ui> 与代码围栏保护照旧', () => {
+  assert.deepEqual(splitTrustedBlocks('纯文本 {{icon:check}} 一句'), [{ kind: 'text', text: '纯文本 {{icon:check}} 一句' }])
+  const bare = splitTrustedBlocks('裸块示例：\n<ui fallback="f"><text>x</text></ui>\n之后')
+  assert.equal(bare.some((part) => part.kind === 'block' && part.lang === 'ml-bare'), true)
+  const guarded = splitTrustedBlocks('```js\nconst s = "<ui title=\\"a\\"></ui>"\n```')
+  assert.equal(guarded.some((part) => part.kind === 'block'), false, '代码围栏里的 <ui> 不识别')
 })

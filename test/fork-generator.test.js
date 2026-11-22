@@ -73,7 +73,11 @@ test('生成器 --check 只读：不删除 fork、不删除依赖链接', { skip
   const client = readFileSync(join(tmp, 'lib', 'client.js'), 'utf8')
   assert.match(client, /__miopiikMarkdownEmbeds/u)
   // rc.4 起安装独立 IUI 后默认开启，显式关闭（'0'）才交回原生 Markdown
-  assert.match(client, /miopiik\.markdownEmbeds"\) === "0"\) return null/u)
+  assert.match(client, /miopiik\.markdownEmbeds"\) === "0"\) return false/u)
+  // L-11：行内 token 走「原生先渲染后 DOM 嫁接」，块级才走预切分；流式围栏有专门路由
+  assert.match(client, /MiopiikGraftText/u)
+  assert.match(client, /graftInline/u)
+  assert.match(client, /miopiikStreamSplit/u)
   // 补丁产物必须同时写出，供上游评审
   assert.match(readFileSync(patch, 'utf8'), /miopiik:markdown-embeds/u)
 })

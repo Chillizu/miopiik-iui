@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const IUI_PLUGIN_VERSION = "0.1.0-rc.11"
+    const IUI_PLUGIN_VERSION = "0.1.0-rc.12"
     const C = {
       text: 'var(--dsw-alias-label-primary, #ddd)',
       muted: 'var(--dsw-alias-label-secondary, #999)',
@@ -971,7 +971,117 @@ window.__ModuleLoader__.load({
         INLINE_TOKEN.lastIndex = 0
         return INLINE_TOKEN.test(source)
       }
-      return { INLINE_TOKEN, BLOCK_FENCE, splitTrustedMarkdown, hasTrustedMarkup }
+
+      /** 块级专用切分：只按闭合围栏/行首裸 <ui> 分段，行内 token 保持字面量留在文本段里，
+       *  交给 fork 层的「先原生渲染后 DOM 嫁接」（跨 token 完整性根修）。
+       *  其他语言的代码围栏内的内容一律原样保留，不识别。 */
+      function splitTrustedBlocks(text) {
+        const source = String(text ?? '')
+        const parts = []
+        const pushText = (value) => {
+          if (value !== '') parts.push({ kind: 'text', text: value })
+        }
+        const pushBareBlocks = (plain) => {
+          BARE_UI.lastIndex = 0
+          let bare = BARE_UI.exec(plain)
+          let innerCursor = 0
+          while (bare !== null) {
+            pushText(plain.slice(innerCursor, bare.index))
+            parts.push({ kind: 'block', raw: bare[1], lang: 'ml-bare' })
+            innerCursor = bare.index + bare[0].length
+            bare = BARE_UI.exec(plain)
+          }
+          pushText(plain.slice(innerCursor))
+        }
+        const handlePlain = (plain) => {
+          CODE_FENCE.lastIndex = 0
+          let fence = CODE_FENCE.exec(plain)
+          let innerCursor = 0
+          while (fence !== null) {
+            pushBareBlocks(plain.slice(innerCursor, fence.index))
+            pushText(fence[0])
+            innerCursor = fence.index + fence[0].length
+            fence = CODE_FENCE.exec(plain)
+          }
+          pushBareBlocks(plain.slice(innerCursor))
+        }
+        let cursor = 0
+        BLOCK_FENCE.lastIndex = 0
+        let fence = BLOCK_FENCE.exec(source)
+        while (fence !== null) {
+          handlePlain(source.slice(cursor, fence.index))
+          parts.push({ kind: 'block', raw: fence[2], lang: fence[1] })
+          cursor = fence.index + fence[0].length
+          fence = BLOCK_FENCE.exec(source)
+        }
+        handlePlain(source.slice(cursor))
+        return parts.length === 0 ? [{ kind: 'text', text: source }] : parts
+      }
+
+      /**
+       * 流式增量：识别文本尾部未闭合的 iui 围栏。
+       * fork 层在每个流式分片后调用：pre 交给原生 Markdown，live 交给 renderBlockStreaming。
+       * @returns {{pre: string, live: string, hasOpen: boolean}}
+       */
+      function splitStreamingFence(text) {
+        const source = String(text ?? '')
+        const starts = [...source.matchAll(/```iui[ \t]*(?:\r?\n)/gu)]
+        if (starts.length === 0) return { pre: source, live: '', hasOpen: false }
+        const last = starts[starts.length - 1]
+        const contentStart = last.index + last[0].length
+        const tail = source.slice(contentStart)
+        const closeIdx = tail.indexOf('```')
+        if (closeIdx >= 0) return { pre: source, live: '', hasOpen: false }
+        return { pre: source.slice(0, last.index), live: tail, hasOpen: true }
+      }
+
+      /**
+       * DOM 级行内嫁接（跨 token 完整性根修）：
+       * 让原生 Markdown 先渲染完整文本——加粗/斜体/选中复制/阅读顺序跨 token 保留，
+       * 再把叶子文本节点里的受信 token 原位替换为组件 DOM。
+       * 幂等：嫁接产物带 data-miopiik-graft 标记，重复调用只处理新增文本；
+       * code/pre/script/style 内的 token 保持字面（不识别）。
+       * @param {Element} root 原生 Markdown 渲染结果的根
+       * @param {(kind: 'badge'|'icon'|'code', payload: string) => Element|null} build 组件 DOM 工厂
+       * @returns {number} 本次嫁接的 token 数
+       */
+      function graftTrustedInline(root, build) {
+        if (root === null || root === undefined || typeof root.querySelectorAll !== 'function' || typeof build !== 'function') return 0
+        if (typeof document === 'undefined' || document === null || typeof document.createDocumentFragment !== 'function') return 0
+        let count = 0
+        const SKIP = new Set(['CODE', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA'])
+        const graftText = (textNode) => {
+          const text = String(textNode.nodeValue ?? '')
+          INLINE_TOKEN.lastIndex = 0
+          if (INLINE_TOKEN.exec(text) === null) return
+          INLINE_TOKEN.lastIndex = 0
+          const frag = document.createDocumentFragment()
+          let cursor = 0
+          let match = INLINE_TOKEN.exec(text)
+          while (match !== null) {
+            if (match.index > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, match.index)))
+            const node = build(match[1], match[2])
+            if (node !== null && node !== undefined) {
+              if (typeof node.setAttribute === 'function') node.setAttribute('data-miopiik-graft', match[1])
+              frag.appendChild(node)
+            }
+            count += 1
+            cursor = INLINE_TOKEN.lastIndex
+            match = INLINE_TOKEN.exec(text)
+          }
+          if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)))
+          if (textNode.parentNode !== null) textNode.parentNode.replaceChild(frag, textNode)
+        }
+        const walk = (element) => {
+          for (const child of Array.from(element.childNodes)) {
+            if (child.nodeType === 3) graftText(child)
+            else if (child.nodeType === 1 && !SKIP.has(String(child.tagName ?? '').toUpperCase()) && child.getAttribute?.('data-miopiik-graft') === null) walk(child)
+          }
+        }
+        walk(root)
+        return count
+      }
+      return { INLINE_TOKEN, BLOCK_FENCE, splitTrustedMarkdown, hasTrustedMarkup, splitTrustedBlocks, splitStreamingFence, graftTrustedInline }
     })()
     const DIAGRAM_GEO = (() => {
       /**
@@ -1461,7 +1571,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function IuiSheet({ sample, format, degraded }) {
+    function IuiSheet({ sample, format, degraded, streaming }) {
       const checked = IUI_AST.validateAst(sample)
       // 依赖必须是**内容**而不是对象引用：正文每次渲染都会产生新对象，用引用会导致状态被重置。
       const sampleKey = React.useMemo(() => {
@@ -1880,7 +1990,8 @@ window.__ModuleLoader__.load({
       }
       return h(
         'div',
-        { className: 'miopiik-enter', 'data-iui-output': 'ok', 'data-iui-format': format ?? 'json', 'data-iui-degraded': String(degradedCount), style: { display: 'flex', flexDirection: 'column', gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 } },
+        // 流式分片期间不挂入场动画：逐分片重挂载会让淡入闪成频闪
+        { className: streaming === true ? undefined : 'miopiik-enter', 'data-iui-output': 'ok', 'data-iui-format': format ?? 'json', 'data-iui-degraded': String(degradedCount), 'data-iui-streaming': streaming === true ? '1' : undefined, style: { display: 'flex', flexDirection: 'column', gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 } },
         ast.title ? h('div', { style: { fontSize: 13, fontWeight: 600 } }, ast.title) : null,
         node(ast.root, 'root'),
       )
@@ -1923,6 +2034,48 @@ window.__ModuleLoader__.load({
       success: ['rgba(46,160,67,0.16)', '#2ea043'],
       warning: ['rgba(210,153,34,0.18)', '#b08800'],
       danger: ['rgba(218,54,51,0.16)', '#d1242f'],
+    }
+
+    /** 嫁接专用的纯 DOM 工厂：与 renderInlinePrimitive 同视觉，但产出 document 节点（ graft 后插入原生 Markdown 的 DOM）。 */
+    function renderInlineDom(kind, payload) {
+      if (typeof document === 'undefined' || document === null || typeof document.createElement !== 'function') return null
+      if (kind === 'icon') {
+        const name = String(payload ?? '').trim()
+        const span = document.createElement('span')
+        span.setAttribute('data-iui-icon', name)
+        span.setAttribute('role', 'img')
+        span.setAttribute('aria-label', name)
+        span.style.margin = '0 2px'
+        span.textContent = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }[name] ?? '•'
+        return span
+      }
+      if (kind === 'code') {
+        const code = document.createElement('code')
+        code.style.fontFamily = 'ui-monospace, monospace'
+        code.style.fontSize = '12px'
+        code.style.background = 'rgba(127,127,127,0.14)'
+        code.style.borderRadius = '4px'
+        code.style.padding = '0 4px'
+        code.textContent = String(payload ?? '')
+        return code
+      }
+      // badge: tone:文本；tone 省略时按 neutral（与 readInline 同语义）
+      const raw = String(payload ?? '').trim()
+      const match = /^(neutral|success|warning|danger):([\s\S]+)$/u.exec(raw)
+      const tone = match === null ? 'neutral' : match[1]
+      const label = match === null ? raw : match[2].trim()
+      const colors = TONE_COLORS[tone] ?? TONE_COLORS.neutral
+      const badge = document.createElement('span')
+      badge.setAttribute('data-iui-badge', tone)
+      badge.style.display = 'inline-block'
+      badge.style.padding = '0 6px'
+      badge.style.borderRadius = '999px'
+      badge.style.fontSize = '11px'
+      badge.style.lineHeight = '18px'
+      badge.style.background = colors[0]
+      badge.style.color = colors[1]
+      badge.textContent = label
+      return badge
     }
 
     function renderInlinePrimitive(node) {
@@ -2205,11 +2358,18 @@ function registerIuiSettings(ctx) {
       apply(ctx) {
         const registry = {
           segments: (text) => MARKDOWN_SEGMENTS.splitTrustedMarkdown(text),
+          segmentsBlocks: (text) => MARKDOWN_SEGMENTS.splitTrustedBlocks(text),
           renderInline: (node) => renderInlinePrimitive(node),
           renderBlock: (raw) => {
             const parsed = readIuiFence(raw)
             return parsed.ok ? h(IuiSheet, { sample: parsed.doc, format: parsed.format, degraded: parsed.degraded }) : null
           },
+          renderBlockStreaming: (raw) => {
+            const parsed = readIuiFence(raw)
+            return parsed.ok ? h(IuiSheet, { sample: parsed.doc, format: parsed.format, degraded: parsed.degraded, streaming: true }) : null
+          },
+          graftInline: (root) => MARKDOWN_SEGMENTS.graftTrustedInline(root, renderInlineDom),
+          splitStreamingFence: (text) => MARKDOWN_SEGMENTS.splitStreamingFence(text),
         }
         // 插件自有动效定妆：固定 keyframes / hover 反馈（模型仍不可写 CSS）。
         let chrome = null
