@@ -1,7 +1,7 @@
 # MiOpIIk IUI v1 — 稳定候选基线与交付门禁
 
 > 初稿 2026-11-12，更新 2026-11-15。本文覆盖独立插件包 **MiOpIIk IUI**（`miopiik-iui` `0.1.0-rc.13` prerelease）。
-> 当前状态：**预发布候选版（RC / prerelease）**；升为 stable 前仍有四项 blocker 待解除（详见第 3 节与 [RELEASE-NOTES.md](RELEASE-NOTES.md)）。
+> 当前状态：**预发布候选版（RC / prerelease）**；升为 stable 前仍有两项 blocker 待解除（非官方宿主补丁、无多版本矩阵；跨 token Markdown 有损与流式非增量已于 `0.1.0-rc.12` 解除，详见第 3 节与 [RELEASE-NOTES.md](RELEASE-NOTES.md)）。
 > 实际质量状态以当前 Git HEAD 与每次执行测试的结果为准。
 
 ## 1. 落定的技术边界
@@ -52,12 +52,12 @@ node tools/e2e-dual-settings.mjs
 | 项目 | 现状 | 关闭条件 |
 |---|---|---|
 | 公共上游集成（脱离非官方补丁） | 聊天内联渲染依赖版本耦合的本地 `@deepseek-ai/dsh-client-ui-chat` patch（针对 DSH `0.2.2-rc.1`） | DSH 上游提供官方 Markdown embed / renderer 扩展点，或 `dsh-client-ui-primitives` 作为独立可解析包发布 |
-| 跨 token Markdown 无损排版 | 切分式嵌入将文本拆为多个 `MarkdownText` 片段，跨 token 的加粗/斜体、选中复制与屏幕阅读器朗读顺序有损 | 接入上游 Markdown AST 级（remark/renderer）扩展点，并通过复制与无障碍测试 |
-| 流式增量渲染 | 未闭合的 `iui` 围栏在流式期间按纯文本显示，闭合后一次性物化 | 支持流式中间态安全增量渲染与中断恢复 E2E 验证 |
+| 跨 token Markdown 无损排版 | **已解除（rc.12）**：改为 DOM 级嫁接——原生 Markdown 先渲染整段，再把行内 token 原位替换，加粗/斜体、选中复制与朗读顺序跨 token 保留；残余：仅定稿态嫁接、极端长段落未压测 | 残项：流式中间态的复制/无障碍验收、极端长段落性能 |
+| 流式增量渲染 | **已解除（rc.12）**：`iui` 围栏开启后逐段成形、闭合定稿、无入场动画；`html` 沙箱围栏按设计闭合才成块 | 残项：`html` 围栏流式与中断恢复 E2E |
 | 多版本兼容与全量矩阵 | 仅在 DSH `0.2.2-rc.1` 及基础深色/窄屏环境下验证 | 建立跨 DSH 版本兼容测试矩阵、干净 profile 冷启动全链路验证，以及完整的明/暗/高对比度与屏幕阅读器测试矩阵 |
 | 同模型输出格式 A/B 基准 | `index.js` 已注入精简输出约定，但尚未完成同模型、同任务的定量对比 | 在普通问答、数据对比、交互趋势三类任务上完成合法率、降级率与 token 开销基准测试 |
 
-在上述四项核心 blocker（非官方版本耦合补丁、跨 token Markdown 有损、流式非增量、无多版本矩阵）解除前，`miopiik-iui` 保持 `0.1.0-rc.x`（prerelease）。
+在上述两项核心 blocker（非官方版本耦合补丁、无多版本矩阵）解除前，`miopiik-iui` 保持 `0.1.0-rc.x`（prerelease）；跨 token Markdown 有损与流式非增量已于 `0.1.0-rc.12` 解除。
 
 ## 4. 启用与回滚
 

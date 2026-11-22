@@ -6,7 +6,7 @@
 
 ## miopiik-iui 0.1.0-rc.13 — prerelease
 
-**状态**：prerelease，四项 stable blocker 未变；本版为 F-42 沙箱帧通道（用户「直接内嵌 HTML 渲染」理想的可信实现）。
+**状态**：prerelease，剩余两项 stable blocker（非官方宿主补丁、无多版本矩阵）；本版为 F-42 沙箱帧通道（用户「直接内嵌 HTML 渲染」理想的可信实现）。
 
 - **```html 沙箱文档通道**：完整静态 HTML 文档经**无脚本沙箱 iframe** 内嵌——`sandbox` 属性留空（无 allow-scripts/allow-same-origin，浏览器引擎级强制），注入 CSP `default-src 'none'`（零网络，样式仅内联、图片仅 data:），脚本块双保险剔除，≤256KB 预算超限降级为提示文本，高度支持 `<!-- height: 480 -->` 提示（默认 560，尺寸不可拖拽）。**宿主主题预设**：渲染时从宿主 DOM 采样设计令牌（`--dsw-alias-*` / `--dsw-radius-*` / `--dsw-font-*`），经探针解析成绝对色值后注入沙箱文档，并预置 `mi-*` 组件词汇（`mi-card` / `mi-row` / `mi-grid` / `mi-metric` / `mi-badge` / `mi-callout` / `mi-progress` / `mi-divider` + `data-tone`）——文档默认与 DSH 本体同风格，文档自有 `<style>` 排在其后，可完全覆盖。宿主补丁 lang 分支路由；流式期间 html 围栏保持文本、闭合成块。「模型输出永不执行」的执行禁区不变——从校验器挡升级为浏览器挡。
 - **章程更新**：目录新增「沙箱文档」一行；禁令行改写为「完整 HTML 文档仅经 ```html 无脚本沙箱围栏内嵌」。
@@ -17,7 +17,7 @@
 
 ## miopiik-iui 0.1.0-rc.12 — prerelease
 
-**状态**：prerelease，四项 stable blocker 未变；本版为 L-11 流式增量 + 跨 token 完整性（fork 手术 + 仓库基础同船发布）。
+**状态**：prerelease，本版解除两项 stable blocker（跨 token Markdown 有损、流式非增量），剩两项；本版为 L-11 流式增量 + 跨 token 完整性（fork 手术 + 仓库基础同船发布）。
 
 - **跨 token 完整性（根修）**：行内 token 从「预切分」改为「**原生先渲染，DOM 级嫁接**」——加粗/斜体/选中复制/屏幕阅读顺序跨 token 保留，受信 token 在原生渲染完成后原位替换（幂等，`code/pre` 内不识别）。React 安全护栏：嫁接仅在该消息非流式终态执行一次，流式期间不做 DOM 突变。
 - **流式增量渲染**：新增 `splitStreamingFence`（识别尾部未闭合 iui 围栏）与 `renderBlockStreaming`（部分 ML 可渲染：未闭合子树按降级语义保留已写文本；流式期间不挂入场动画防频闪）。宿主补丁在每个流式分片把 `pre` 段交原生、`live` 段实时渲染——围栏闭合即无缝换成正式块。
@@ -119,18 +119,22 @@
   - `tools/icon-check.mjs`：静态校验根 `icon.svg`。
 - **包元数据与文档**：补齐 `repository`、`homepage`、`bugs`、`keywords` 及独立版 [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md)、[MIGRATION.md](MIGRATION.md)、[DEV-TOOLS.md](DEV-TOOLS.md)、[EXTRA-UI.md](EXTRA-UI.md)、[IUI-V1-RELEASE-CANDIDATE.md](IUI-V1-RELEASE-CANDIDATE.md)、[IUI-NATURAL-OUTPUT-AUDIT.md](IUI-NATURAL-OUTPUT-AUDIT.md)、[UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md)。
 
-### 升级为 0.1.0 stable 的四项 blocker
+### 升级为 0.1.0 stable 的两项 blocker
 
-1. **非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` patch**：聊天内联渲染需将 profile 的 `ui-chat` 解析指向由 `tools/fork-chat-embeds.mjs` 基于特定 DSH 版本（`0.2.1-rc.5`）生成的本地 fork；标准插件安装流程本身无法自动挂载该钩子。
-2. **跨 token Markdown 有损**：切分式嵌入会将 Markdown 文本节点切开，跨越 token 边界的加粗/斜体格式会断开，选中复制与屏幕阅读器朗读顺序与单节点原生 Markdown 存在差异（需 DSH 上游提供 Markdown AST 级扩展点，提案见 [UPSTREAM-MARKDOWN-EMBED.md](UPSTREAM-MARKDOWN-EMBED.md)）。
-3. **流式非增量**：未闭合的 `iui` 围栏在流式输出期间按普通文本显示，闭合后一次性渲染。
-4. **无多版本矩阵与冷启动全链路验证**：当前仅针对 DSH `0.2.1-rc.5` 基线验证，尚未建立跨多个 DSH 版本的兼容矩阵与干净 profile 冷启动（安装 → 启动 → 渲染 → 卸载）全链路验证。
+1. **非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` patch**：聊天内联渲染需将 profile 的 `ui-chat` 解析指向由 `tools/fork-chat-embeds.mjs` 基于特定 DSH 版本（现为 `0.2.2-rc.1`）生成的本地 fork；标准插件安装流程本身无法自动挂载该钩子。
+2. **无多版本矩阵与冷启动全链路验证**：当前仅针对 DSH `0.2.2-rc.1` 基线验证，尚未建立跨多个 DSH 版本的兼容矩阵与干净 profile 冷启动（安装 → 启动 → 渲染 → 卸载）全链路验证。
+
+### 已于 0.1.0-rc.12 解除的 blocker（保留记录）
+
+2′. **跨 token Markdown 有损** → DOM 级嫁接：原生 Markdown 先渲染整段，再把行内 token 在叶子文本节点原位替换，加粗/斜体、选中复制与朗读顺序跨 token 保留（残余：仅定稿态嫁接、表格内 token 不嫁接、极端长段落未压测，详见 [SUPPORT-MATRIX.md](SUPPORT-MATRIX.md)）。
+3′. **流式非增量** → 围栏级增量：未闭合的 `iui` 围栏切成"已定稿文本 + 活动块"，活动块随分片逐段成形、闭合定稿且无入场动画（残余：`html` 沙箱围栏按设计不参与流式）。
 
 ### 解除 blocker 的条件清单
 
 - [ ] DSH 上游提供官方 Markdown embed / renderer 扩展点（或将 `dsh-client-ui-primitives` 作为独立可解析包发布）；
 - [ ] 或 IUI 内联渲染改用无需宿主 patch 的官方扩展机制；
-- [ ] 跨 token Markdown 排版、复制与无障碍朗读通过验收；
+- [x] 跨 token Markdown 排版、复制与无障碍朗读通过验收（rc.12 DOM 级嫁接，残项见上）；
+- [x] 流式中间态安全增量渲染通过验收（rc.12 围栏级增量，`html` 围栏例外）；
 - [ ] 建立多版本兼容测试矩阵并完成干净 profile 冷启动全链路验证。
 
 在上述 blocker 解除前，版本保持 `0.1.0-rc.x`（prerelease）。

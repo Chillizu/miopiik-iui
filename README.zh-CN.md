@@ -21,12 +21,12 @@ MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输�
 
 ## 发布状态
 
-**Version 0.1.0-rc.13** 为预发布版本（prerelease）。升为 `0.1.0` stable 前存在以下四项 blocker：
+**Version 0.1.0-rc.13** 为预发布版本（prerelease）。升为 `0.1.0` stable 前存在以下两项 blocker：
 
 1. **非官方、版本耦合的宿主补丁。** 聊天内联渲染需要由 [tools/fork-chat-embeds.mjs](tools/fork-chat-embeds.mjs) 基于特定 DSH 版本（`0.2.2-rc.1`）生成的本地 `@deepseek-ai/dsh-client-ui-chat` fork。DSH 上游尚未提供 Markdown 嵌入 API。未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，插件页预览仍可使用，设置页诊断会显式报告未检测到补丁。
-2. **跨 token Markdown 有损。** 受信片段会将 Markdown 文本节点切开，跨越 token 边界的加粗/斜体格式、选中复制与屏幕阅读器朗读顺序与单节点原生 Markdown 存在差异。
-3. **流式非增量。** 流式输出期间，未闭合的 `iui` 围栏先按纯文本展示，收到闭合围栏后一次性渲染为组件块。
-4. **无多版本兼容矩阵。** 当前仅针对 DSH `0.2.2-rc.1` 基线验证，尚未建立跨多个 DSH 版本的兼容矩阵与干净 profile 冷启动全链路验证。
+2. **无多版本兼容矩阵。** 当前仅针对 DSH `0.2.2-rc.1` 基线验证，尚未建立跨多个 DSH 版本的兼容矩阵与干净 profile 冷启动全链路验证。
+
+原先同列的两项已在 `0.1.0-rc.12` 解除：**跨 token Markdown 有损**改为 DOM 级嫁接（原生 Markdown 先渲染整段，再把行内 token 原位替换——加粗/斜体、选中复制与朗读顺序跨 token 保留），**流式非增量**改为围栏级增量（`iui` 围栏开启后逐段成形、闭合定稿、无入场动画）。残余差异见 [docs/SUPPORT-MATRIX.md](docs/SUPPORT-MATRIX.md)。
 
 v1 候选门禁清单见 [docs/IUI-V1-RELEASE-CANDIDATE.md](docs/IUI-V1-RELEASE-CANDIDATE.md)，各版本 blocker 记录见 [docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md)。
 
@@ -396,7 +396,7 @@ node tools/fork-chat-embeds.mjs --check
 
 **为什么当前版本是 `0.1.0-rc.13`（prerelease）？**
 
-四项 stable blocker 尚未解除：聊天内联渲染依赖非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` 补丁；跨 token Markdown 有损；流式非增量；尚无跨版本兼容矩阵。详见 [docs/IUI-V1-RELEASE-CANDIDATE.md](docs/IUI-V1-RELEASE-CANDIDATE.md)。
+两项 stable blocker 尚未解除：聊天内联渲染依赖非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` 补丁；尚无跨版本兼容矩阵。此前的跨 token Markdown 有损与流式非增量已在 `0.1.0-rc.12` 解除。详见 [docs/IUI-V1-RELEASE-CANDIDATE.md](docs/IUI-V1-RELEASE-CANDIDATE.md)。
 
 **不打 chat 补丁会怎样？**
 

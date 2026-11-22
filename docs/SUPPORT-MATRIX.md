@@ -30,7 +30,11 @@ IUI 的聊天内嵌渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官
 ## 已知限制（含 stable blocker）
 
 1. **非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` patch**：DSH 升级后若 `AssistantMarkdown` 结构变化，需重新运行 `tools/fork-chat-embeds.mjs` 生成 fork。
-2. **跨 token Markdown 有损**：行内标记跨越 Markdown 语法（如 `**加粗**`）时会在标记边界断开，选中复制可能带出额外换行，屏幕阅读器顺序与单节点 Markdown 存在差异。
-3. **流式非增量**：流式输出期间，未闭合的 `iui` 围栏先按纯文本展示，闭合后一次性渲染为组件。
-4. **无多版本矩阵**：当前仅在 DSH `0.2.2-rc.1` 基线上验证，尚未覆盖跨多个 DSH 版本的兼容测试矩阵。
-5. **旧 `ink-view` 只读回放**：旧协议已退役；历史数据零迁移，由 IUI 只读 adapter 回放，无法映射的 spec 保留原始文本（不使用旧 spec 的 `fallback` 字段），且不写回账本。
+2. **无多版本矩阵**：当前仅在 DSH `0.2.2-rc.1` 基线上验证，尚未覆盖跨多个 DSH 版本的兼容测试矩阵。
+3. **旧 `ink-view` 只读回放**：旧协议已退役；历史数据零迁移，由 IUI 只读 adapter 回放，无法映射的 spec 保留原始文本（不使用旧 spec 的 `fallback` 字段），且不写回账本。
+
+### 已在 `0.1.0-rc.12` 解除（保留记录与残余边界）
+
+- **跨 token Markdown 有损** → DOM 级嫁接：原生 Markdown 先把整段渲染完成，再在叶子文本节点里原位替换行内 token（`splitTrustedBlocks` + `graftTrustedInline`）。加粗/斜体、选中复制与朗读顺序跨 token 保留；残余：嫁接只在流式定稿态执行，消息中的表格内 token 不嫁接，极端长段落性能未压测。
+- **流式非增量** → 围栏级增量：未闭合的 `iui` 围栏由 `splitStreamingFence` 切成"已定稿文本 + 活动块"，活动块随分片逐段成形，闭合后定稿且不加入场动画。残余：`html` 沙箱围栏按设计不参与流式（闭合才成块）。
+
