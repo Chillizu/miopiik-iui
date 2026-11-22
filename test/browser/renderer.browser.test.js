@@ -76,7 +76,7 @@ function fixture() {
       }
       return el;
     }
-    const React = {createElement:h, useState(v) {return [typeof v==='function'?v():v, ()=>{}]}, useEffect(){}, useLayoutEffect(){}, useMemo(fn){return fn()}, useCallback(fn){return fn()}, useRef(){return {current:null}}};
+    const React = {createElement:h, useState(v) {return [typeof v==='function'?v():v, ()=>{}]}, useEffect(){}, useLayoutEffect(){}, useMemo(fn){return fn()}, useCallback(fn){return fn}, useRef(){return {current:null}}};
     const primitives = {
       Switch({checked,onChange,label}) {
         return React.createElement('button',{role:'switch','aria-checked':checked,'aria-label':label,onClick:()=>onChange(!checked)});
@@ -141,15 +141,21 @@ function fixture() {
       && themedSrc.indexOf('--mi-bg:#0d1117') === -1;
     document.documentElement.style.removeProperty('--dsw-alias-bg-base');
     document.documentElement.style.removeProperty('--dsw-alias-brand-primary');
-    // rc.14 自动高度：沙箱帧应把自身高度收紧到内容高度（120–1600 夹取）
+    // rc.14/rc.15 自动高度：内容高就用内容高（不残留初始值），内容矮就收回来（不被高提示撑住）
+    const tallHost = document.createElement('div');
+    tallHost.appendChild(embeds.renderHtmlBlock('<!doctype html><html><head><title>tall</title></head><body><div style="height:700px">tall</div></body></html>'));
+    document.getElementById('root').appendChild(tallHost);
+    const shortHost = document.createElement('div');
+    shortHost.appendChild(embeds.renderHtmlBlock('<!-- height: 900 --><!doctype html><html><head><title>short-hint</title></head><body><p>short</p></body></html>'));
+    document.getElementById('root').appendChild(shortHost);
     setTimeout(() => {
-      const live = document.querySelector('iframe[data-miopiik-html-doc="1"]');
-      const inner = live !== null && live.contentDocument !== null && live.contentDocument !== undefined
-        ? Math.max(live.contentDocument.documentElement.scrollHeight || 0, (live.contentDocument.body || {}).scrollHeight || 0)
-        : 0;
-      const applied = live === null ? 0 : parseFloat(live.style.height || '0');
-      const want = Math.min(1600, Math.max(120, inner));
-      document.body.dataset.autosize = (inner > 0 && Math.abs(applied - want) <= 2) ? 'ok' : ('failed:' + applied + '/' + inner);
+      const pick = (title) => [...document.querySelectorAll('iframe[data-miopiik-html-doc="1"]')].find((f) => f.title === title) ?? null;
+      const tall = pick('tall');
+      const short = pick('short-hint');
+      const tallH = tall === null ? 0 : parseFloat(tall.style.height || '0');
+      const shortH = short === null ? 0 : parseFloat(short.style.height || '0');
+      document.body.dataset.autosizeTall = (tallH >= 690 && tallH <= 790) ? 'ok' : 'failed:' + tallH;
+      document.body.dataset.autosizeShort = (shortH > 0 && shortH < 400) ? 'ok' : 'failed:' + shortH;
     }, 700);
     const frameOk = frame !== null
       && frame.getAttribute('sandbox') === 'allow-same-origin'
@@ -221,5 +227,6 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-graft-ok="ok"/u,'行内嫁接应保留加粗并把 token 原位替换（幂等）')
   assert.match(html,/data-streaming-ok="ok"/u,'流式部分渲染应无入场动画并带流式标记')
   assert.match(html,/data-html-ok="ok"/u,'```html 应渲染为无脚本沙箱 iframe：sandbox 空、CSP 注入、脚本剔除、超预算降级')
-  assert.match(html,/data-autosize="ok"/u,'沙箱帧高度应按文档内容自动收紧（rc.14）')
+  assert.match(html,/data-autosize-tall="ok"/u,'沙箱帧应长到内容高度（700px 内容不能被初始高度截断）')
+  assert.match(html,/data-autosize-short="ok"/u,'沙箱帧应收回到内容高度（height 提示 900 不得残留成空白）')
 })

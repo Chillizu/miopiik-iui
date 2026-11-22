@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const IUI_PLUGIN_VERSION = "0.1.0-rc.14"
+    const IUI_PLUGIN_VERSION = "0.1.0-rc.15"
     const C = {
       text: 'var(--dsw-alias-label-primary, #ddd)',
       muted: 'var(--dsw-alias-label-secondary, #999)',
@@ -2235,16 +2235,32 @@ window.__ModuleLoader__.load({
     function IuiHtmlFrame(props) {
       const frameRef = React.useRef(null)
       const [frameHeight, setFrameHeight] = React.useState(props.initial)
-      const measure = React.useCallback(() => {
-        const frame = frameRef.current
+      const measure = React.useCallback((event) => {
+        // onLoad 事件里拿 currentTarget（ref 在某些宿主渲染器里不可用），挂载期用 ref。
+        const frame = (event !== null && event !== undefined && event.currentTarget) || frameRef.current
         if (frame === null || frame === undefined) return
         try {
           const inner = frame.contentDocument
           if (inner === null || inner === undefined) return
           const root = inner.documentElement
           const body = inner.body
-          const next = Math.max(root === null ? 0 : root.scrollHeight, body === null ? 0 : body.scrollHeight)
-          if (next > 0) setFrameHeight(Math.min(HTML_FRAME_MAX, Math.max(HTML_FRAME_MIN, Math.ceil(next))))
+          // 直接把 scrollHeight 当内容高度是错的：内容不足时 html 会被视口撑满，
+          // scrollHeight 就等于当前帧高（实测高提示 900 时永远收不回来）。
+          // 先把帧临时压到 0 让内容自然定型，量完立刻还原——同一帧内完成，不产生可见闪烁。
+          const previous = frame.style.height
+          frame.style.height = '0px'
+          const next = Math.max(
+            root === null ? 0 : root.scrollHeight,
+            body === null ? 0 : body.scrollHeight,
+            body === null ? 0 : body.getBoundingClientRect?.().height ?? 0,
+          )
+          frame.style.height = previous
+          if (next > 0) {
+            const applied = Math.min(HTML_FRAME_MAX, Math.max(HTML_FRAME_MIN, Math.ceil(next)))
+            // 同时写 DOM 与 state：DOM 立即生效（不依赖一次重渲染），state 保证后续重渲染不被初始值覆盖。
+            frame.style.height = applied + 'px'
+            setFrameHeight(applied)
+          }
         } catch {
           // 读不到尺寸（跨源/未就绪）：保持初始高度，不影响文档本身
         }

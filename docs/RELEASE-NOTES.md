@@ -2,7 +2,18 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.14` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+> **当前版本 `0.1.0-rc.15` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+
+## miopiik-iui 0.1.0-rc.15 — prerelease
+
+**状态**：prerelease，剩余两项 stable blocker（非官方宿主补丁、无多版本矩阵）；本版修 rc.14 自动高度的测量缺陷。
+
+- **缺陷**：rc.14 直接把 `documentElement.scrollHeight` 当内容高度。内容不足时 `html` 会被 iframe 视口撑满，`scrollHeight` 等于当前帧高——于是帧永远收不回来（实机表现：`<!-- height: 900 -->` 配三百字内容，帧就是 900 的空白）。
+- **修法**：测量前把帧临时压到 `0px` 让内容自然定型，读完立刻还原（同一帧内完成，不产生可见闪烁）；量完后同时写 DOM 与组件状态——DOM 立即生效，状态保证后续重渲染不被初始值覆盖。
+- **onLoad 取帧方式**：改用 `event.currentTarget`（部分宿主渲染器不注入 `ref`），挂载期仍走 `ref`。
+- **测试**：此前那条断言在与被测逻辑同一套错误测量上自证；现改为断言真实内容高度——700px 内容帧须长到约 732（含预设 body padding），`height: 900` 的短内容帧必须收回到 400 以下。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0-rc.15.tgz` 安装并重启 DSH；宿主补丁经 profile 的 ui-chat 软链随重启生效。
+- **实机验收点**：`html` 围栏文档帧高应贴着内容（长内容变高、短内容变矮），无拖拽角，文档 JS 仍不执行。
 
 ## miopiik-iui 0.1.0-rc.14 — prerelease
 

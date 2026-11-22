@@ -1,7 +1,7 @@
 # MiOpIIk Extra：展示层（历史设计归档）
 
 > **退役说明**：本文记录 2026-11-06 至 2026-11-10 期间设计的七 Widget / `ink-view` 展示协议。该协议及 `ink_view`、`ink_chart` 工具现已全面退役。
-> 当前 `miopiik-iui`（`0.1.0-rc.14` prerelease）的唯一主路径为：Markdown 中的受控 `iui` 围栏（`miopiik-ml` 或 `iui/1` JSON AST）与行内 token → `validateAst` 校验 → 浏览器侧声明式组件渲染。
+> 当前 `miopiik-iui`（`0.1.0-rc.15` prerelease）的唯一主路径为：Markdown 中的受控 `iui` 围栏（`miopiik-ml` 或 `iui/1` JSON AST）与行内 token → `validateAst` 校验 → 浏览器侧声明式组件渲染。
 > 历史会话中的 `ink-view` 数据零迁移，由 `shared/legacy-widgets.js` 只读映射为 `iui/1` AST 回放（无法映射的保留原始文本，不使用旧 spec 的 `fallback` 字段，不写回账本）。本文作为设计演进档案保留。
 
 > 原始创建日期：2026-11-06 ｜ 当时定位：附加展示层（独立于 Mind/Ink/Operator 核心不变式）
