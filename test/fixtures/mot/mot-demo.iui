@@ -1,0 +1,91 @@
+<ui title="M·O·T 任务分流实验台" fallback="M·O·T 任务分流实验台（规则模拟）初始稳态：N=120，H=72，E=48，Q=0，C=120，完成率 100%。">
+  <state name="r" value='{"scenario":"steady","workers":6,"hitRate":60}'/>
+
+  <derive name="d.n" expr="$state.r.scenario == 'steady' ? 120 : ($state.r.scenario == 'burst' ? 300 : 180)"/>
+  <derive name="d.h" expr="round($state.d.n * $state.r.hitRate / 100)"/>
+  <derive name="d.m" expr="$state.d.n - $state.d.h"/>
+  <derive name="d.cap" expr="$state.r.workers * ($state.r.scenario == 'fault' ? 12 : 20)"/>
+  <derive name="d.e" expr="min($state.d.m, $state.d.cap)"/>
+  <derive name="d.q" expr="max(0, $state.d.m - $state.d.cap)"/>
+  <derive name="d.c" expr="$state.d.h + $state.d.e"/>
+  <derive name="d.p" expr="round(100 * $state.d.c / $state.d.n)"/>
+  <derive name="d.overflow" expr="$state.d.q > 0"/>
+  <derive name="d.warnText" expr='"当前容量不足，" + $state.d.q + " 项进入队列"'/>
+  <derive name="d.series" expr='[["缓存直达 H", $state.d.h], ["后台完成 E", $state.d.e], ["排队 Q", $state.d.q]]'/>
+  <derive name="d.rows" expr='[["缓存直达 H", $state.d.h, round(100 * $state.d.h / $state.d.n) + "%"], ["后台完成 E", $state.d.e, round(100 * $state.d.e / $state.d.n) + "%"], ["排队 Q", $state.d.q, round(100 * $state.d.q / $state.d.n) + "%"]]'/>
+  <derive name="d.config" expr='{scenario: $state.r.scenario, requests: $state.d.n, workers: $state.r.workers, hitRate: $state.r.hitRate, cacheHits: $state.d.h, executed: $state.d.e, queued: $state.d.q, completed: $state.d.c, completionPct: $state.d.p}'/>
+  <derive name="d.noteN" expr='"N=" + $state.d.n'/>
+  <derive name="d.noteH" expr='"H=" + $state.d.h'/>
+  <derive name="d.noteM" expr='"M=" + $state.d.m'/>
+  <derive name="d.noteCap" expr='"CAP=" + $state.d.cap'/>
+  <derive name="d.noteE" expr='"E=" + $state.d.e'/>
+  <derive name="d.noteQ" expr='"Q=" + $state.d.q'/>
+  <derive name="d.noteC" expr='"C=" + $state.d.c'/>
+
+  <column gap="md">
+    <p><badge text="模拟" tone="neutral"/><text>模拟数据 · 可重复实验 · 非实时遥测</text></p>
+
+    <card title="实验参数" subtitle="控件只改本地状态，下方所有数字、图表与流程图立即由同一份状态推导">
+      <segmented label="场景" bind="$state.r.scenario" options='[{"label":"常规","value":"steady"},{"label":"突发","value":"burst"},{"label":"故障","value":"fault"}]'/>
+      <slider label="并发 workers" bind="$state.r.workers" min="2" max="12" step="1" unit=" 个"/>
+      <slider label="命中率 hitRate" bind="$state.r.hitRate" min="0" max="100" step="10" unit="%"/>
+      <p><text>当前：</text><badge text="$state.r.scenario" tone="info"/><text> · workers </text><b text="$state.r.workers" strong="true"/><text> · hitRate </text><b text="$state.r.hitRate" strong="true"/><text>%</text></p>
+    </card>
+
+    <callout tone="warning" title="容量告警" text="$state.d.warnText" when="$state.d.overflow"/>
+    <callout tone="success" title="容量充足" text="当前容量足够，无积压" when="$state.d.q" is="0"/>
+
+    <grid>
+      <metric label="完成 C / N" value="$state.d.c" unit=" 项" caption="完成总数 / 请求总数" tone="success"/>
+      <metric label="缓存直达 H" value="$state.d.h" unit=" 项" caption="命中缓存、绕过后台"/>
+      <metric label="后台完成 E" value="$state.d.e" unit=" 项" caption="min(未命中, 后台容量)"/>
+      <metric label="排队 Q" value="$state.d.q" unit=" 项" caption="超出后台容量的积压" tone="warning"/>
+      <metric label="完成率 P" value="$state.d.p" unit="%" caption="round(100 × C / N)"/>
+    </grid>
+    <progress label="完成率 P（同源）" value="$state.d.p" max="100" tone="success"/>
+
+    <chart kind="bar" series="$state.d.series" source="规则模拟 · 与卡片同源"/>
+    <table columns='["分类","数值","占总请求"]' rows="$state.d.rows" caption="与图表、卡片同源 · 模拟数据"/>
+
+    <details label="展开计算口径">
+      <p><text>N = 场景请求总数：常规 120 / 突发 300 / 故障 180。</text></p>
+      <p><text>H = round(N × hitRate / 100)，M = N − H。</text></p>
+      <p><text>CAP = workers × (故障场景 12，其他场景 20)。</text></p>
+      <p><text>E = min(M, CAP)，Q = max(0, M − CAP)，C = H + E，P = round(100 × C / N)。</text></p>
+      <p><text>Q &gt; 0 时进入告警与排队分支；否则显示容量充足。</text></p>
+      <p><badge text="规则模拟" tone="warning"/><text> 这是规则模拟而非实测。</text></p>
+    </details>
+
+    <button label="复制当前配置" action="copy" value="$state.d.config" done="已复制当前配置 JSON（9 个字段）" unsupported="当前不支持此动作"/>
+
+    <diagram title="请求分流拓扑（与卡片同源）" source="规则模拟 · 非实时遥测">
+      <lane label="入口">
+        <node id="req" label="输入 N" note="$state.d.noteN" tone="info"/>
+      </lane>
+      <lane label="缓存">
+        <node id="cache" label="缓存判断" note="hitRate"/>
+        <node id="hit" label="命中 H" note="$state.d.noteH" tone="success"/>
+      </lane>
+      <lane label="后台">
+        <node id="miss" label="未命中 M" note="$state.d.noteM"/>
+        <node id="op" label="Operator" note="$state.d.noteCap"/>
+        <node id="pool" label="任务池 E" note="$state.d.noteE" tone="success"/>
+      </lane>
+      <lane label="完成">
+        <node id="merge" label="合流" note="H + E"/>
+        <node id="done" label="完成 C" note="$state.d.noteC" tone="success"/>
+        <node id="queue" label="排队 Q" note="$state.d.noteQ" tone="warning" when="$state.d.overflow"/>
+      </lane>
+      <edge from="req" to="cache" label="N"/>
+      <edge from="cache" to="hit"/>
+      <edge from="cache" to="miss" label="未命中"/>
+      <edge from="hit" to="merge"/>
+      <edge from="miss" to="op"/>
+      <edge from="op" to="pool"/>
+      <edge from="pool" to="merge" label="E"/>
+      <edge from="merge" to="done"/>
+      <edge from="op" to="queue" when="$state.d.overflow"/>
+      <edge from="queue" to="done" when="$state.d.overflow"/>
+    </diagram>
+  </column>
+</ui>

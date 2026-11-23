@@ -61,11 +61,14 @@ export const ML_TAGS = Object.freeze({
   lane: 'lane',
   node: 'node',
   edge: 'edge',
+  derive: 'derive',
+  details: 'details',
+  button: 'button',
 })
 
-const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true })
+const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true })
 // 交互控件、step 与图形原语一律写成自闭合：<toggle …/>、<step …/>、<node …/>、<edge …/>
-const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true })
+const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true })
 
 function decodeEntities(text) {
   return String(text)
@@ -217,9 +220,11 @@ function normalizeAttrs(element) {
   return attrs
 }
 
-/** 属性值：$state.* 保留绑定；JSON 字面量解析；数字转 number；其余按字符串。 */
-function readValue(raw) {
+/** 属性值：$state.* 保留绑定；JSON 字面量解析；数字转 number；其余按字符串。
+ *  forceString：表达式源码等属性必须保留原始字符串，不做 JSON/数字归一。 */
+function readValue(raw, forceString = false) {
   if (typeof raw !== 'string') return raw
+  if (forceString) return raw
   const text = raw.trim()
   if (text.startsWith('$')) return text
   if (text.startsWith('[') || text.startsWith('{')) {
@@ -236,10 +241,10 @@ function readValue(raw) {
   return text
 }
 
-function readProps(attrs, keys) {
+function readProps(attrs, keys, rawKeys = null) {
   const props = {}
   for (const key of keys) {
-    if (attrs[key] !== undefined) props[key] = readValue(attrs[key])
+    if (attrs[key] !== undefined) props[key] = readValue(attrs[key], rawKeys !== null && rawKeys.includes(key))
   }
   return props
 }
@@ -249,6 +254,7 @@ const TEXT_PROPS = Object.freeze({
   p: ['gap'],
   paragraph: ['gap'],
   badge: ['text', 'tone'],
+  b: ['text', 'strong'],
   emphasis: ['text', 'strong'],
   code: ['text'],
   a: ['text', 'href'],
@@ -275,7 +281,13 @@ const TEXT_PROPS = Object.freeze({
   grid: ['columns', 'gap', 'align'],
   row: ['gap', 'align'],
   column: ['gap', 'align'],
+  derive: ['name', 'expr'],
+  details: ['label', 'tone'],
+  button: ['label', 'action', 'value', 'done', 'unsupported'],
 })
+
+/** 必须保留源码字符串的属性（表达式等），不得被 JSON/数字归一吞掉。 */
+const RAW_PROPS = Object.freeze({ derive: ['expr'] })
 
 /**
  * 解析 miopiik-ml 源码。
@@ -433,7 +445,7 @@ export function parseMiopiikMl(source) {
       }
     }
     if (element.children.length > 0) return degrade('该标签不接受子内容')
-    return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? []) }, children: [] } }
+    return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }, children: [] } }
   }
 
   const compiled = children.map((child) => compile(child))

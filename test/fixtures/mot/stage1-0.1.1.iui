@@ -1,0 +1,63 @@
+<ui title="M·O·T 任务分流实验台（0.1.1 静态快照）" fallback="M·O·T 任务分流实验台（0.1.1）：初始稳态 N=120，H=72，E=48，Q=0，C=120，完成率 100%；0.1.1 无派生计算，数字不随控件重算。">
+  <state name="r" value='{"scenario":"steady","workers":6,"hitRate":60}'/>
+  <column gap="md">
+    <p><badge text="模拟" tone="neutral"/><text>模拟数据 · 可重复实验 · 非实时遥测</text></p>
+
+    <card title="实验参数" subtitle="0.1.1 只能把控件值写入本地状态；没有表达式原语，下方数字为初始稳态快照">
+      <segmented label="场景" bind="$state.r.scenario" options='[{"label":"常规","value":"steady"},{"label":"突发","value":"burst"},{"label":"故障","value":"fault"}]'/>
+      <slider label="并发 workers" bind="$state.r.workers" min="2" max="12" step="1" unit=" 个"/>
+      <slider label="命中率 hitRate" bind="$state.r.hitRate" min="0" max="100" step="10" unit="%"/>
+      <p><text>控件值直接显示在上方控件上；0.1.1 没有把状态值嵌进普通文字的表达式能力。</text></p>
+    </card>
+
+    <callout tone="warning" title="0.1.1 能力边界" text="控件只更新本地状态；数字、图表与拓扑均为初始 steady/workers=6/hitRate=60 的静态快照，不会随参数重算（无表达式/派生原语）。"/>
+
+    <grid>
+      <metric label="完成 C / N" value="120 / 120" unit=" 项" caption="快照：steady · 6 · 60" tone="success"/>
+      <metric label="缓存直达 H" value="72" unit=" 项" caption="快照：无需重算"/>
+      <metric label="后台完成 E" value="48" unit=" 项" caption="快照：CAP=120"/>
+      <metric label="排队 Q" value="0" unit=" 项" caption="快照：无积压" tone="warning"/>
+      <metric label="完成率 P" value="100" unit="%" caption="快照：round(100×C/N)"/>
+    </grid>
+
+    <chart kind="bar" series='[["缓存直达 H",72],["后台完成 E",48],["排队 Q",0]]' source="0.1.1 静态快照 · 不随控件重绘"/>
+    <table columns='["分类","数值","占总请求"]' rows='[["缓存直达 H",72,"60%"],["后台完成 E",48,"40%"],["排队 Q",0,"0%"]]' caption="0.1.1 静态快照 · 模拟数据"/>
+
+    <card title="计算口径（0.1.1 无折叠原语，暂常显）" subtitle="规则模拟而非实测">
+      <p><text>N = 场景请求总数：常规 120 / 突发 300 / 故障 180。</text></p>
+      <p><text>H = round(N × hitRate / 100)，M = N − H。</text></p>
+      <p><text>CAP = workers × (故障场景 12，其他场景 20)。</text></p>
+      <p><text>E = min(M, CAP)，Q = max(0, M − CAP)，C = H + E，P = round(100 × C / N)。</text></p>
+      <p><badge text="规则模拟" tone="warning"/><text> 这是规则模拟而非实测。</text></p>
+    </card>
+
+    <p><text>复制当前配置：</text><badge text="当前不支持此动作" tone="warning"/><text>（0.1.1 无宿主动作原语，不会绕过宿主权限执行脚本）</text></p>
+
+    <diagram title="请求分流拓扑（0.1.1 静态快照）" source="非实时遥测">
+      <lane label="入口">
+        <node id="req" label="输入 N" note="N=120" tone="info"/>
+      </lane>
+      <lane label="缓存">
+        <node id="cache" label="缓存判断" note="hitRate 60%"/>
+        <node id="hit" label="命中 H" note="H=72" tone="success"/>
+      </lane>
+      <lane label="后台">
+        <node id="miss" label="未命中 M" note="M=48"/>
+        <node id="op" label="Operator" note="CAP=120"/>
+        <node id="pool" label="任务池 E" note="E=48" tone="success"/>
+      </lane>
+      <lane label="完成">
+        <node id="merge" label="合流" note="H + E"/>
+        <node id="done" label="完成 C" note="C=120" tone="success"/>
+      </lane>
+      <edge from="req" to="cache" label="N"/>
+      <edge from="cache" to="hit"/>
+      <edge from="cache" to="miss" label="未命中"/>
+      <edge from="hit" to="merge"/>
+      <edge from="miss" to="op"/>
+      <edge from="op" to="pool"/>
+      <edge from="pool" to="merge" label="E"/>
+      <edge from="merge" to="done"/>
+    </diagram>
+  </column>
+</ui>

@@ -15,7 +15,522 @@ window.__ModuleLoader__.load({
       idle: 'var(--dsw-alias-state-idle-primary, #999)',
       error: 'var(--dsw-alias-state-error-primary, #d1242f)',
     }
+    const IUI_EXPR = (() => {
+      /**
+       * IUI 安全表达式 v1（实验层）：自有 tokenizer + 递归下降解析器 + 纯函数求值。
+       *
+       * 设计边界：
+       *  - 模型/示例只产出**表达式源码字符串**；本模块绝不使用 eval / new Function，
+       *    不产生可执行代码，解析结果只是一棵受限 JSON AST；
+       *  - 表达式只能读 `$state.*` / `$data.*` 的只读点号路径，不能调用对象方法、不能赋值、
+       *    不能访问任意成员（`.constructor` 等一律拒绝）；
+       *  - 函数只允许白名单内的纯函数（round/floor/ceil/abs/min/max/clamp）；
+       *  - 预算（源码长度/token/嵌套深度/结果体量）统一拒绝；失败返回结构化错误，不抛异常；
+       *  - 纯函数、确定性；compile 结果按源码做有界缓存（≤ 256 项）。
+       */
+
+      const EXPR_LIMITS = Object.freeze({
+        chars: 1000,
+        tokens: 256,
+        depth: 24,
+        items: 128,
+        resultDepth: 8,
+        stringLength: 2000,
+        cache: 256,
+      })
+
+      const RESERVED = new Set(['__proto__', 'prototype', 'constructor'])
+      const FUNCTIONS = Object.freeze({ round: 1, floor: 1, ceil: 1, abs: 1, min: -1, max: -1, clamp: 3 })
+      const SCOPES = new Set(['state', 'data'])
+      const IDENT_START = /[A-Za-z_]/u
+      const IDENT_PART = /[A-Za-z0-9_]/u
+      const DIGIT = /[0-9]/u
+      const PUNCT2 = new Set(['==', '!=', '<=', '>=', '&&', '||'])
+      const PUNCT1 = new Set(['+', '-', '*', '/', '%', '<', '>', '!', '?', ':', '(', ')', '[', ']', '{', '}', ','])
+
+      function fail(error) {
+        return { ok: false, error }
+      }
+
+      function isRecord(value) {
+        return value !== null && typeof value === 'object' && !Array.isArray(value)
+      }
+
+      /** 词法分析：失败返回 {ok:false}；成功返回 token 数组（末尾带 eof）。 */
+      function tokenize(source) {
+        const tokens = []
+        const push = (token) => {
+          tokens.push(token)
+          return tokens.length <= EXPR_LIMITS.tokens
+        }
+        let i = 0
+        while (i < source.length) {
+          const ch = source[i]
+          if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+            i += 1
+            continue
+          }
+          // 数字：整数/小数（不支持指数、不允许前导 .）
+          if (DIGIT.test(ch)) {
+            let j = i
+            while (j < source.length && DIGIT.test(source[j])) j += 1
+            if (source[j] === '.') {
+              j += 1
+              const fracStart = j
+              while (j < source.length && DIGIT.test(source[j])) j += 1
+              if (j === fracStart) return fail('数字的小数部分不能为空')
+            }
+            const raw = source.slice(i, j)
+            const value = Number(raw)
+            if (!Number.isFinite(value)) return fail(`数字不合法：${raw}`)
+            if (!push({ t: 'num', v: value })) return fail('表达式 token 数超限')
+            i = j
+            continue
+          }
+          // 字符串：只支持 ' 与 "，转义仅 \\ \' \" \n \t
+          if (ch === '"' || ch === "'") {
+            let j = i + 1
+            let out = ''
+            let closed = false
+            while (j < source.length) {
+              const c = source[j]
+              if (c === '\\') {
+                const next = source[j + 1]
+                if (next === '\\') out += '\\'
+                else if (next === "'" || next === '"') out += next
+                else if (next === 'n') out += '\n'
+                else if (next === 't') out += '\t'
+                else return fail(`不支持的转义：\\${String(next ?? '')}`)
+                j += 2
+                continue
+              }
+              if (c === ch) {
+                closed = true
+                j += 1
+                break
+              }
+              if (c === '\n' || c === '\r') return fail('字符串不能跨行')
+              out += c
+              j += 1
+            }
+            if (!closed) return fail('字符串没有闭合')
+            if (!push({ t: 'str', v: out })) return fail('表达式 token 数超限')
+            i = j
+            continue
+          }
+          // 作用域引用：$state.a.b / $data.a.b
+          if (ch === '$') {
+            const match = /^\$(state|data)((?:\.[A-Za-z_][A-Za-z0-9_]*)+)/u.exec(source.slice(i))
+            if (match === null) return fail('引用只允许 $state.* 或 $data.* 的点号路径')
+            const scope = match[1]
+            const key = match[2].slice(1)
+            if (!SCOPES.has(scope) || key.split('.').some((part) => RESERVED.has(part))) return fail(`不安全的引用：$${scope}.${key}`)
+            if (!push({ t: 'ref', scope, key })) return fail('表达式 token 数超限')
+            i += match[0].length
+            continue
+          }
+          // 标识符：true/false/null、函数名（白名单在解析期校验）、对象字面量键
+          if (IDENT_START.test(ch)) {
+            let j = i + 1
+            while (j < source.length && IDENT_PART.test(source[j])) j += 1
+            const word = source.slice(i, j)
+            if (!push({ t: 'ident', v: word })) return fail('表达式 token 数超限')
+            i = j
+            continue
+          }
+          // 双字符运算符
+          const two = source.slice(i, i + 2)
+          if (PUNCT2.has(two)) {
+            if (!push({ t: 'punc', v: two })) return fail('表达式 token 数超限')
+            i += 2
+            continue
+          }
+          if (PUNCT1.has(ch)) {
+            if (!push({ t: 'punc', v: ch })) return fail('表达式 token 数超限')
+            i += 1
+            continue
+          }
+          return fail(`不支持的字符：${ch}`)
+        }
+        tokens.push({ t: 'eof', v: '' })
+        return { ok: true, tokens }
+      }
+
+      /** 递归下降解析；深度预算在入口处统一检查。 */
+      function createParser(tokens) {
+        let index = 0
+        const peek = () => tokens[index]
+        const next = () => tokens[index++]
+        const isPunc = (value) => peek().t === 'punc' && peek().v === value
+        const eat = (value) => {
+          if (!isPunc(value)) return false
+          index += 1
+          return true
+        }
+        const expect = (value) => (eat(value) ? null : fail(`缺少 ${value}`))
+
+        const parseExpression = (depth) => {
+          if (depth > EXPR_LIMITS.depth) return fail('表达式嵌套超限')
+          const condition = parseOr(depth)
+          if (condition.ok === false) return condition
+          if (!eat('?')) return condition
+          const onTrue = parseExpression(depth + 1)
+          if (onTrue.ok === false) return onTrue
+          const colon = expect(':')
+          if (colon !== null) return colon
+          const onFalse = parseExpression(depth + 1)
+          if (onFalse.ok === false) return onFalse
+          return { ok: true, node: { t: 'cond', c: condition.node, a: onTrue.node, b: onFalse.node } }
+        }
+
+        const binary = (parseHigher, ops) => (depth) => {
+          const first = parseHigher(depth)
+          if (first.ok === false) return first
+          let left = first.node
+          for (;;) {
+            const token = peek()
+            if (token.t !== 'punc' || !ops.has(token.v)) break
+            index += 1
+            const right = parseHigher(depth)
+            if (right.ok === false) return right
+            left = { t: 'bin', op: token.v, l: left, r: right.node }
+          }
+          return { ok: true, node: left }
+        }
+
+        const parseOr = binary((depth) => parseAnd(depth), new Set(['||']))
+        const parseAnd = binary((depth) => parseEquality(depth), new Set(['&&']))
+        const parseEquality = binary((depth) => parseRelational(depth), new Set(['==', '!=']))
+        const parseRelational = binary((depth) => parseAdditive(depth), new Set(['<', '<=', '>', '>=']))
+        const parseAdditive = binary((depth) => parseMultiplicative(depth), new Set(['+', '-']))
+        const parseMultiplicative = binary((depth) => parseUnary(depth), new Set(['*', '/', '%']))
+
+        function parseUnary(depth) {
+          if (depth > EXPR_LIMITS.depth) return fail('表达式嵌套超限')
+          if (isPunc('-') || isPunc('+') || isPunc('!')) {
+            const op = next().v
+            const operand = parseUnary(depth + 1)
+            if (operand.ok === false) return operand
+            return { ok: true, node: { t: 'unary', op, x: operand.node } }
+          }
+          return parsePrimary(depth)
+        }
+
+        function parseCall(depth, name) {
+          index += 1 // '('
+          const args = []
+          if (!isPunc(')')) {
+            for (;;) {
+              const arg = parseExpression(depth + 1)
+              if (arg.ok === false) return arg
+              args.push(arg.node)
+              if (args.length > EXPR_LIMITS.tokens) return fail('函数参数过多')
+              if (!eat(',')) break
+            }
+          }
+          const close = expect(')')
+          if (close !== null) return close
+          const arity = FUNCTIONS[name]
+          if (arity === -1 ? args.length < 1 : args.length !== arity) return fail(`${name} 参数个数不合法`)
+          return { ok: true, node: { t: 'call', name, args } }
+        }
+
+        function parseObject(depth) {
+          index += 1 // '{'
+          const entries = []
+          if (!isPunc('}')) {
+            for (;;) {
+              const token = peek()
+              let key
+              if (token.t === 'ident') key = next().v
+              else if (token.t === 'str') key = next().v
+              else return fail('对象键只允许标识符或字符串')
+              if (RESERVED.has(key)) return fail(`不安全的对象键：${key}`)
+              const colon = expect(':')
+              if (colon !== null) return colon
+              const value = parseExpression(depth + 1)
+              if (value.ok === false) return value
+              entries.push([key, value.node])
+              if (entries.length > EXPR_LIMITS.items) return fail('对象项数超限')
+              if (!eat(',')) break
+            }
+          }
+          const close = expect('}')
+          if (close !== null) return close
+          return { ok: true, node: { t: 'obj', entries } }
+        }
+
+        function parseArray(depth) {
+          index += 1 // '['
+          const items = []
+          if (!isPunc(']')) {
+            for (;;) {
+              const item = parseExpression(depth + 1)
+              if (item.ok === false) return item
+              items.push(item.node)
+              if (items.length > EXPR_LIMITS.items) return fail('数组项数超限')
+              if (!eat(',')) break
+            }
+          }
+          const close = expect(']')
+          if (close !== null) return close
+          return { ok: true, node: { t: 'arr', items } }
+        }
+
+        function parsePrimary(depth) {
+          if (depth > EXPR_LIMITS.depth) return fail('表达式嵌套超限')
+          const token = peek()
+          if (token.t === 'num') {
+            next()
+            return { ok: true, node: { t: 'num', v: token.v } }
+          }
+          if (token.t === 'str') {
+            next()
+            return { ok: true, node: { t: 'str', v: token.v } }
+          }
+          if (token.t === 'ref') {
+            next()
+            return { ok: true, node: { t: 'ref', scope: token.scope, key: token.key } }
+          }
+          if (token.t === 'ident') {
+            const word = token.v
+            if (word === 'true' || word === 'false' || word === 'null') {
+              next()
+              return { ok: true, node: { t: 'lit', v: word === 'true' ? true : word === 'false' ? false : null } }
+            }
+            if (Object.prototype.hasOwnProperty.call(FUNCTIONS, word)) {
+              next()
+              if (!isPunc('(')) return fail(`函数 ${word} 需要括号调用`)
+              return parseCall(depth, word)
+            }
+            return fail(`未知标识符：${word}`)
+          }
+          if (eat('(')) {
+            const inner = parseExpression(depth + 1)
+            if (inner.ok === false) return inner
+            const close = expect(')')
+            if (close !== null) return close
+            return inner
+          }
+          if (isPunc('[')) return parseArray(depth)
+          if (isPunc('{')) return parseObject(depth)
+          return fail(`意外的符号：${token.v === '' ? '结尾' : token.v}`)
+        }
+
+        return {
+          parse() {
+            const result = parseExpression(1)
+            if (result.ok === false) return result
+            if (peek().t !== 'eof') return fail(`多余内容：${peek().v === '' ? '结尾' : peek().v}`)
+            return { ok: true, program: result.node }
+          },
+        }
+      }
+
+      const cache = new Map()
+
+      /**
+       * 编译表达式源码。源码只解析成受限 AST，不执行任何代码。
+       * @param {unknown} source
+       * @returns {{ok:true, source:string} | {ok:false, error:string}}
+       */
+      function compileExpr(source) {
+        if (typeof source !== 'string') return fail('expr 必须是字符串')
+        const text = source.trim()
+        if (text === '') return fail('expr 不能为空')
+        if (text.length > EXPR_LIMITS.chars) return fail(`expr 超过 ${EXPR_LIMITS.chars} 字符`)
+        const cached = cache.get(text)
+        if (cached !== undefined) return cached
+        const lexed = tokenize(text)
+        let result
+        if (lexed.ok === false) result = fail(lexed.error)
+        else {
+          const parsed = createParser(lexed.tokens).parse()
+          result = parsed.ok === false ? fail(parsed.error) : { ok: true, source: text, program: parsed.program }
+        }
+        if (cache.size >= EXPR_LIMITS.cache) cache.delete(cache.keys().next().value)
+        cache.set(text, result)
+        return result
+      }
+
+      function readPath(scope, name, key) {
+        let cursor = scope?.[name]
+        for (const part of key.split('.')) {
+          if (cursor === null || typeof cursor !== 'object') return { ok: false, error: `未定义的引用：$${name}.${key}` }
+          cursor = cursor[part]
+        }
+        if (cursor === undefined) return { ok: false, error: `未定义的引用：$${name}.${key}` }
+        return { ok: true, value: cursor }
+      }
+
+      function numeric(value) {
+        return typeof value === 'number' && Number.isFinite(value)
+      }
+
+      function finite(value) {
+        return numeric(value) ? { ok: true, value } : { ok: false, error: '运算结果必须是有限数字' }
+      }
+
+      function inspectResult(value, depth = 0) {
+        if (depth > EXPR_LIMITS.resultDepth) return fail('表达式结果嵌套超限')
+        if (value === null || typeof value === 'boolean') return { ok: true, value }
+        if (typeof value === 'number') return finite(value)
+        if (typeof value === 'string') {
+          return value.length <= EXPR_LIMITS.stringLength ? { ok: true, value } : fail('表达式结果字符串超限')
+        }
+        if (Array.isArray(value)) {
+          if (value.length > EXPR_LIMITS.items) return fail('表达式结果数组超限')
+          const out = []
+          for (const item of value) {
+            const safe = inspectResult(item, depth + 1)
+            if (safe.ok === false) return safe
+            out.push(safe.value)
+          }
+          return { ok: true, value: out }
+        }
+        if (isRecord(value)) {
+          const keys = Object.keys(value)
+          if (keys.length > EXPR_LIMITS.items) return fail('表达式结果对象超限')
+          const out = {}
+          for (const key of keys) {
+            if (key.length > 64 || RESERVED.has(key)) return fail(`表达式结果含不安全键：${key}`)
+            const safe = inspectResult(value[key], depth + 1)
+            if (safe.ok === false) return safe
+            out[key] = safe.value
+          }
+          return { ok: true, value: out }
+        }
+        return fail('表达式结果类型不合法')
+      }
+
+      function equality(a, b) {
+        if (a === b) return true
+        try {
+          return JSON.stringify(a) === JSON.stringify(b)
+        } catch {
+          return false
+        }
+      }
+
+      function evaluate(node, scope, depth = 0) {
+        if (depth > EXPR_LIMITS.depth) return fail('表达式求值嵌套超限')
+        if (node.t === 'num' || node.t === 'str' || node.t === 'lit') return { ok: true, value: node.v }
+        if (node.t === 'ref') return readPath(scope, node.scope, node.key)
+        if (node.t === 'unary') {
+          const operand = evaluate(node.x, scope, depth + 1)
+          if (operand.ok === false) return operand
+          if (node.op === '!') {
+            if (typeof operand.value !== 'boolean') return fail('! 只接受布尔值')
+            return { ok: true, value: !operand.value }
+          }
+          if (!numeric(operand.value)) return fail('一元运算符只接受有限数字')
+          return { ok: true, value: node.op === '-' ? -operand.value : operand.value }
+        }
+        if (node.t === 'cond') {
+          const condition = evaluate(node.c, scope, depth + 1)
+          if (condition.ok === false) return condition
+          return evaluate(condition.value ? node.a : node.b, scope, depth + 1)
+        }
+        if (node.t === 'bin') {
+          const left = evaluate(node.l, scope, depth + 1)
+          if (left.ok === false) return left
+          if (node.op === '&&' || node.op === '||') {
+            if (typeof left.value !== 'boolean') return fail(`${node.op} 只接受布尔值`)
+            if (node.op === '&&' && left.value === false) return { ok: true, value: false }
+            if (node.op === '||' && left.value === true) return { ok: true, value: true }
+            const right = evaluate(node.r, scope, depth + 1)
+            if (right.ok === false) return right
+            if (typeof right.value !== 'boolean') return fail(`${node.op} 只接受布尔值`)
+            return { ok: true, value: right.value }
+          }
+          const right = evaluate(node.r, scope, depth + 1)
+          if (right.ok === false) return right
+          const a = left.value
+          const b = right.value
+          if (node.op === '+' && (typeof a === 'string' || typeof b === 'string')) {
+            const okType = (v) => typeof v === 'string' || numeric(v) || typeof v === 'boolean'
+            if (!okType(a) || !okType(b)) return fail('字符串拼接只接受 string/number/boolean')
+            return { ok: true, value: String(a) + String(b) }
+          }
+          if (node.op === '==' || node.op === '!=') return { ok: true, value: equality(a, b) === (node.op === '==') }
+          const comparable = (numeric(a) && numeric(b)) || (typeof a === 'string' && typeof b === 'string')
+          if (node.op === '<' || node.op === '<=' || node.op === '>' || node.op === '>=') {
+            if (!comparable) return fail(`${node.op} 需要两个数字或两个字符串`)
+            if (node.op === '<') return { ok: true, value: a < b }
+            if (node.op === '<=') return { ok: true, value: a <= b }
+            if (node.op === '>') return { ok: true, value: a > b }
+            return { ok: true, value: a >= b }
+          }
+          if (!numeric(a) || !numeric(b)) return fail(`${node.op} 需要两个有限数字`)
+          if (node.op === '+') return finite(a + b)
+          if (node.op === '-') return finite(a - b)
+          if (node.op === '*') return finite(a * b)
+          if (node.op === '/') return b === 0 ? fail('除数不能为 0') : finite(a / b)
+          return b === 0 ? fail('取模的除数不能为 0') : finite(a % b)
+        }
+        if (node.t === 'arr') {
+          const out = []
+          for (const item of node.items) {
+            const value = evaluate(item, scope, depth + 1)
+            if (value.ok === false) return value
+            out.push(value.value)
+          }
+          return { ok: true, value: out }
+        }
+        if (node.t === 'obj') {
+          const out = {}
+          for (const [key, valueNode] of node.entries) {
+            const value = evaluate(valueNode, scope, depth + 1)
+            if (value.ok === false) return value
+            out[key] = value.value
+          }
+          return { ok: true, value: out }
+        }
+        if (node.t === 'call') {
+          const args = []
+          for (const argNode of node.args) {
+            const value = evaluate(argNode, scope, depth + 1)
+            if (value.ok === false) return value
+            args.push(value.value)
+          }
+          if (!args.every(numeric)) return fail(`${node.name} 只接受有限数字`)
+          if (node.name === 'round') return finite(Math.round(args[0]))
+          if (node.name === 'floor') return finite(Math.floor(args[0]))
+          if (node.name === 'ceil') return finite(Math.ceil(args[0]))
+          if (node.name === 'abs') return finite(Math.abs(args[0]))
+          if (node.name === 'min') return finite(Math.min(...args))
+          if (node.name === 'max') return finite(Math.max(...args))
+          if (args[1] > args[2]) return fail('clamp 需要 lo <= hi')
+          return finite(Math.min(args[2], Math.max(args[1], args[0])))
+        }
+        return fail('未知表达式节点')
+      }
+
+      /**
+       * 在给定作用域内求值编译后的表达式。失败返回结构化错误，绝不抛异常。
+       * @param {unknown} compiled
+       * @param {{state?:object, data?:object}} scope
+       * @returns {{ok:true, value:unknown} | {ok:false, error:string}}
+       */
+      function evaluateExpr(compiled, scope) {
+        if (compiled === null || typeof compiled !== 'object' || compiled.ok !== true) {
+          return fail(compiled !== null && typeof compiled === 'object' && typeof compiled.error === 'string' ? compiled.error : 'expr 未编译')
+        }
+        const fresh = compileExpr(compiled.source)
+        if (fresh.ok === false) return fail(fresh.error)
+        const program = fresh.program
+        try {
+          const value = evaluate(program, scope ?? {}, 0)
+          if (value.ok === false) return value
+          return inspectResult(value.value)
+        } catch {
+          return fail('expr 求值失败')
+        }
+      }
+      return { EXPR_LIMITS, compileExpr, evaluateExpr }
+    })()
     const IUI_AST = (() => {
+      const { EXPR_LIMITS, compileExpr } = IUI_EXPR
       /**
        * IUI AST v1（实验层）：有限的受信组件 + 任意组合 + 局部状态绑定。
        *
@@ -27,6 +542,7 @@ window.__ModuleLoader__.load({
        *    一切交互停留在浏览器内，外部动作仍归口工具面；
        *  - 预算（节点数/深度/数据量）在这里统一拒绝，由调用方决定降级策略。
        */
+
 
       const IUI_VERSION = 'iui/1'
 
@@ -56,6 +572,10 @@ window.__ModuleLoader__.load({
         toggle: { props: { label: 'string?', bind: 'string' }, children: false },
         slider: { props: { label: 'string?', bind: 'string', min: 'number?', max: 'number?', step: 'number?', unit: 'string?' }, children: false },
         input: { props: { label: 'string?', bind: 'string', placeholder: 'string?' }, children: false },
+        // 实验原语：受信派生状态（纯函数表达式，不执行代码）、折叠容器、唯一宿主动作（copy）
+        derive: { props: { name: 'string', expr: 'string' }, children: false },
+        details: { props: { label: 'string', tone: 'string?' }, children: true },
+        button: { props: { label: 'string', action: 'string', value: 'value', done: 'string?', unsupported: 'string?' }, children: false },
         // 过程与清单：steps 只接受 step 子节点（与 paragraph 只接受行内组件同一校验模式）
         steps: { props: {}, children: true },
         step: { props: { title: 'string', note: 'string?', tone: 'string?' }, children: false },
@@ -66,7 +586,7 @@ window.__ModuleLoader__.load({
         edge: { props: { from: 'string', to: 'string', label: 'string?', kind: 'string?' }, children: false },
       })
 
-      const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384, diagramLanes: 6, diagramNodes: 24, diagramEdges: 24 })
+      const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384, diagramLanes: 6, diagramNodes: 24, diagramEdges: 24, derive: 64 })
 
       /** 行内原语：paragraph 只接受这些子节点，保证"同一行文字混排"的语义。 */
       const INLINE_TYPES = Object.freeze(['text', 'badge', 'icon', 'emphasis', 'code', 'link'])
@@ -154,6 +674,8 @@ window.__ModuleLoader__.load({
         const fatal = []
         let nodes = 0
         let degraded = 0
+        let deriveCount = 0
+        const deriveNames = new Set()
 
         const failNode = (node, path, reason) => {
           degraded += 1
@@ -193,6 +715,37 @@ window.__ModuleLoader__.load({
             if (typeof props.step === 'number' && props.step <= 0) return failNode(node, path, 'slider.step 需为正数')
             if (typeof props.min === 'number' && typeof props.max === 'number' && props.max <= props.min) {
               return failNode(node, path, 'slider.max 需大于 slider.min')
+            }
+          }
+          if (node.type === 'derive') {
+            const name = props.name
+            if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u.test(name) || name.split('.').some((part) => RESERVED.has(part))) {
+              return failNode(node, path, 'derive.name 需要安全的点号路径')
+            }
+            if (deriveNames.has(name)) return failNode(node, path, `derive.name 重复：${name}`)
+            if (deriveCount >= LIMITS.derive) return failNode(node, path, `derive 最多 ${LIMITS.derive} 个`)
+            if (typeof props.expr !== 'string' || props.expr.trim() === '') return failNode(node, path, 'derive.expr 必填')
+            if (props.expr.length > EXPR_LIMITS.chars) return failNode(node, path, `derive.expr 超过 ${EXPR_LIMITS.chars} 字符`)
+            const compiled = compileExpr(props.expr)
+            if (compiled.ok === false) return failNode(node, path, `derive.expr 不合法：${compiled.error}`)
+            deriveNames.add(name)
+            deriveCount += 1
+          }
+          if (node.type === 'details') {
+            if (typeof props.label !== 'string' || props.label.trim() === '') return failNode(node, path, 'details.label 必填')
+            if (props.tone !== undefined && !TONES.includes(props.tone)) return failNode(node, path, `details.tone 只能是 ${TONES.join('/')}`)
+          }
+          if (node.type === 'button') {
+            if (typeof props.label !== 'string' || props.label.trim() === '') return failNode(node, path, 'button.label 必填')
+            // 唯一宿主动作：只允许真实剪贴板写入；其余动作名一律拒绝（不是白名单外的未来开关）
+            if (props.action !== 'copy') return failNode(node, path, 'button.action 只支持 copy')
+            if (props.value === undefined) return failNode(node, path, 'button.value 必填')
+            if (typeof props.value === 'string' && readBinding(props.value).scope === undefined) {
+              if (props.value.length > LIMITS.text) return failNode(node, path, 'button.value 文本超限')
+            } else if (props.value !== null && typeof props.value === 'object') {
+              let bytes = Infinity
+              try { bytes = JSON.stringify(props.value).length } catch { /* 循环输入拒绝 */ }
+              if (bytes > LIMITS.stateBytes) return failNode(node, path, 'button.value 超出容量预算')
             }
           }
           if (node.type === 'steps') {
@@ -286,13 +839,25 @@ window.__ModuleLoader__.load({
             return failNode(node, path, `text 超过 ${LIMITS.text} 字`)
           }
           if (node.type === 'table') {
-            if (!Array.isArray(props.columns) || props.columns.length === 0 || props.columns.length > 12) return failNode(node, path, 'table 需要 1–12 列')
-            if (!Array.isArray(props.rows)) return failNode(node, path, 'table 需要 rows 数组')
-            if (props.rows.length > 200) return failNode(node, path, 'table 最多 200 行')
-            const columnsOk = props.columns.every((column) => typeof column === 'string' || (isRecord(column) && typeof column.label === 'string' && (column.key === undefined || (typeof column.key === 'string' && !RESERVED.has(column.key) && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u.test(column.key)))))
-            if (!columnsOk) return failNode(node, path, 'table.columns 需要字符串或 {key,label} 描述符')
-            const rowsOk = props.rows.every((row) => Array.isArray(row) || (row !== null && typeof row === 'object'))
-            if (!rowsOk) return failNode(node, path, 'table.rows 的每一项需要数组或对象')
+            // columns/rows 可为字面量，也可绑定到 $state.*（派生状态）；绑定形态在渲染期解析后再归一。
+            const columnsBound = readBinding(props.columns).scope !== undefined
+            const rowsBound = readBinding(props.rows).scope !== undefined
+            if (!columnsBound && (!Array.isArray(props.columns) || props.columns.length === 0 || props.columns.length > 12)) return failNode(node, path, 'table 需要 1–12 列')
+            if (!rowsBound && !Array.isArray(props.rows)) return failNode(node, path, 'table 需要 rows 数组或 $state 绑定')
+            if (!rowsBound && Array.isArray(props.rows) && props.rows.length > 200) return failNode(node, path, 'table 最多 200 行')
+            if (!columnsBound) {
+              const columnsOk = props.columns.every((column) => typeof column === 'string' || (isRecord(column) && typeof column.label === 'string' && (column.key === undefined || (typeof column.key === 'string' && !RESERVED.has(column.key) && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u.test(column.key)))))
+              if (!columnsOk) return failNode(node, path, 'table.columns 需要字符串或 {key,label} 描述符')
+            }
+            if (!rowsBound) {
+              const rowsOk = props.rows.every((row) => Array.isArray(row) || (row !== null && typeof row === 'object'))
+              if (!rowsOk) return failNode(node, path, 'table.rows 的每一项需要数组或对象')
+            }
+            if (columnsBound || rowsBound || props.caption !== undefined) {
+              // 绑定形态没有静态体积可比，只校验绑定路径安全性（readBinding 已保证）
+              const staticBytes = JSON.stringify({ columns: columnsBound ? undefined : props.columns, rows: rowsBound ? undefined : props.rows }).length
+              if (staticBytes > LIMITS.stateBytes) return failNode(node, path, 'table 数据超出容量预算')
+            }
             if (JSON.stringify(props).length > LIMITS.stateBytes) return failNode(node, path, 'table 数据超出容量预算')
           }
           if (node.type === 'paragraph') {
@@ -455,11 +1020,14 @@ window.__ModuleLoader__.load({
         lane: 'lane',
         node: 'node',
         edge: 'edge',
+        derive: 'derive',
+        details: 'details',
+        button: 'button',
       })
 
-      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true })
+      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true })
       // 交互控件、step 与图形原语一律写成自闭合：<toggle …/>、<step …/>、<node …/>、<edge …/>
-      const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true })
+      const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true })
 
       function decodeEntities(text) {
         return String(text)
@@ -611,9 +1179,11 @@ window.__ModuleLoader__.load({
         return attrs
       }
 
-      /** 属性值：$state.* 保留绑定；JSON 字面量解析；数字转 number；其余按字符串。 */
-      function readValue(raw) {
+      /** 属性值：$state.* 保留绑定；JSON 字面量解析；数字转 number；其余按字符串。
+       *  forceString：表达式源码等属性必须保留原始字符串，不做 JSON/数字归一。 */
+      function readValue(raw, forceString = false) {
         if (typeof raw !== 'string') return raw
+        if (forceString) return raw
         const text = raw.trim()
         if (text.startsWith('$')) return text
         if (text.startsWith('[') || text.startsWith('{')) {
@@ -630,10 +1200,10 @@ window.__ModuleLoader__.load({
         return text
       }
 
-      function readProps(attrs, keys) {
+      function readProps(attrs, keys, rawKeys = null) {
         const props = {}
         for (const key of keys) {
-          if (attrs[key] !== undefined) props[key] = readValue(attrs[key])
+          if (attrs[key] !== undefined) props[key] = readValue(attrs[key], rawKeys !== null && rawKeys.includes(key))
         }
         return props
       }
@@ -643,6 +1213,7 @@ window.__ModuleLoader__.load({
         p: ['gap'],
         paragraph: ['gap'],
         badge: ['text', 'tone'],
+        b: ['text', 'strong'],
         emphasis: ['text', 'strong'],
         code: ['text'],
         a: ['text', 'href'],
@@ -669,7 +1240,13 @@ window.__ModuleLoader__.load({
         grid: ['columns', 'gap', 'align'],
         row: ['gap', 'align'],
         column: ['gap', 'align'],
+        derive: ['name', 'expr'],
+        details: ['label', 'tone'],
+        button: ['label', 'action', 'value', 'done', 'unsupported'],
       })
+
+      /** 必须保留源码字符串的属性（表达式等），不得被 JSON/数字归一吞掉。 */
+      const RAW_PROPS = Object.freeze({ derive: ['expr'] })
 
       /**
        * 解析 miopiik-ml 源码。
@@ -827,7 +1404,7 @@ window.__ModuleLoader__.load({
             }
           }
           if (element.children.length > 0) return degrade('该标签不接受子内容')
-          return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? []) }, children: [] } }
+          return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }, children: [] } }
         }
 
         const compiled = children.map((child) => compile(child))
@@ -1660,23 +2237,68 @@ window.__ModuleLoader__.load({
       return h('div', { style: { display: 'flex', flexDirection: 'column', width: '100%' } }, axis, labelsRow)
     }
 
-    function IuiDiagram({ item, key }) {
+    /** when/is 显隐判定：通用 node() 与 diagram 子树共用（diagram 单独处理子树，不能直接复用 node()）。 */
+    function isItemVisible(item, resolve) {
+      const itemProps = item?.props ?? {}
+      if (itemProps.when === undefined) return true
+      const actual = resolve(itemProps.when)
+      return itemProps.is === undefined ? Boolean(actual) : sameValue(actual, resolve(itemProps.is))
+    }
+
+    function IuiDiagram({ item, resolve }) {
       // 泳道图：真实浏览器挂载后一次实测锚点（等比 1:1 坐标，箭头精确落在药丸边缘）；
       // stub / 无 DOM 环境回落到近似几何（360 逻辑坐标），保住测试通道与降级路径。
       const props = item.props ?? {}
+      const resolveText = (value) => (value === undefined || value === null ? '' : String(value))
       const kids = Array.isArray(item.children) ? item.children : []
       const lanes = []
       const notes = []
       const edges = []
-      let implicit = null
+      const freeNodes = []
+      // 先过滤子树：隐藏 node 不进入布局/布线，引用隐藏 node 的 edge 一并跳过，
+      // 隐藏 lane 若仍有可见 node 则忽略其分组（节点并入首列），无可见节点的列整列去掉。
       for (const child of kids) {
-        if (child.type === 'lane') lanes.push(child)
-        else if (child.type === 'node') {
-          if (implicit === null) { implicit = { props: {}, children: [] }; lanes.unshift(implicit) }
-          implicit.children.push(child)
-        } else if (child.type === 'edge') edges.push(child)
-        else notes.push(child)
+        if (child.type === 'lane') {
+          const laneVisible = isItemVisible(child, resolve)
+          const laneKids = Array.isArray(child.children) ? child.children : []
+          const visibleNodes = laneKids
+            .filter((laneChild) => laneChild?.type === 'node' && isItemVisible(laneChild, resolve))
+            .map((laneChild) => ({
+              ...laneChild,
+              props: {
+                ...(laneChild.props ?? {}),
+                label: resolveText(resolve(laneChild.props?.label)),
+                note: resolveText(resolve(laneChild.props?.note)),
+              },
+            }))
+          if (!laneVisible) {
+            freeNodes.push(...visibleNodes)
+            continue
+          }
+          if (visibleNodes.length === 0) continue
+          lanes.push({ ...child, props: { ...(child.props ?? {}), label: resolveText(resolve(child.props?.label)) }, children: visibleNodes })
+        } else if (child.type === 'node') {
+          if (!isItemVisible(child, resolve)) continue
+          freeNodes.push({
+            ...child,
+            props: {
+              ...(child.props ?? {}),
+              label: resolveText(resolve(child.props?.label)),
+              note: resolveText(resolve(child.props?.note)),
+            },
+          })
+        } else if (child.type === 'edge') {
+          if (!isItemVisible(child, resolve)) continue
+          edges.push({ ...child, props: { ...(child.props ?? {}), label: resolveText(resolve(child.props?.label)) } })
+        } else notes.push(child)
       }
+      if (freeNodes.length > 0) lanes.unshift({ props: {}, children: freeNodes })
+      const visibleIds = new Set()
+      for (const lane of lanes) for (const laneChild of lane.children) {
+        const laneId = laneChild.props?.id
+        if (typeof laneId === 'string') visibleIds.add(laneId)
+      }
+      const liveEdges = edges.filter((edge) => visibleIds.has(edge.props?.from) && visibleIds.has(edge.props?.to))
       const laneCount = Math.max(1, lanes.length)
       const PILL = 44
       const GAP = 14
@@ -1687,7 +2309,7 @@ window.__ModuleLoader__.load({
       const rowOf = {}
       slots.forEach((laneNodes, li) => laneNodes.forEach((node, si) => { laneOf[node.props?.id] = li; rowOf[node.props?.id] = si }))
       // 反向边（或多列同行正向跳跃）统一走底部弧线：静态判定即可，提前留出底部空间
-      const needsDrop = edges.some((edge) => {
+      const needsDrop = liveEdges.some((edge) => {
         const f = laneOf[edge.props?.from]
         const t = laneOf[edge.props?.to]
         if (f === undefined || t === undefined) return false
@@ -1706,7 +2328,7 @@ window.__ModuleLoader__.load({
           const r = el.getBoundingClientRect()
           anchors[el.getAttribute('data-iui-diagram-node')] = { cx: r.left - rootRect.left + r.width / 2, cy: r.top - rootRect.top + r.height / 2, halfW: r.width / 2, halfH: r.height / 2 }
         }
-        const { arcs } = DIAGRAM_GEO.diagramEdges(edges, anchors, rootRect.width / laneCount)
+        const { arcs } = DIAGRAM_GEO.diagramEdges(liveEdges, anchors, rootRect.width / laneCount)
         // spacer 已在流内，rootRect.height 自带底部弧线空间
         const next = { width: rootRect.width, height: rootRect.height, arcs }
         const signature = JSON.stringify(next)
@@ -1715,21 +2337,22 @@ window.__ModuleLoader__.load({
       const rowsHeight = HEAD + maxSlots * PILL + Math.max(0, maxSlots - 1) * GAP + (needsDrop ? 48 : 0)
       const measured = geo !== null
       const anchors = measured ? null : DIAGRAM_GEO.diagramFallbackAnchors(slots, laneCount, HEAD, PILL, GAP)
-      const layout = measured ? { arcs: geo.arcs } : DIAGRAM_GEO.diagramEdges(edges, anchors, 360 / laneCount)
+      const layout = measured ? { arcs: geo.arcs } : DIAGRAM_GEO.diagramEdges(liveEdges, anchors, 360 / laneCount)
       const svgWidth = measured ? geo.width : 360
       const svgHeight = measured ? geo.height : rowsHeight
-      const markerId = 'miopiik-arrow-' + String(key).replace(/[^A-Za-z0-9_-]/gu, '')
+      const markerId = 'miopiik-arrow-' + String(item.id ?? 'diagram').replace(/[^A-Za-z0-9_-]/gu, '')
       const markerSize = measured ? 7 : 6
-      const titleText = String(props.title ?? '')
+      const titleText = resolveText(resolve(props.title))
+      const sourceText = resolveText(resolve(props.source))
       return h(
         'div',
-        { key, className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
+        { className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
         h('div', { ref: wrapRef, style: { position: 'relative', width: '100%' } },
           h('svg', {
             viewBox: `0 0 ${svgWidth} ${svgHeight}`,
             preserveAspectRatio: measured ? undefined : 'none',
             role: 'img',
-            'aria-label': titleText === '' ? `泳道图，${edges.length} 条连线` : `${titleText}，${edges.length} 条连线`,
+            'aria-label': titleText === '' ? `泳道图，${liveEdges.length} 条连线` : `${titleText}，${liveEdges.length} 条连线`,
             style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' },
           },
             h('defs', { key: 'defs' },
@@ -1765,10 +2388,127 @@ window.__ModuleLoader__.load({
           ),
           needsDrop ? h('div', { key: 'drop', style: { height: 48 } }) : null,
         ),
-        titleText !== '' || String(props.source ?? '') !== '' ? h('div', { style: { fontSize: 10, color: C.muted } }, [titleText, props.source ? `来源：${String(props.source)}` : ''].filter((part) => part !== '').join(' · ')) : null,
-        ...notes.map((note, index) => h('div', { key: `note-${index}`, style: { fontSize: 10, color: C.muted } }, String(note.props?.text ?? ''))),
+        titleText !== '' || sourceText !== '' ? h('div', { style: { fontSize: 10, color: C.muted } }, [titleText, sourceText !== '' ? `来源：${sourceText}` : ''].filter((part) => part !== '').join(' · ')) : null,
+        ...notes.map((note, index) => h('div', { key: `note-${index}`, style: { fontSize: 10, color: C.muted } }, resolveText(resolve(note.props?.text)))),
       )
     }
+
+    /** derive 名字：点号路径，段首字母/下划线；保留名段禁止（渲染层按 AST 校验规则再守一道）。 */
+    const DERIVE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u
+    const RESERVED_STATE_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
+    function isRecordValue(value) {
+      return value !== null && typeof value === 'object' && !Array.isArray(value)
+    }
+    // 表达式引擎由构建器以 IUI_EXPR 闭包注入；缺失或接口异常时 derive 全部解析为 undefined（组件显示兜底），不抛异常。
+    const EXPR_ENGINE = (() => {
+      try {
+        return typeof IUI_EXPR === 'undefined' ? null : IUI_EXPR
+      } catch {
+        return null
+      }
+    })()
+    const EXPR_CACHE = new Map()
+    const DERIVE_MAX = Number.isInteger(IUI_AST.LIMITS?.derive) ? IUI_AST.LIMITS.derive : 64
+
+    function compileDeriveExpr(source) {
+      const key = String(source)
+      if (EXPR_CACHE.has(key)) return EXPR_CACHE.get(key)
+      let compiled = null
+      try {
+        compiled = EXPR_ENGINE === null ? null : EXPR_ENGINE.compileExpr(source)
+      } catch {
+        compiled = null
+      }
+      if (compiled === null || typeof compiled !== 'object' || compiled.ok !== true) {
+        compiled = { ok: false, error: typeof compiled?.error === 'string' ? compiled.error : '表达式不可用' }
+      }
+      // 有界缓存：同一 source 重复出现不重复编译（引擎自身缓存之外再守一道）
+      if (EXPR_CACHE.size >= 256) EXPR_CACHE.delete(EXPR_CACHE.keys().next().value)
+      EXPR_CACHE.set(key, compiled)
+      return compiled
+    }
+
+    /** derive 结果必须是 JSON-safe 值（有限数/字符串/布尔/null/数组/纯对象），否则该派生值按 undefined 处理。 */
+    function safeDerivedValue(value, depth) {
+      if (depth > 8) return null
+      if (value === null) return { ok: true, value }
+      const kind = typeof value
+      if (kind === 'boolean') return { ok: true, value }
+      if (kind === 'number') return Number.isFinite(value) ? { ok: true, value } : null
+      if (kind === 'string') return value.length <= IUI_AST.LIMITS.text ? { ok: true, value } : null
+      if (kind !== 'object') return null
+      if (Array.isArray(value)) {
+        if (value.length > 128) return null
+        const items = []
+        for (const entry of value) {
+          const safe = safeDerivedValue(entry, depth + 1)
+          if (safe === null) return null
+          items.push(safe.value)
+        }
+        return { ok: true, value: items }
+      }
+      const keys = Object.keys(value)
+      if (keys.length > 64) return null
+      const record = {}
+      for (const key of keys) {
+        if (key.length > 64 || RESERVED_STATE_KEYS.has(key)) return null
+        const safe = safeDerivedValue(value[key], depth + 1)
+        if (safe === null) return null
+        record[key] = safe.value
+      }
+      return { ok: true, value: record }
+    }
+
+    /** DFS（文档顺序）收集 derive 节点。 */
+    function collectDeriveNodes(root) {
+      const found = []
+      const walk = (item) => {
+        if (item === null || typeof item !== 'object') return
+        if (item.type === 'derive') found.push(item)
+        const kids = Array.isArray(item.children) ? item.children : []
+        for (const kid of kids) walk(kid)
+      }
+      walk(root)
+      return found
+    }
+
+    /** 依次求值派生链，返回「原始 state + 派生值」合并后的只读 scope.state（不修改 React state）。 */
+    function deriveState(root, baseState) {
+      const nodes = collectDeriveNodes(root)
+      if (nodes.length === 0) return baseState
+      let merged = baseState
+      const seen = new Set()
+      const total = Math.min(nodes.length, DERIVE_MAX)
+      for (let index = 0; index < total; index += 1) {
+        const node = nodes[index]
+        const props = node.props ?? {}
+        const name = props.name
+        if (typeof name !== 'string' || name === '' || name.length > 200 || !DERIVE_NAME.test(name)) continue
+        if (name.split('.').some((part) => RESERVED_STATE_KEYS.has(part))) continue
+        if (seen.has(name)) continue
+        seen.add(name)
+        let value
+        if (EXPR_ENGINE !== null && typeof props.expr === 'string') {
+          const compiled = compileDeriveExpr(props.expr)
+          if (compiled.ok) {
+            let evaluated = null
+            try {
+              evaluated = EXPR_ENGINE.evaluateExpr(compiled, { state: merged, data: {} })
+            } catch {
+              evaluated = null
+            }
+            if (evaluated !== null && typeof evaluated === 'object' && evaluated.ok === true) {
+              const safe = safeDerivedValue(evaluated.value, 0)
+              if (safe !== null) value = safe.value
+            }
+          }
+        }
+        // 失败/非法值同样写入 undefined：依赖它的后续 derive 与组件都能读到「不可用」，不会回落到原始 state 的旧值。
+        merged = writeStatePath(merged, name, value)
+      }
+      return merged
+    }
+
 
     function IuiSheet({ sample, format, degraded, streaming }) {
       const checked = IUI_AST.validateAst(sample)
@@ -1795,55 +2535,58 @@ window.__ModuleLoader__.load({
         )
       }
       const ast = checked.ast
-      const scope = { state, data: {} }
+      // 派生状态：每次渲染按 DFS 顺序求值 derive 链，与原始 state 合并成统一 scope；
+      // 之后所有 $state.* 读取（控件 + 全部组件）都看到派生结果（跨组件同源）。
+      const scopedState = deriveState(ast.root, state)
+      const scope = { state: scopedState, data: {} }
       const resolve = (value) => IUI_AST.resolveValue(value, scope)
+      const textOf = (value) => (value === undefined || value === null ? '' : String(value))
       const node = (item, key) => {
         const props = item.props ?? {}
         // when/is：本地显隐（可选 is 做等值切换）。只读 $state，不执行任何表达式。
-        if (props.when !== undefined) {
-          const actual = resolve(props.when)
-          const visible = props.is === undefined ? Boolean(actual) : sameValue(actual, resolve(props.is))
-          if (!visible) return null
-        }
+        if (!isItemVisible(item, resolve)) return null
+        if (item.type === 'derive') return null
         if (item.type === 'text') {
-          return h('div', { key, style: { fontSize: 12, lineHeight: '18px', color: C.text } }, String(resolve(props.text) ?? ''))
+          return h('div', { key, style: { fontSize: 12, lineHeight: '18px', color: C.text } }, textOf(resolve(props.text)))
         }
         if (item.type === 'divider') {
-          if (!props.label) return h('hr', { key, 'data-iui-divider': '1', style: { border: 'none', borderTop: `1px solid ${C.border}`, width: '100%' } })
+          const label = resolve(props.label)
+          if (!label) return h('hr', { key, 'data-iui-divider': '1', style: { border: 'none', borderTop: `1px solid ${C.border}`, width: '100%' } })
           return h(
             'div',
             { key, 'data-iui-divider': '1', style: { display: 'flex', alignItems: 'center', gap: 8, width: '100%' } },
-            h('span', { style: { fontSize: 11, color: C.muted, whiteSpace: 'nowrap' } }, String(props.label)),
+            h('span', { style: { fontSize: 11, color: C.muted, whiteSpace: 'nowrap' } }, textOf(label)),
             h('span', { style: { flex: '1 1 auto', borderTop: `1px solid ${C.border}` } }),
           )
         }
         if (item.type === 'metric') {
           const tone = TONE_COLORS[props.tone] ?? [null, C.muted]
+          const label = resolve(props.label)
           const value = resolve(props.value)
+          const unit = resolve(props.unit)
           const delta = resolve(props.delta)
+          const described = resolve(props.caption ?? props.note)
           return h(
             'div',
-            { key, 'data-iui-metric': String(props.label ?? ''), style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 0' } },
-            h('div', { style: { fontSize: 11, color: C.muted } }, String(props.label ?? '')),
-            h('div', { style: { fontSize: 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } }, `${value === undefined || value === null ? '—' : String(value)}${resolve(props.unit) === undefined || resolve(props.unit) === null ? '' : String(resolve(props.unit))}`),
+            { key, 'data-iui-metric': textOf(label), style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 0' } },
+            h('div', { style: { fontSize: 11, color: C.muted } }, textOf(label)),
+            h('div', { style: { fontSize: 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } }, `${value === undefined || value === null ? '—' : String(value)}${textOf(unit)}`),
             delta !== undefined && delta !== null && String(delta) !== ''
               ? h('div', { 'data-iui-delta': String(delta), style: { fontSize: 11, color: String(delta).startsWith('-') ? '#d1242f' : '#2ea043' } }, String(delta))
               : null,
-            (() => {
-              const caption = resolve(props.caption ?? props.note)
-              return caption === undefined || caption === null || String(caption) === '' ? null : h('div', { style: { fontSize: 10, color: C.muted } }, String(caption))
-            })(),
+            textOf(described) === '' ? null : h('div', { style: { fontSize: 10, color: C.muted } }, textOf(described)),
           )
         }
         if (item.type === 'segmented') {
+          const label = resolve(props.label)
           const binding = IUI_AST.readBinding(props.bind)
-          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const options = Array.isArray(props.options) ? props.options : []
           const selectedIndex = options.findIndex((option) => sameValue(option?.value, current))
           return h(
             'div',
-            { key, role: 'group', 'aria-label': props.label === undefined ? undefined : String(props.label), style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
-            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            { key, role: 'group', 'aria-label': label ? textOf(label) : undefined, style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+            label ? h('span', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
             ...options.map((option, index) =>
               h(
                 'button',
@@ -1873,13 +2616,15 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'toggle') {
+          const label = resolve(props.label)
           const binding = IUI_AST.readBinding(props.bind)
-          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const on = current === true || current === 'true'
+          const ariaLabel = label ? textOf(label) : String(props.bind ?? '')
           return h(
             'div',
             { key, 'data-iui-toggle': on ? 'on' : 'off', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
-            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            label ? h('span', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
             h(
               'button',
               {
@@ -1888,7 +2633,7 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 role: 'switch',
                 'aria-checked': on,
-                'aria-label': String(props.label ?? props.bind ?? ''),
+                'aria-label': ariaLabel,
                 onClick: () => {
                   if (binding.scope !== 'state') return
                   setState((prev) => writeStatePath(prev, binding.key, !on))
@@ -1915,18 +2660,20 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'slider') {
+          const label = resolve(props.label)
+          const unit = resolve(props.unit)
           const binding = IUI_AST.readBinding(props.bind)
           const min = typeof props.min === 'number' && Number.isFinite(props.min) ? props.min : 0
           const max = typeof props.max === 'number' && Number.isFinite(props.max) && props.max > min ? props.max : Math.max(100, min + 1)
           const stepSize = typeof props.step === 'number' && Number.isFinite(props.step) && props.step > 0 ? props.step : 1
-          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const raw = Number(current)
           const value = Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : min
-          const unit = resolve(props.unit)
+          const ariaLabel = label ? textOf(label) : String(props.bind ?? '')
           return h(
             'div',
             { key, 'data-iui-slider': String(value), style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            label ? h('span', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
             h('input', {
               key: `${key}-ctl`,
               type: 'range',
@@ -1934,7 +2681,7 @@ window.__ModuleLoader__.load({
               max,
               step: stepSize,
               value,
-              'aria-label': String(props.label ?? props.bind ?? ''),
+              'aria-label': ariaLabel,
               onChange: (event) => {
                 if (binding.scope !== 'state') return
                 const next = Number(event.target.value)
@@ -1942,23 +2689,25 @@ window.__ModuleLoader__.load({
               },
               style: { flex: '1 1 120px', minWidth: 120, accentColor: C.brand },
             }),
-            h('span', { style: { fontSize: 11, fontVariantNumeric: 'tabular-nums', color: C.text } }, `${value}${unit === undefined || unit === null || String(unit) === '' ? '' : String(unit)}`),
+            h('span', { style: { fontSize: 11, fontVariantNumeric: 'tabular-nums', color: C.text } }, `${value}${textOf(unit)}`),
           )
         }
         if (item.type === 'input') {
+          const label = resolve(props.label)
           const binding = IUI_AST.readBinding(props.bind)
-          const current = binding.scope === 'state' ? readStatePath(state, binding.key) : undefined
+          const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
+          const ariaLabel = label ? textOf(label) : String(props.bind ?? '')
           return h(
             'div',
             { key, 'data-iui-input': '1', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
-            props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            label ? h('span', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
             h('input', {
               key: `${key}-ctl`,
               type: 'text',
               value: current === undefined || current === null ? '' : String(current),
               maxLength: IUI_AST.LIMITS.text,
               placeholder: String(props.placeholder ?? ''),
-              'aria-label': String(props.label ?? props.bind ?? ''),
+              'aria-label': ariaLabel,
               onChange: (event) => {
                 if (binding.scope !== 'state') return
                 setState((prev) => writeStatePath(prev, binding.key, event.target.value))
@@ -1973,6 +2722,8 @@ window.__ModuleLoader__.load({
             { key, className: 'miopiik-enter', 'data-iui-steps': String(item.children.length), style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
             ...item.children.map((child, index) => {
               const cp = child.props ?? {}
+              const title = resolve(cp.title)
+              const note = resolve(cp.note)
               const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
               const glyph = { success: '✓', warning: '!', danger: '✕' }[cp.tone] ?? String(index + 1)
               const last = index === item.children.length - 1
@@ -1988,8 +2739,8 @@ window.__ModuleLoader__.load({
                 h(
                   'div',
                   { key: 'body', style: { paddingBottom: last ? 0 : 10, minWidth: 0 } },
-                  h('div', { key: 'title', style: { fontSize: 12, fontWeight: 600, color: C.text, lineHeight: '18px' } }, String(cp.title ?? '')),
-                  String(cp.note ?? '') !== '' ? h('div', { key: 'note', style: { fontSize: 11, color: C.muted, lineHeight: '17px', marginTop: 1 } }, String(cp.note)) : null,
+                  h('div', { key: 'title', style: { fontSize: 12, fontWeight: 600, color: C.text, lineHeight: '18px' } }, textOf(title)),
+                  textOf(note) === '' ? null : h('div', { key: 'note', style: { fontSize: 11, color: C.muted, lineHeight: '17px', marginTop: 1 } }, textOf(note)),
                 ),
               )
             }),
@@ -2007,20 +2758,17 @@ window.__ModuleLoader__.load({
           const ICON_GLYPH = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }
           const inline = (child, index) => {
             const key2 = `${key}-${index}`
-            if (child.props?.when !== undefined) {
-              const actual = resolve(child.props.when)
-              const visible = child.props.is === undefined ? Boolean(actual) : sameValue(actual, resolve(child.props.is))
-              if (!visible) return null
-            }
-            if (child.type === 'text') return h('span', { key: key2 }, String(child.props.text ?? ''))
+            if (!isItemVisible(child, resolve)) return null
+            if (child.type === 'text') return h('span', { key: key2 }, textOf(resolve(child.props.text)))
             if (child.type === 'badge') {
               const tone = TONE[child.props.tone] ?? TONE.neutral
-              return h('span', { key: key2, 'data-iui-badge': String(child.props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', margin: '0 2px', borderRadius: 999, fontSize: 11, lineHeight: '18px', background: tone.bg, color: tone.fg } }, String(child.props.text ?? ''))
+              return h('span', { key: key2, 'data-iui-badge': String(child.props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', margin: '0 2px', borderRadius: 999, fontSize: 11, lineHeight: '18px', background: tone.bg, color: tone.fg } }, textOf(resolve(child.props.text)))
             }
-            if (child.type === 'emphasis') return h(child.props.strong === false ? 'em' : 'strong', { key: key2 }, String(child.props.text ?? ''))
-            if (child.type === 'code') return h('code', { key: key2, style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, background: 'rgba(127,127,127,0.14)', borderRadius: 4, padding: '0 4px' } }, String(child.props.text ?? ''))
-            if (child.type === 'link') return h('a', { key: key2, href: String(child.props.href ?? ''), target: '_blank', rel: 'noreferrer noopener', style: { color: C.brand, textDecoration: 'underline' } }, String(child.props.text ?? ''))
-            if (child.type === 'icon') return h('span', { key: key2, 'data-iui-icon': String(child.props.name ?? ''), role: 'img', 'aria-label': String(child.props.label ?? child.props.name ?? ''), style: { margin: '0 2px' } }, ICON_GLYPH[child.props.name] ?? '•')
+            if (child.type === 'emphasis') return h(child.props.strong === false ? 'em' : 'strong', { key: key2 }, textOf(resolve(child.props.text)))
+            if (child.type === 'code') return h('code', { key: key2, style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, background: 'rgba(127,127,127,0.14)', borderRadius: 4, padding: '0 4px' } }, textOf(resolve(child.props.text)))
+            // href 不参与绑定解析：链接目标保持静态白名单，避免状态数据变成任意跳转目标。
+            if (child.type === 'link') return h('a', { key: key2, href: String(child.props.href ?? ''), target: '_blank', rel: 'noreferrer noopener', style: { color: C.brand, textDecoration: 'underline' } }, textOf(resolve(child.props.text)))
+            if (child.type === 'icon') return h('span', { key: key2, 'data-iui-icon': String(child.props.name ?? ''), role: 'img', 'aria-label': textOf(resolve(child.props.label ?? child.props.name)), style: { margin: '0 2px' } }, ICON_GLYPH[child.props.name] ?? '•')
             return h('span', { key: key2 }, '')
           }
           return h(
@@ -2031,22 +2779,25 @@ window.__ModuleLoader__.load({
         }
         if (item.type === 'badge') {
           const tone = TONE_COLORS[props.tone] ?? TONE_COLORS.neutral
-          return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, String(props.text ?? ''))
+          return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(resolve(props.text)))
         }
-        if (item.type === 'diagram') return h(IuiDiagram, { key, item })
+        if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve })
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')
           const color = (TONE_COLORS[tone] ?? TONE_COLORS.neutral)[1]
+          const title = resolve(props.title)
+          const text = resolve(props.text)
           const kids = item.children.map((child, index) => node(child, `${key}-${index}`))
           return h(
             'div',
             { key, 'data-iui-callout': tone, style: { display: 'flex', flexDirection: 'column', gap: 6, borderLeft: `3px solid ${color}`, background: 'rgba(127,127,127,0.07)', borderRadius: 6, padding: '8px 10px' } },
-            props.title ? h('div', { style: { fontSize: 12, fontWeight: 600, color } }, String(props.title)) : null,
-            String(props.text ?? '') !== '' ? h('div', { style: { fontSize: 12, lineHeight: '18px', color: C.text } }, String(props.text)) : null,
+            title ? h('div', { style: { fontSize: 12, fontWeight: 600, color } }, textOf(title)) : null,
+            textOf(text) === '' ? null : h('div', { style: { fontSize: 12, lineHeight: '18px', color: C.text } }, textOf(text)),
             ...kids,
           )
         }
         if (item.type === 'progress') {
+          const label = resolve(props.label)
           const shown = resolve(props.value)
           const numeric = Number(shown)
           const max = Number(props.max ?? 1)
@@ -2054,24 +2805,26 @@ window.__ModuleLoader__.load({
           return h(
             'div',
             { key, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-            props.label ? h('div', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
+            label ? h('div', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
             h('div', { role: 'progressbar', 'aria-valuenow': String(Math.round(ratio * 100)), 'aria-valuemin': '0', 'aria-valuemax': '100', style: { height: 6, borderRadius: 999, background: 'rgba(127,127,127,0.18)', overflow: 'hidden' } },
               h('div', { style: { width: `${ratio * 100}%`, height: '100%', background: (TONE_COLORS[props.tone] ?? [null, C.brand])[1], transition: 'width .18s ease' } })),
           )
         }
         if (item.type === 'empty') {
           const glyph = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }
+          const title = resolve(props.title)
+          const description = resolve(props.description ?? props.text)
           return h(
             'div',
             { key, 'data-iui-empty': '1', style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, textAlign: 'center', padding: '14px 0', color: C.muted } },
             props.icon ? h('div', { style: { fontSize: 18, lineHeight: '22px' } }, glyph[props.icon] ?? '•') : null,
-            props.title ? h('div', { style: { fontSize: 12, fontWeight: 600, color: C.text } }, String(props.title)) : null,
-            String(props.description ?? props.text ?? '') !== ''
-              ? h('div', { style: { fontSize: 11, lineHeight: '17px', maxWidth: 320 } }, String(props.description ?? props.text ?? ''))
-              : null,
+            title ? h('div', { style: { fontSize: 12, fontWeight: 600, color: C.text } }, textOf(title)) : null,
+            textOf(description) === '' ? null : h('div', { style: { fontSize: 11, lineHeight: '17px', maxWidth: 320 } }, textOf(description)),
           )
         }
         if (item.type === 'card') {
+          const title = resolve(props.title)
+          const subtitle = resolve(props.subtitle)
           const kids = item.children.map((child, index) => node(child, `${key}-${index}`))
           const span = Number(props.span ?? 1)
           return h(
@@ -2090,8 +2843,8 @@ window.__ModuleLoader__.load({
                 gridColumn: Number.isFinite(span) && span > 1 ? `span ${Math.min(3, span)}` : undefined,
               },
             },
-            props.title ? h('div', { style: { fontSize: 12, fontWeight: 600, color: C.text } }, String(props.title)) : null,
-            props.subtitle ? h('div', { style: { fontSize: 10, color: C.muted } }, String(props.subtitle)) : null,
+            title ? h('div', { style: { fontSize: 12, fontWeight: 600, color: C.text } }, textOf(title)) : null,
+            subtitle ? h('div', { style: { fontSize: 10, color: C.muted } }, textOf(subtitle)) : null,
             ...kids,
           )
         }
@@ -2115,15 +2868,46 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'table') {
-          const normalized = IUI_AST.tableMatrix(props)
+          // columns/rows/caption 都允许绑定：先 resolve，再**重新执行**静态校验器同款预算。
+          // 绑定值来自派生状态，不能因为绕过 validateAst 的静态检查就放宽 12 列 / 200 行 / 体积预算。
+          const resolvedColumns = resolve(props.columns)
+          const resolvedRows = resolve(props.rows)
+          const columnsValid = Array.isArray(resolvedColumns)
+            && resolvedColumns.length >= 1
+            && resolvedColumns.length <= 12
+            && resolvedColumns.every((column) => typeof column === 'string'
+              || (isRecordValue(column) && typeof column.label === 'string' && (column.key === undefined
+                || (typeof column.key === 'string' && !RESERVED_STATE_KEYS.has(column.key) && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u.test(column.key)))))
+          const rowsValid = Array.isArray(resolvedRows)
+            && resolvedRows.length <= 200
+            && resolvedRows.every((row) => Array.isArray(row) || isRecordValue(row))
+          let withinBudget = false
+          if (columnsValid && rowsValid) {
+            try {
+              withinBudget = JSON.stringify({ columns: resolvedColumns, rows: resolvedRows }).length <= IUI_AST.LIMITS.stateBytes
+            } catch {
+              withinBudget = false
+            }
+          }
+          if (!columnsValid || !rowsValid || !withinBudget) {
+            return h('div', { key, 'data-iui-table-invalid': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '10px 0' } }, '表格数据超出预算或格式不合法')
+          }
+          const normalized = IUI_AST.tableMatrix({ columns: resolvedColumns, rows: resolvedRows })
           const columns = normalized.columns
+          // 单元格若被绑定成对象/数组，String() 会渲染成 [object Object]：降级为 '—'（不猜测结构）
+          const cellText = (cell) => (cell === null || cell === undefined ? '' : typeof cell === 'object' ? '—' : String(cell))
+          if (columns.length === 0) {
+            return h('div', { key, 'data-iui-table-empty': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '10px 0' } }, '暂无有效表格数据')
+          }
           // filter：本地文本过滤（大小写不敏感、全字段匹配）。只读绑定值，不过滤即全量。
-          const query = props.filter === undefined ? '' : String(resolve(props.filter) ?? '').trim().toLowerCase()
+          const filterValue = resolve(props.filter)
+          const query = filterValue === undefined || filterValue === null ? '' : String(filterValue).trim().toLowerCase()
           const allRows = normalized.rows
           const filtered = query === '' ? allRows : allRows.filter((row) => row.some((cell) => String(cell ?? '').toLowerCase().includes(query)))
           const rows = filtered.length === 0 && query !== '' ? [columns.map((_, cellIndex) => (cellIndex === 0 ? '无匹配项' : ''))] : filtered
+          const captionValue = resolve(props.caption)
           const captionText = [
-            props.caption ? String(props.caption) : '',
+            captionValue ? String(captionValue) : '',
             query !== '' ? `已过滤 ${filtered.length}/${allRows.length} 行` : '',
           ].filter((part) => part !== '').join(' · ')
           return h(
@@ -2151,7 +2935,7 @@ window.__ModuleLoader__.load({
                     'tr',
                     { key: `r${rowIndex}` },
                     ...columns.map((_, cellIndex) =>
-                      h('td', { key: `c${cellIndex}`, style: { padding: '6px 8px', borderBottom: `1px solid ${C.border}` } }, String(Array.isArray(row) ? (row[cellIndex] ?? '') : '')),
+                      h('td', { key: `c${cellIndex}`, style: { padding: '6px 8px', borderBottom: `1px solid ${C.border}` } }, cellText(Array.isArray(row) ? row[cellIndex] : '')),
                     ),
                   ),
                 ),
@@ -2179,15 +2963,18 @@ window.__ModuleLoader__.load({
           const series = resolve(props.series)
           const rows = IUI_AST.chartMatrix(series)
           const kind = String(props.kind ?? 'bar')
+          const source = resolve(props.source)
           return h(
             'div',
             { key, className: 'miopiik-enter', 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
             rows === null
               ? h('div', { 'data-iui-chart-empty': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '18px 0' } }, '暂无有效图表数据')
               : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' || kind === 'donut' ? kind : 'bar', chartSummary(rows, kind === 'line' || kind === 'donut' ? kind : 'bar')),
-            props.source ? h('div', { style: { fontSize: 10, color: C.muted } }, `来源：${String(props.source)}`) : null,
+            textOf(source) === '' ? null : h('div', { style: { fontSize: 10, color: C.muted } }, `来源：${textOf(source)}`),
           )
         }
+        if (item.type === 'details') return h(IuiDetails, { key, item, render: node, resolve })
+        if (item.type === 'button') return h(IuiCopyAction, { key, item, resolve })
         return null
       }
       return h(
@@ -2199,6 +2986,97 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** details 折叠容器：展开状态是组件本地 React state——IuiSheet 重渲染（切场景/改滑杆）不会重置。 */
+    function IuiDetails({ item, render, resolve }) {
+      const [open, setOpen] = React.useState(false)
+      const props = item.props ?? {}
+      const rawLabel = resolve === undefined ? props.label : resolve(props.label)
+      const label = rawLabel === undefined || rawLabel === null || String(rawLabel) === '' ? '详情' : String(rawLabel)
+      const bodyId = 'iui-details-' + String(item.id ?? 'root').replace(/[^A-Za-z0-9_-]/gu, '')
+      const children = Array.isArray(item.children) ? item.children : []
+      return h(
+        'div',
+        { 'data-iui-details': open ? 'open' : 'closed', style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
+        h('button', {
+          type: 'button',
+          className: 'miopiik-ctl',
+          'aria-expanded': open ? 'true' : 'false',
+          'aria-controls': bodyId,
+          onClick: () => setOpen((value) => !value),
+          style: { alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', color: C.text, padding: '3px 9px', fontSize: 12, lineHeight: '18px', cursor: 'pointer' },
+        }, `${open ? '▾' : '▸'} ${label}`),
+        open
+          ? h('div', { id: bodyId, 'data-iui-details-body': '1', style: { display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 2, minWidth: 0 } }, ...children.map((child, index) => render(child, `${item.id ?? 'details'}-${index}`)))
+          : null,
+      )
+    }
+
+    /** button：唯一宿主授权动作 copy（仅用户点击后写剪贴板）；状态本地，role=status 播报。 */
+    function IuiCopyAction({ item, resolve }) {
+      const [status, setStatus] = React.useState('idle')
+      const props = item.props ?? {}
+      const action = props.action
+      const rawLabel = resolve === undefined ? props.label : resolve(props.label)
+      const label = rawLabel === undefined || rawLabel === null || String(rawLabel) === '' ? '复制' : String(rawLabel)
+      const done = resolve === undefined ? props.done : resolve(props.done)
+      const unsupported = resolve === undefined ? props.unsupported : resolve(props.unsupported)
+      const statusText = status === 'ok'
+        ? (done === undefined || done === null || String(done) === '' ? '已复制' : String(done))
+        : status === 'unsupported'
+          ? (unsupported === undefined || unsupported === null || String(unsupported) === '' ? '当前不支持此动作' : String(unsupported))
+          : ''
+      const copy = () => {
+        // 只实现 copy：任何其他 action 一律按不支持处理（AST 校验器已先拒绝）。
+        if (action !== 'copy') {
+          setStatus('unsupported')
+          return
+        }
+        let payload
+        try {
+          const value = resolve(props.value)
+          payload = typeof value === 'string' ? value : JSON.stringify(value)
+          if (typeof payload !== 'string') throw new Error('无法序列化为字符串')
+          // 契约预算对绑定载荷同样生效：超限直接按不支持处理，不写剪贴板（done 只是 UI 文案，不拼 payload）
+          if (payload.length > IUI_AST.LIMITS.stateBytes) throw new Error('复制载荷超出预算')
+        } catch {
+          setStatus('unsupported')
+          return
+        }
+        let clipboard = null
+        try {
+          clipboard = typeof navigator === 'undefined' ? null : navigator.clipboard
+        } catch {
+          clipboard = null
+        }
+        if (clipboard === null || clipboard === undefined || typeof clipboard.writeText !== 'function') {
+          setStatus('unsupported')
+          return
+        }
+        try {
+          Promise.resolve(clipboard.writeText(payload)).then(() => setStatus('ok'), () => setStatus('unsupported'))
+        } catch {
+          setStatus('unsupported')
+        }
+      }
+      const marked = status === 'ok' || status === 'unsupported' ? status : undefined
+      return h(
+        'div',
+        { 'data-iui-action-wrap': '1', style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 } },
+        h('button', {
+          type: 'button',
+          className: 'miopiik-ctl',
+          'data-iui-action': 'copy',
+          onClick: copy,
+          style: { border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', color: C.text, padding: '3px 10px', fontSize: 12, lineHeight: '18px', cursor: 'pointer' },
+        }, label),
+        h('span', {
+          role: 'status',
+          'aria-live': 'polite',
+          'data-iui-action-status': marked,
+          style: { fontSize: 11, lineHeight: '16px', minHeight: 16, color: status === 'unsupported' ? C.muted : TONE_COLORS.success[1] },
+        }, statusText),
+      )
+    }
     function readStatePath(source, path) {
       let cursor = source
       for (const part of String(path).split('.')) {

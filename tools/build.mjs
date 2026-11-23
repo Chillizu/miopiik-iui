@@ -7,10 +7,15 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (file) => readFileSync(join(root, file), 'utf8')
 
-function closure(file, name, names) {
-  const source = read('shared/' + file).replace(/^export\s+(const|function|let)\s/gmu, '$1 ').trim()
+function closure(file, name, names, inject = '') {
+  const source = read('shared/' + file)
+    // 源文件用真 ESM 便于 node --test 直接 import；bundle 里由调用方以注入行完成解构
+    .replace(/^import\s+[^\n]*\n/gmu, '')
+    .replace(/^export\s+(const|function|let)\s/gmu, '$1 ')
+    .trim()
   return [
     '    const ' + name + ' = (() => {',
+    ...(inject === '' ? [] : ['      ' + inject]),
     source.split('\n').map((line) => '      ' + line).join('\n'),
     '      return { ' + names.join(', ') + ' }',
     '    })()',
@@ -36,7 +41,8 @@ export function build() {
     "      idle: 'var(--dsw-alias-state-idle-primary, #999)',",
     "      error: 'var(--dsw-alias-state-error-primary, #d1242f)',",
     '    }',
-    closure('iui-ast.js', 'IUI_AST', ['IUI_VERSION', 'REGISTRY', 'LIMITS', 'INLINE_TYPES', 'TONES', 'ICONS', 'readBinding', 'resolveValue', 'validateAst', 'tableMatrix', 'chartMatrix', 'degradeToText']),
+    closure('iui-expr.js', 'IUI_EXPR', ['EXPR_LIMITS', 'compileExpr', 'evaluateExpr']),
+    closure('iui-ast.js', 'IUI_AST', ['IUI_VERSION', 'REGISTRY', 'LIMITS', 'INLINE_TYPES', 'TONES', 'ICONS', 'readBinding', 'resolveValue', 'validateAst', 'tableMatrix', 'chartMatrix', 'degradeToText'], 'const { EXPR_LIMITS, compileExpr } = IUI_EXPR'),
     closure('miopiik-ml.js', 'MIOPIIK_ML', ['ML_VERSION', 'ML_TAGS', 'parseMiopiikMl']),
     closure('markdown-segments.js', 'MARKDOWN_SEGMENTS', ['INLINE_TOKEN', 'BLOCK_FENCE', 'splitTrustedMarkdown', 'hasTrustedMarkup', 'splitTrustedBlocks', 'splitStreamingFence', 'graftTrustedInline']),
     closure('diagram-geometry.js', 'DIAGRAM_GEO', ['diagramEdges', 'diagramFallbackAnchors']),

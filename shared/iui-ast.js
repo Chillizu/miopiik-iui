@@ -10,6 +10,8 @@
  *  - 预算（节点数/深度/数据量）在这里统一拒绝，由调用方决定降级策略。
  */
 
+import { EXPR_LIMITS, compileExpr } from './iui-expr.js'
+
 export const IUI_VERSION = 'iui/1'
 
 export const REGISTRY = Object.freeze({
@@ -38,6 +40,10 @@ export const REGISTRY = Object.freeze({
   toggle: { props: { label: 'string?', bind: 'string' }, children: false },
   slider: { props: { label: 'string?', bind: 'string', min: 'number?', max: 'number?', step: 'number?', unit: 'string?' }, children: false },
   input: { props: { label: 'string?', bind: 'string', placeholder: 'string?' }, children: false },
+  // 实验原语：受信派生状态（纯函数表达式，不执行代码）、折叠容器、唯一宿主动作（copy）
+  derive: { props: { name: 'string', expr: 'string' }, children: false },
+  details: { props: { label: 'string', tone: 'string?' }, children: true },
+  button: { props: { label: 'string', action: 'string', value: 'value', done: 'string?', unsupported: 'string?' }, children: false },
   // 过程与清单：steps 只接受 step 子节点（与 paragraph 只接受行内组件同一校验模式）
   steps: { props: {}, children: true },
   step: { props: { title: 'string', note: 'string?', tone: 'string?' }, children: false },
@@ -48,7 +54,7 @@ export const REGISTRY = Object.freeze({
   edge: { props: { from: 'string', to: 'string', label: 'string?', kind: 'string?' }, children: false },
 })
 
-export const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384, diagramLanes: 6, diagramNodes: 24, diagramEdges: 24 })
+export const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384, diagramLanes: 6, diagramNodes: 24, diagramEdges: 24, derive: 64 })
 
 /** 行内原语：paragraph 只接受这些子节点，保证"同一行文字混排"的语义。 */
 export const INLINE_TYPES = Object.freeze(['text', 'badge', 'icon', 'emphasis', 'code', 'link'])
@@ -136,6 +142,8 @@ export function validateAst(input) {
   const fatal = []
   let nodes = 0
   let degraded = 0
+  let deriveCount = 0
+  const deriveNames = new Set()
 
   const failNode = (node, path, reason) => {
     degraded += 1
@@ -175,6 +183,37 @@ export function validateAst(input) {
       if (typeof props.step === 'number' && props.step <= 0) return failNode(node, path, 'slider.step 需为正数')
       if (typeof props.min === 'number' && typeof props.max === 'number' && props.max <= props.min) {
         return failNode(node, path, 'slider.max 需大于 slider.min')
+      }
+    }
+    if (node.type === 'derive') {
+      const name = props.name
+      if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u.test(name) || name.split('.').some((part) => RESERVED.has(part))) {
+        return failNode(node, path, 'derive.name 需要安全的点号路径')
+      }
+      if (deriveNames.has(name)) return failNode(node, path, `derive.name 重复：${name}`)
+      if (deriveCount >= LIMITS.derive) return failNode(node, path, `derive 最多 ${LIMITS.derive} 个`)
+      if (typeof props.expr !== 'string' || props.expr.trim() === '') return failNode(node, path, 'derive.expr 必填')
+      if (props.expr.length > EXPR_LIMITS.chars) return failNode(node, path, `derive.expr 超过 ${EXPR_LIMITS.chars} 字符`)
+      const compiled = compileExpr(props.expr)
+      if (compiled.ok === false) return failNode(node, path, `derive.expr 不合法：${compiled.error}`)
+      deriveNames.add(name)
+      deriveCount += 1
+    }
+    if (node.type === 'details') {
+      if (typeof props.label !== 'string' || props.label.trim() === '') return failNode(node, path, 'details.label 必填')
+      if (props.tone !== undefined && !TONES.includes(props.tone)) return failNode(node, path, `details.tone 只能是 ${TONES.join('/')}`)
+    }
+    if (node.type === 'button') {
+      if (typeof props.label !== 'string' || props.label.trim() === '') return failNode(node, path, 'button.label 必填')
+      // 唯一宿主动作：只允许真实剪贴板写入；其余动作名一律拒绝（不是白名单外的未来开关）
+      if (props.action !== 'copy') return failNode(node, path, 'button.action 只支持 copy')
+      if (props.value === undefined) return failNode(node, path, 'button.value 必填')
+      if (typeof props.value === 'string' && readBinding(props.value).scope === undefined) {
+        if (props.value.length > LIMITS.text) return failNode(node, path, 'button.value 文本超限')
+      } else if (props.value !== null && typeof props.value === 'object') {
+        let bytes = Infinity
+        try { bytes = JSON.stringify(props.value).length } catch { /* 循环输入拒绝 */ }
+        if (bytes > LIMITS.stateBytes) return failNode(node, path, 'button.value 超出容量预算')
       }
     }
     if (node.type === 'steps') {
@@ -268,13 +307,25 @@ export function validateAst(input) {
       return failNode(node, path, `text 超过 ${LIMITS.text} 字`)
     }
     if (node.type === 'table') {
-      if (!Array.isArray(props.columns) || props.columns.length === 0 || props.columns.length > 12) return failNode(node, path, 'table 需要 1–12 列')
-      if (!Array.isArray(props.rows)) return failNode(node, path, 'table 需要 rows 数组')
-      if (props.rows.length > 200) return failNode(node, path, 'table 最多 200 行')
-      const columnsOk = props.columns.every((column) => typeof column === 'string' || (isRecord(column) && typeof column.label === 'string' && (column.key === undefined || (typeof column.key === 'string' && !RESERVED.has(column.key) && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u.test(column.key)))))
-      if (!columnsOk) return failNode(node, path, 'table.columns 需要字符串或 {key,label} 描述符')
-      const rowsOk = props.rows.every((row) => Array.isArray(row) || (row !== null && typeof row === 'object'))
-      if (!rowsOk) return failNode(node, path, 'table.rows 的每一项需要数组或对象')
+      // columns/rows 可为字面量，也可绑定到 $state.*（派生状态）；绑定形态在渲染期解析后再归一。
+      const columnsBound = readBinding(props.columns).scope !== undefined
+      const rowsBound = readBinding(props.rows).scope !== undefined
+      if (!columnsBound && (!Array.isArray(props.columns) || props.columns.length === 0 || props.columns.length > 12)) return failNode(node, path, 'table 需要 1–12 列')
+      if (!rowsBound && !Array.isArray(props.rows)) return failNode(node, path, 'table 需要 rows 数组或 $state 绑定')
+      if (!rowsBound && Array.isArray(props.rows) && props.rows.length > 200) return failNode(node, path, 'table 最多 200 行')
+      if (!columnsBound) {
+        const columnsOk = props.columns.every((column) => typeof column === 'string' || (isRecord(column) && typeof column.label === 'string' && (column.key === undefined || (typeof column.key === 'string' && !RESERVED.has(column.key) && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u.test(column.key)))))
+        if (!columnsOk) return failNode(node, path, 'table.columns 需要字符串或 {key,label} 描述符')
+      }
+      if (!rowsBound) {
+        const rowsOk = props.rows.every((row) => Array.isArray(row) || (row !== null && typeof row === 'object'))
+        if (!rowsOk) return failNode(node, path, 'table.rows 的每一项需要数组或对象')
+      }
+      if (columnsBound || rowsBound || props.caption !== undefined) {
+        // 绑定形态没有静态体积可比，只校验绑定路径安全性（readBinding 已保证）
+        const staticBytes = JSON.stringify({ columns: columnsBound ? undefined : props.columns, rows: rowsBound ? undefined : props.rows }).length
+        if (staticBytes > LIMITS.stateBytes) return failNode(node, path, 'table 数据超出容量预算')
+      }
       if (JSON.stringify(props).length > LIMITS.stateBytes) return failNode(node, path, 'table 数据超出容量预算')
     }
     if (node.type === 'paragraph') {
