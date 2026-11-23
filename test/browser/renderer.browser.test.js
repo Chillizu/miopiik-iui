@@ -151,6 +151,119 @@ const MOT_MECHANICS_AST = {
 }
 
 /**
+ * Round3 自然表达实验（JSON AST，机制可独立于 ml 解析器验证）：
+ * - 根密度三态（inline 无外框 / compact 8px / panel 缺省 12px）；
+ * - 任意节点 weight=primary|secondary|optional → data-iui-weight + 视觉强弱；
+ * - details 展开态由 IuiSheet 按 item.id 持有（条件显隐卸载重挂载后仍保持）；
+ * - copy 真实待复制摘要（data-iui-copy-bytes + 「待复制：JSON · N 字符」），解析失败「—」；
+ * - 文本类属性字面量回退（$state.* 解析失败显示字面量，数值类仍 —）；
+ * - derive 依赖拓扑：前向引用、失败传递、合并 scope 体积预算、校验期环降级。
+ */
+const R3_DENSITY_INLINE = { title: '行内密度', density: 'inline', root: { type: 'text', props: { text: '一句话增强' } } }
+const R3_DENSITY_COMPACT = { title: '紧凑密度', density: 'compact', root: { type: 'text', props: { text: '紧凑卡' } } }
+const R3_DENSITY_PANEL = { title: '面板密度', root: { type: 'text', props: { text: '完整面板（缺省 density）' } } }
+
+const R3_WEIGHT_AST = {
+  title: '语义权重',
+  root: {
+    type: 'column',
+    props: { gap: 8 },
+    children: [
+      { type: 'text', props: { text: '主要结论', weight: 'primary' } },
+      { type: 'card', props: { title: '次要补充', weight: 'secondary' }, children: [{ type: 'text', props: { text: '细节' } }] },
+      { type: 'metric', props: { label: '可选指标', value: 1, weight: 'optional' } },
+    ],
+  },
+}
+
+const R3_DETAILS_AST = {
+  title: '受控折叠',
+  state: { show: true },
+  root: {
+    type: 'column',
+    props: { gap: 6 },
+    children: [
+      { type: 'toggle', props: { label: '显示详情', bind: '$state.show' } },
+      { type: 'details', props: { label: '展开我', when: '$state.show' }, children: [{ type: 'text', props: { text: '内部说明' } }] },
+    ],
+  },
+}
+
+const R3_COPY_VALUE = { a: 1, b: [2, 3] }
+const R3_COPY_BYTES = JSON.stringify(R3_COPY_VALUE).length
+const R3_COPY_AST = {
+  title: '复制加固',
+  state: { obj: R3_COPY_VALUE },
+  root: {
+    type: 'column',
+    props: { gap: 6 },
+    children: [
+      { type: 'button', props: { label: '复制对象', action: 'copy', value: '$state.obj', done: '已复制对象', unsupported: '不支持复制' } },
+      { type: 'button', props: { label: '复制缺失', action: 'copy', value: '$state.missing', unsupported: '不支持复制' } },
+    ],
+  },
+}
+
+const R3_LITERAL_AST = {
+  title: '字面量回退',
+  root: {
+    type: 'column',
+    props: {},
+    children: [
+      { type: 'text', props: { text: '$state.missing' } },
+      { type: 'badge', props: { text: '$data.missing', tone: 'info' } },
+      { type: 'metric', props: { label: '$state.missingLabel', value: '$state.missingValue' } },
+      { type: 'callout', props: { tone: 'info', title: '$state.missingTitle' }, children: [{ type: 'text', props: { text: '$state.missingInner' } }] },
+    ],
+  },
+}
+
+const R3_DERIVE_FWD_AST = {
+  title: '前向引用',
+  root: {
+    type: 'column',
+    props: {},
+    children: [
+      { type: 'derive', props: { name: 'f.B', expr: '$state.f.A + 1' } },
+      { type: 'derive', props: { name: 'f.A', expr: '5' } },
+      { type: 'derive', props: { name: 'f.C', expr: 'round($state.f.B * 2)' } },
+      { type: 'metric', props: { label: 'B', value: '$state.f.B' } },
+      { type: 'metric', props: { label: 'C', value: '$state.f.C' } },
+    ],
+  },
+}
+
+const R3_DERIVE_FAIL_AST = {
+  title: '派生失败',
+  state: { blob: 'x'.repeat(2000) },
+  root: {
+    type: 'column',
+    props: {},
+    children: [
+      { type: 'derive', props: { name: 'x.missing', expr: '$state.nope + 1' } },
+      { type: 'derive', props: { name: 'x.big', expr: '[$state.blob, $state.blob, $state.blob, $state.blob, $state.blob, $state.blob, $state.blob, $state.blob, $state.blob]' } },
+      { type: 'derive', props: { name: 'x.after', expr: '$state.x.missing + 100' } },
+      { type: 'metric', props: { label: '缺失', value: '$state.x.missing' } },
+      { type: 'metric', props: { label: '预算', value: '$state.x.big' } },
+      { type: 'metric', props: { label: '传递', value: '$state.x.after' } },
+    ],
+  },
+}
+
+const R3_DERIVE_CYCLE_AST = {
+  title: '循环引用',
+  root: {
+    type: 'column',
+    props: {},
+    children: [
+      { type: 'derive', props: { name: 'c.X', expr: '$state.c.Y + 1' } },
+      { type: 'derive', props: { name: 'c.Y', expr: '$state.c.X + 1' } },
+      { type: 'metric', props: { label: '环', value: '$state.c.X' } },
+    ],
+  },
+}
+
+/**
  * 迷你 React（仅测试用）：useState 触发重渲染，useEffect/useLayoutEffect/useMemo/useRef 齐备。
  * 现有浏览器测试只断言静态首屏；M·O·T 断言语义要求点击/滑杆后 DOM 真实更新，因此
  * fixture 需要一个能 reconcile 的最小 React 垫片（按 element key/位置保存 hook 槽位）。
@@ -164,6 +277,7 @@ const SETUP = `
     const SVG_NS = 'http://www.w3.org/2000/svg';
     const UNITLESS = new Set(['opacity','lineHeight','fontWeight','flexGrow','flexShrink','order','zIndex','flex','flexBasis','gridRow','gridColumn']);
     let __current = null;
+    let __id = 0;
     let __renderEffects = [];
     function __flatten(list, out) {
       for (const item of list) {
@@ -253,6 +367,7 @@ const SETUP = `
         if (inst.slots[index] === undefined) inst.slots[index] = { current: initial };
         return inst.slots[index];
       },
+      useId() { return React.useState(() => 'iui-test-' + ++__id)[0]; },
       useMemo(factory, deps) {
         const inst = __instance();
         const index = inst.index++;
@@ -272,6 +387,10 @@ const SETUP = `
           slot.value = fn; slot.deps = deps;
         }
         return slot.value;
+      },
+      // 生产环境走 React.cloneElement（weight 合并 style 的路径）；测试垫片补一个等价实现覆盖该分支。
+      cloneElement(element, extra) {
+        return { ...element, props: { ...(element.props ?? {}), ...(extra ?? {}) } };
       },
       useEffect(fn, deps) { __recordEffect(fn, deps, false) },
       useLayoutEffect(fn, deps) { __recordEffect(fn, deps, true) },
@@ -365,6 +484,20 @@ const MAIN_RUN = `
     const diagramHost=mountBlock(${JSON.stringify(DEMO_DIAGRAM_ML)});
     const motHost=mountBlock(${JSON.stringify(JSON.stringify(MOT_MECHANICS_AST))});
     window.__motHost=motHost;
+    // Round3：自然表达原语（密度/权重/受控 details/copy 摘要/字面量回退/派生拓扑）
+    const r3Hosts={
+      densityInline:mountBlock(${JSON.stringify(JSON.stringify(R3_DENSITY_INLINE))}),
+      densityCompact:mountBlock(${JSON.stringify(JSON.stringify(R3_DENSITY_COMPACT))}),
+      densityPanel:mountBlock(${JSON.stringify(JSON.stringify(R3_DENSITY_PANEL))}),
+      weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
+      details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
+      copy:mountBlock(${JSON.stringify(JSON.stringify(R3_COPY_AST))}),
+      literal:mountBlock(${JSON.stringify(JSON.stringify(R3_LITERAL_AST))}),
+      deriveFwd:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_FWD_AST))}),
+      deriveFail:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_FAIL_AST))}),
+      deriveCycle:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_CYCLE_AST))}),
+    };
+    window.__r3Hosts=r3Hosts;
     // L-11 基础：DOM 级行内嫁接——原生先渲染（加粗跨 token 保留），再原位替换受信 token
     const graftHost=document.createElement('div');
     graftHost.innerHTML='<p>状态 <strong>是 {{badge:success:完成}} 与 {{icon:check}} 收尾</strong>，后面的普通文本 {{code:npm test}} 也应嫁接。</p>';
@@ -616,9 +749,10 @@ const MAIN_RUN = `
         check('motCopyOk', () => {
           const status = mot.querySelector('[data-iui-action-status]');
           if (status === null || status.getAttribute('data-iui-action-status') !== 'ok') return status === null ? '状态缺失' : status.getAttribute('data-iui-action-status');
-          if (status.textContent.trim() !== '已复制配置') return status.textContent;
           const copied = window.__copiedText;
           if (typeof copied !== 'string') return '未写入剪贴板';
+          // 成功后 done 文案必须追加「 · N 字符」，N 是真实待复制内容的字符数
+          if (status.textContent.trim() !== '已复制配置 · ' + copied.length + ' 字符') return status.textContent;
           const parsed = JSON.parse(copied);
           const keys = Object.keys(parsed).sort().join(',');
           if (keys !== 'cacheHits,completed,completionPct,executed,hitRate,queued,requests,scenario,workers') return keys;
@@ -646,6 +780,152 @@ const MAIN_RUN = `
           if (status.getAttribute('data-iui-action-status') !== 'unsupported') return status.getAttribute('data-iui-action-status');
           return window.__copiedText === 'untouched' ? true : '超限载荷不应写剪贴板: ' + String(window.__copiedText).slice(0, 32);
         });
+        // ===== Round3 自然表达：密度 / 权重 / 受控 details / copy 摘要 / 字面量回退 / 派生拓扑 =====
+        const r3 = window.__r3Hosts;
+        check('r3Density', () => {
+          const rootOf = (host) => host.querySelector('[data-iui-output="ok"]');
+          const inline = rootOf(r3.densityInline);
+          const compact = rootOf(r3.densityCompact);
+          const panel = rootOf(r3.densityPanel);
+          if (inline === null || inline.getAttribute('data-iui-density') !== 'inline') return 'inline 缺失';
+          if (compact === null || compact.getAttribute('data-iui-density') !== 'compact') return 'compact 缺失';
+          if (panel === null || panel.getAttribute('data-iui-density') !== 'panel') return 'panel 缺省值缺失';
+          const styleOf = (el) => String(el.getAttribute('style') ?? '');
+          if (styleOf(inline).includes('border: 1px') || styleOf(inline).includes('padding: 12px')) return 'inline 不应有外框/内边距: ' + styleOf(inline);
+          if (!styleOf(compact).includes('padding: 8px')) return 'compact 内边距应为 8px: ' + styleOf(compact);
+          if (!styleOf(panel).includes('padding: 12px')) return 'panel 内边距应为 12px: ' + styleOf(panel);
+          const inlineTitle = inline.firstElementChild === null ? '' : String(inline.firstElementChild.getAttribute('style') ?? '');
+          if (!inlineTitle.includes('font-size: 11px')) return 'inline 标题应为小号样式: ' + inlineTitle;
+          return true;
+        });
+        check('r3Weight', () => {
+          const host = r3.weight;
+          const primary = host.querySelector('[data-iui-weight="primary"]');
+          const secondary = host.querySelector('[data-iui-weight="secondary"]');
+          const optional = host.querySelector('[data-iui-weight="optional"]');
+          if (primary === null || secondary === null || optional === null) return '权重节点缺失';
+          if (primary.textContent !== '主要结论') return 'primary 文本被改写: ' + primary.textContent;
+          if (!String(primary.getAttribute('style')).includes('font-weight: 600')) return 'primary 应加粗: ' + primary.getAttribute('style');
+          if (!String(secondary.getAttribute('style')).includes('font-weight: 500')) return 'secondary 应略弱: ' + secondary.getAttribute('style');
+          if (!String(optional.getAttribute('style')).includes('font-weight: 400')) return 'optional 应弱化: ' + optional.getAttribute('style');
+          return host.querySelectorAll('[data-iui-weight]').length === 3 ? true : '权重节点数=' + host.querySelectorAll('[data-iui-weight]').length;
+        });
+        const detailsHost = r3.details;
+        const detailsEl = () => detailsHost.querySelector('[data-iui-details]');
+        const toggleEl = () => detailsHost.querySelector('[data-iui-toggle] button');
+        check('r3DetailsClosed', () => {
+          const el = detailsEl();
+          if (el === null) return 'details 缺失';
+          if (el.getAttribute('data-iui-details') !== 'closed') return el.getAttribute('data-iui-details');
+          return el.querySelector('button').getAttribute('aria-expanded') === 'false' ? true : 'aria-expanded 初始值错误';
+        });
+        detailsEl().querySelector('button').click();
+        await wait(60);
+        check('r3DetailsOpen', () => {
+          const el = detailsEl();
+          if (el === null || el.getAttribute('data-iui-details') !== 'open') return '展开失败';
+          const button = el.querySelector('button');
+          const body = detailsHost.querySelector('[data-iui-details-body]');
+          if (button.getAttribute('aria-expanded') !== 'true') return 'aria-expanded=' + button.getAttribute('aria-expanded');
+          if (body === null) return 'body 缺失';
+          if (button.getAttribute('aria-controls') !== body.id) return 'aria-controls 不匹配';
+          return body.textContent.includes('内部说明') ? true : body.textContent;
+        });
+        // 条件显隐让 details 卸载 → 再显示：展开态必须由 IuiSheet 的 Map 保住（受控）
+        toggleEl().click();
+        await wait(60);
+        check('r3DetailsHidden', () => detailsEl() === null ? true : 'when=false 时 details 应卸载');
+        toggleEl().click();
+        await wait(60);
+        check('r3DetailsRemount', () => {
+          const el = detailsEl();
+          if (el === null) return 'details 未重新挂载';
+          if (el.getAttribute('data-iui-details') !== 'open') return '重挂载后展开态丢失: ' + el.getAttribute('data-iui-details');
+          return el.querySelector('button').getAttribute('aria-expanded') === 'true' ? true : 'aria-expanded 丢失';
+        });
+        const copyButtons = () => [...r3.copy.querySelectorAll('[data-iui-action="copy"]')];
+        check('r3CopySummary', () => {
+          const buttons = copyButtons();
+          if (buttons.length !== 2) return '按钮数=' + buttons.length;
+          const first = buttons[0];
+          if (first.getAttribute('data-iui-copy-bytes') !== String(${R3_COPY_BYTES})) return 'bytes=' + first.getAttribute('data-iui-copy-bytes');
+          const firstSummary = first.parentElement.querySelector('[data-iui-copy-summary]');
+          const firstPreview = first.parentElement.querySelector('[data-iui-copy-preview]');
+          if (firstPreview === null || firstPreview.textContent.length !== Number(first.getAttribute('data-iui-copy-bytes'))) return '缺少真实载荷预览';
+          if (firstSummary === null) return '摘要缺失';
+          if (firstSummary.textContent !== '待复制：JSON · ' + ${R3_COPY_BYTES} + ' 字符') return '摘要=' + firstSummary.textContent;
+          const second = buttons[1];
+          const secondSummary = second.parentElement.querySelector('[data-iui-copy-summary]');
+          if (secondSummary === null || secondSummary.textContent !== '待复制：—') return '无法解析时应显示 —: ' + (secondSummary === null ? '缺失' : secondSummary.textContent);
+          if (second.getAttribute('data-iui-copy-bytes') !== null) return '无法解析时不应带 bytes';
+          return true;
+        });
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { window.__r3Copied = text } } });
+        copyButtons()[0].click();
+        await wait(120);
+        check('r3CopySuccess', () => {
+          const button = copyButtons()[0];
+          const status = button.parentElement.querySelector('[data-iui-action-status]');
+          if (status === null || status.getAttribute('data-iui-action-status') !== 'ok') return 'status=' + (status === null ? '缺失' : status.getAttribute('data-iui-action-status'));
+          if (status.textContent.trim() !== '已复制对象 · ' + ${R3_COPY_BYTES} + ' 字符') return 'done 文案=' + status.textContent;
+          if (window.__r3Copied !== JSON.stringify(${JSON.stringify(R3_COPY_VALUE)})) return '剪贴板内容=' + String(window.__r3Copied).slice(0, 40);
+          return true;
+        });
+        copyButtons()[1].click();
+        await wait(120);
+        check('r3CopyInvalid', () => {
+          const status = copyButtons()[1].parentElement.querySelector('[data-iui-action-status]');
+          if (status === null || status.getAttribute('data-iui-action-status') !== 'unsupported') return '解析失败应 unsupported';
+          return true;
+        });
+        check('r3LiteralFallback', () => {
+          const host = r3.literal;
+          const texts = [...host.querySelectorAll('div')].map((el) => el.textContent);
+          if (!texts.includes('$state.missing')) return 'text 未按字面量显示';
+          const badge = host.querySelector('[data-iui-badge="info"]');
+          if (badge === null || badge.textContent !== '$data.missing') return 'badge=' + (badge === null ? '缺失' : badge.textContent);
+          const metric = host.querySelector('[data-iui-metric]');
+          if (metric === null) return 'metric 缺失';
+          if (metric.getAttribute('data-iui-metric') !== '$state.missingLabel') return 'metric label=' + metric.getAttribute('data-iui-metric');
+          if (metric.children[1] === undefined || metric.children[1].textContent !== '—') return 'metric value 应为 —';
+          const callout = host.querySelector('[data-iui-callout]');
+          if (callout === null || !callout.textContent.includes('$state.missingTitle')) return 'callout title 未回退';
+          if (!callout.textContent.includes('$state.missingInner')) return 'callout 子 text 未回退';
+          return true;
+        });
+        check('r3DeriveForward', () => {
+          const host = r3.deriveFwd;
+          const root = host.querySelector('[data-iui-output="ok"]');
+          if (root === null) return '根缺失';
+          if (root.getAttribute('data-iui-derive-errors') !== '0') return 'derive-errors=' + root.getAttribute('data-iui-derive-errors');
+          const values = {};
+          for (const el of host.querySelectorAll('[data-iui-metric]')) values[el.getAttribute('data-iui-metric')] = el.children[1] === undefined ? '' : el.children[1].textContent;
+          if (values.B !== '6') return '前向引用失败 B=' + values.B;
+          if (values.C !== '12') return '前向引用链失败 C=' + values.C;
+          return true;
+        });
+        check('r3DeriveFailures', () => {
+          const host = r3.deriveFail;
+          const root = host.querySelector('[data-iui-output="ok"]');
+          if (root === null) return '根缺失';
+          if (root.getAttribute('data-iui-derive-errors') !== '3') return 'derive-errors=' + root.getAttribute('data-iui-derive-errors');
+          const values = {};
+          for (const el of host.querySelectorAll('[data-iui-metric]')) values[el.getAttribute('data-iui-metric')] = el.children[1] === undefined ? '' : el.children[1].textContent;
+          for (const key of ['缺失', '预算', '传递']) if (values[key] !== '—') return key + '=' + values[key];
+          return true;
+        });
+        check('r3DeriveCycle', () => {
+          const host = r3.deriveCycle;
+          const root = host.querySelector('[data-iui-output="ok"]');
+          if (root === null) return '根缺失';
+          // 环在校验期 failNode 降级（渲染层拓扑守卫为第二道防线，正常路径不可达）
+          if (root.getAttribute('data-iui-degraded') !== '2') return 'degraded=' + root.getAttribute('data-iui-degraded');
+          if (!host.textContent.includes('循环引用')) return '降级原因缺失: ' + host.textContent.slice(0, 120);
+          const metric = host.querySelector('[data-iui-metric]');
+          if (metric === null || metric.children[1] === undefined || metric.children[1].textContent !== '—') return '环引用指标应为 —';
+          return true;
+        });
+        check('r3Errors', () => failures.length === 0 ? true : failures.join('|'));
         check('motErrors', () => failures.length === 0 ? true : failures.join('|'));
       } catch (error) {
         fail('motFatal', String(error && error.stack || error));
@@ -853,6 +1133,21 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-mot-table-guard="ok"/u,'table 绑定值 resolve 后必须重新执行 12 列 / 200 行 / 体积预算（降级而非渲染超限表）')
   assert.match(html,/data-mot-copy-budget="ok"/u,'copy 载荷超过 stateBytes 时必须 unsupported 且不写剪贴板')
   assert.doesNotMatch(html,/data-mot-fatal=/u,'M·O·T 机制交互不应抛异常')
+  // Round3 自然表达：密度三态 / 语义权重 / details 受控与重挂载 / copy 摘要 / 字面量回退 / 派生拓扑
+  assert.match(html,/data-r3-density="ok"/u,'根密度三态应各有真实样式（inline 无框、compact 8px、panel 12px）且输出 data-iui-density')
+  assert.match(html,/data-r3-weight="ok"/u,'weight 三态应输出 data-iui-weight 并给出强弱视觉（primary 加粗 / secondary·optional 弱化）')
+  assert.match(html,/data-r3-details-closed="ok"/u,'details 初始应收起并带 aria-expanded=false')
+  assert.match(html,/data-r3-details-open="ok"/u,'details 由 IuiSheet 受控展开（aria-controls 指向内容）')
+  assert.match(html,/data-r3-details-hidden="ok"/u,'when=false 时 details 子树应卸载')
+  assert.match(html,/data-r3-details-remount="ok"/u,'子组件重挂载后 details 展开态不得丢失（IuiSheet 级 open Map）')
+  assert.match(html,/data-r3-copy-summary="ok"/u,'copy 按钮应显示真实待复制摘要「待复制：JSON · N 字符」/「—」并带 data-iui-copy-bytes')
+  assert.match(html,/data-r3-copy-success="ok"/u,'copy 成功后 done 文案应追加 · N 字符，且剪贴板内容与摘要一致')
+  assert.match(html,/data-r3-copy-invalid="ok"/u,'待复制值无法解析时点击必须 unsupported，不假报成功')
+  assert.match(html,/data-r3-literal-fallback="ok"/u,'文本类属性解析失败应显示 $state.*/$data.* 字面量，数值类属性仍显示 —')
+  assert.match(html,/data-r3-derive-forward="ok"/u,'derive 应按依赖拓扑求值，支持文档顺序之前的前向引用')
+  assert.match(html,/data-r3-derive-failures="ok"/u,'derive 求值失败/合并 scope 超预算应传递 undefined 并在根节点计 data-iui-derive-errors')
+  assert.match(html,/data-r3-derive-cycle="ok"/u,'derive 环应在校验期降级并在指标处显示兜底')
+  assert.match(html,/data-r3-errors="ok"/u,'Round3 场景不应产生浏览器运行时错误')
 })
 
 test('M·O·T 演示块（miopiik-ml）在真实 Chromium DOM 中完成派生/折叠/复制/条件图', (t) => {

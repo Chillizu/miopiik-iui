@@ -1,0 +1,7 @@
+<ui density="inline" title="命中率提升的收益" fallback="命中率 60% 时后台 120 请求，80% 时 60 请求">
+  <row>
+    <metric label="命中率 60%" value="120" unit=" 请求"/>
+    <metric label="命中率 80%" value="60" unit=" 请求" tone="success"/>
+  </row>
+  <chart kind="bar" series='[["60%",120],["80%",60]]' source="演示数据"/>
+</ui>

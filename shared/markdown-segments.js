@@ -14,10 +14,40 @@
  */
 
 export const INLINE_TOKEN = /\{\{(badge|icon|code):([^{}\n]{1,120}?)\}\}/gu
-// 新主路径是 ```iui；```html 是无脚本沙箱文档通道（F-42）；```ink-view 只为历史消息保留只读兼容。
-// 收尾围栏必须独占一行（≤3 空格缩进）：否则围栏内容里行内的 ```（例如示例代码、表格里的
-// "```html" 字样）会把文档当场腰斩，前半截进沙箱帧、后半截漏成聊天正文（rc.13 实测翻车）。
+// 保留旧正则导出，实际切分由 scanFences 保留外层 Markdown 代码围栏。
 export const BLOCK_FENCE = /^[ \t]{0,3}```(iui|ink-view|html)[ \t]*\r?\n([\s\S]*?)^[ \t]{0,3}```[ \t]*\r?$/gmu
+
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)(\r?\n|$)/gmu
+const TRUSTED_FENCE = /^(iui|ink-view|html)[ \t]*$/u
+const BARE_UI = /(?:^|\n)[ \t]*(<ui\b[\s\S]*?<\/ui>)/gu
+
+function scanFences(source) {
+  const fences = []
+  let open = null
+  for (const match of source.matchAll(FENCE_LINE)) {
+    const [line, marker, info, newline] = match
+    if (open !== null) {
+      if (marker[0] === open.marker[0] && marker.length >= open.marker.length && /^[ \t]*$/u.test(info)) {
+        open.contentEnd = match.index
+        open.end = match.index + line.length - newline.length
+        open = null
+      }
+      continue
+    }
+    if (marker[0] === '`' && info.includes('`')) continue
+    const trusted = marker === '```' && newline !== '' ? TRUSTED_FENCE.exec(info) : null
+    open = {
+      marker,
+      lang: trusted?.[1] ?? null,
+      start: match.index,
+      contentStart: match.index + line.length,
+      contentEnd: null,
+      end: null,
+    }
+    fences.push(open)
+  }
+  return fences
+}
 
 function readInline(kind, payload) {
   if (kind === 'icon') {
@@ -36,55 +66,7 @@ function readInline(kind, payload) {
  * @returns {Array<{kind:'text', text:string} | {kind:'block', raw:string} | {kind:'inline', node:object}>}
  */
 export function splitTrustedMarkdown(text) {
-  const source = String(text ?? '')
-  const parts = []
-  const pushText = (value) => {
-    if (value !== '') parts.push({ kind: 'text', text: value })
-  }
-  let cursor = 0
-  // 先切块级围栏，再在每段普通文本里切行内 token
-  BLOCK_FENCE.lastIndex = 0
-  let fence = BLOCK_FENCE.exec(source)
-  while (fence !== null) {
-    pushTrustedInline(source.slice(cursor, fence.index), pushText, parts)
-    parts.push({ kind: 'block', raw: fence[2], lang: fence[1] })
-    cursor = fence.index + fence[0].length
-    fence = BLOCK_FENCE.exec(source)
-  }
-  pushTrustedInline(source.slice(cursor), pushText, parts)
-  return parts.length === 0 ? [{ kind: 'text', text: source }] : parts
-}
-
-/** 其他语言的代码围栏：里面的内容一律原样保留，不识别 UI/行内标记。 */
-const CODE_FENCE = /```[A-Za-z0-9_-]*[ \t]*\r?\n[\s\S]*?```/gu
-/** 行首独立出现的顶层 <ui>…</ui>：模型偶尔忘了写围栏，仍按受控 ML 处理。 */
-const BARE_UI = /(?:^|\n)[ \t]*(<ui\b[\s\S]*?<\/ui>)/gu
-
-function pushTrustedInline(text, pushText, parts) {
-  if (text === '') return
-  let cursor = 0
-  const handlePlain = (plain) => {
-    BARE_UI.lastIndex = 0
-    let bare = BARE_UI.exec(plain)
-    let innerCursor = 0
-    while (bare !== null) {
-      pushInlineTokens(plain.slice(innerCursor, bare.index), pushText, parts)
-      // 保留块前必要的换行，避免把上一段文字粘到块里
-      parts.push({ kind: 'block', raw: bare[1], lang: 'ml-bare' })
-      innerCursor = bare.index + bare[0].length
-      bare = BARE_UI.exec(plain)
-    }
-    pushInlineTokens(plain.slice(innerCursor), pushText, parts)
-  }
-  CODE_FENCE.lastIndex = 0
-  let fence = CODE_FENCE.exec(text)
-  while (fence !== null) {
-    handlePlain(text.slice(cursor, fence.index))
-    pushText(fence[0])
-    cursor = fence.index + fence[0].length
-    fence = CODE_FENCE.exec(text)
-  }
-  handlePlain(text.slice(cursor))
+  return splitMarkdown(text, true)
 }
 
 function pushInlineTokens(text, pushText, parts) {
@@ -103,56 +85,47 @@ function pushInlineTokens(text, pushText, parts) {
 
 /** 是否含任何受信标记（用于快速路径：没有标记时行为与原生完全一致）。 */
 export function hasTrustedMarkup(text) {
-  const source = String(text ?? '')
-  BLOCK_FENCE.lastIndex = 0
-  if (BLOCK_FENCE.test(source)) return true
-  INLINE_TOKEN.lastIndex = 0
-  return INLINE_TOKEN.test(source)
+  return splitTrustedMarkdown(text).some((part) => part.kind !== 'text')
 }
 
 /** 块级专用切分：只按闭合围栏/行首裸 <ui> 分段，行内 token 保持字面量留在文本段里，
  *  交给 fork 层的「先原生渲染后 DOM 嫁接」（跨 token 完整性根修）。
  *  其他语言的代码围栏内的内容一律原样保留，不识别。 */
 export function splitTrustedBlocks(text) {
+  return splitMarkdown(text, false)
+}
+
+function splitMarkdown(text, splitInline) {
   const source = String(text ?? '')
   const parts = []
   const pushText = (value) => {
-    if (value !== '') parts.push({ kind: 'text', text: value })
+    if (value === '') return
+    const last = parts[parts.length - 1]
+    if (last?.kind === 'text') last.text += value
+    else parts.push({ kind: 'text', text: value })
   }
-  const pushBareBlocks = (plain) => {
-    BARE_UI.lastIndex = 0
-    let bare = BARE_UI.exec(plain)
+  const pushPlainText = splitInline ? (value) => pushInlineTokens(value, pushText, parts) : pushText
+  const pushPlain = (plain) => {
     let innerCursor = 0
-    while (bare !== null) {
-      pushText(plain.slice(innerCursor, bare.index))
+    for (const bare of plain.matchAll(BARE_UI)) {
+      pushPlainText(plain.slice(innerCursor, bare.index))
       parts.push({ kind: 'block', raw: bare[1], lang: 'ml-bare' })
       innerCursor = bare.index + bare[0].length
-      bare = BARE_UI.exec(plain)
     }
-    pushText(plain.slice(innerCursor))
+    pushPlainText(plain.slice(innerCursor))
   }
-  const handlePlain = (plain) => {
-    CODE_FENCE.lastIndex = 0
-    let fence = CODE_FENCE.exec(plain)
-    let innerCursor = 0
-    while (fence !== null) {
-      pushBareBlocks(plain.slice(innerCursor, fence.index))
-      pushText(fence[0])
-      innerCursor = fence.index + fence[0].length
-      fence = CODE_FENCE.exec(plain)
-    }
-    pushBareBlocks(plain.slice(innerCursor))
-  }
+
   let cursor = 0
-  BLOCK_FENCE.lastIndex = 0
-  let fence = BLOCK_FENCE.exec(source)
-  while (fence !== null) {
-    handlePlain(source.slice(cursor, fence.index))
-    parts.push({ kind: 'block', raw: fence[2], lang: fence[1] })
-    cursor = fence.index + fence[0].length
-    fence = BLOCK_FENCE.exec(source)
+  for (const fence of scanFences(source)) {
+    pushPlain(source.slice(cursor, fence.start))
+    if (fence.lang !== null && fence.end !== null) {
+      parts.push({ kind: 'block', raw: source.slice(fence.contentStart, fence.contentEnd), lang: fence.lang })
+    } else {
+      pushText(source.slice(fence.start, fence.end ?? source.length))
+    }
+    cursor = fence.end ?? source.length
   }
-  handlePlain(source.slice(cursor))
+  pushPlain(source.slice(cursor))
   return parts.length === 0 ? [{ kind: 'text', text: source }] : parts
 }
 
@@ -163,14 +136,9 @@ export function splitTrustedBlocks(text) {
  */
 export function splitStreamingFence(text) {
   const source = String(text ?? '')
-  const starts = [...source.matchAll(/^[ \t]{0,3}```iui[ \t]*\r?\n/gmu)]
-  if (starts.length === 0) return { pre: source, live: '', hasOpen: false }
-  const last = starts[starts.length - 1]
-  const contentStart = last.index + last[0].length
-  const tail = source.slice(contentStart)
-  // 收尾与块级切分同规则：独占一行才算闭合，行内 ``` 不结束围栏。
-  if (/^[ \t]{0,3}```[ \t]*\r?$/mu.test(tail)) return { pre: source, live: '', hasOpen: false }
-  return { pre: source.slice(0, last.index), live: tail, hasOpen: true }
+  const last = scanFences(source).at(-1)
+  if (last?.lang !== 'iui' || last.end !== null) return { pre: source, live: '', hasOpen: false }
+  return { pre: source.slice(0, last.start), live: source.slice(last.contentStart), hasOpen: true }
 }
 
 /**

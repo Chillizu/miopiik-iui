@@ -63,6 +63,9 @@ export const ICONS = Object.freeze(['check', 'alert', 'dot', 'arrow-right', 'spa
 
 const BIND = /^\$(state|data)\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)$/u
 const RESERVED = new Set(['__proto__', 'prototype', 'constructor'])
+const STATE_ARRAY_ITEMS = 128
+const STATE_DEPTH = 8
+const STATE_KEY_LENGTH = 64
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -117,15 +120,153 @@ export function chartMatrix(series) {
 }
 
 /** 本地状态也是来自模型的 JSON；避免超大对象和原型属性污染。 */
-function stateSafe(value, depth = 0) {
-  if (depth > 8) return false
+function stateSafe(value, depth = 0, budget = { remaining: LIMITS.stateBytes }) {
+  // 每个值和键至少占一个字符，先限制遍历，再对有限结果计算序列化体积。
+  budget.remaining -= typeof value === 'string' ? value.length + 1 : 1
+  if (depth > STATE_DEPTH || budget.remaining < 0) return false
   if (value === null || typeof value === 'boolean') return true
   if (typeof value === 'number') return Number.isFinite(value)
   if (typeof value === 'string') return value.length <= LIMITS.text
-  if (Array.isArray(value)) return value.length <= 128 && value.every((item) => stateSafe(item, depth + 1))
+  if (Array.isArray(value)) return value.length <= STATE_ARRAY_ITEMS && value.every((item) => stateSafe(item, depth + 1, budget))
   if (!isRecord(value)) return false
   const keys = Object.keys(value)
-  return keys.length <= 64 && keys.every((key) => key.length <= 64 && !RESERVED.has(key) && stateSafe(value[key], depth + 1))
+  return keys.length <= 64 && keys.every((key) => {
+    budget.remaining -= key.length + 1
+    return key.length <= STATE_KEY_LENGTH && !RESERVED.has(key) && stateSafe(value[key], depth + 1, budget)
+  })
+}
+
+function fitsStateBudget(value) {
+  try {
+    return stateSafe(value) && JSON.stringify(value).length <= LIMITS.stateBytes
+  } catch {
+    return false
+  }
+}
+
+/** 本地写入只复制目标分支，保留原状态直到新值通过完整状态预算。 */
+export function writeStatePath(source, path, value) {
+  if (!isRecord(source) || typeof path !== 'string' || path.length > STATE_DEPTH * (STATE_KEY_LENGTH + 1)) return source
+  const parts = path.split('.')
+  if (parts.length > STATE_DEPTH || parts.some((part) => part.length > STATE_KEY_LENGTH || !/^[A-Za-z0-9_]+$/u.test(part) || RESERVED.has(part))) return source
+
+  const updated = { ...source }
+  let container = updated
+  for (const [index, part] of parts.entries()) {
+    if (Array.isArray(container)) {
+      // 数组只允许替换或追加有效索引，不能写 length 或制造稀疏数组。
+      if (!/^(0|[1-9]\d*)$/u.test(part) || Number(part) >= STATE_ARRAY_ITEMS || Number(part) > container.length) return source
+    }
+    if (index === parts.length - 1) {
+      if (Object.hasOwn(container, part) && Object.is(container[part], value)) return source
+      container[part] = value
+    } else {
+      const child = Object.hasOwn(container, part) ? container[part] : undefined
+      container[part] = Array.isArray(child) ? [...child] : isRecord(child) ? { ...child } : {}
+      container = container[part]
+    }
+  }
+  return fitsStateBudget(updated) ? updated : source
+}
+
+/** 任意组件都可携带的通用属性：显隐（when/is）与语义重要程度（weight）。 */
+export const UNIVERSAL_PROPS = Object.freeze(['when', 'is', 'weight'])
+export const WEIGHTS = Object.freeze(['primary', 'secondary', 'optional'])
+export const DENSITIES = Object.freeze(['inline', 'compact', 'panel', 'auto'])
+const DERIVE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u
+const MAX_COPY_BUTTONS = 4
+
+/** 在通过结构校验的节点中检测派生路径冲突和循环。 */
+function planDerives(defs, bindPaths, state) {
+  const rejected = new Map()
+  if (defs.length === 0) return { ordered: [], rejected }
+
+  // 初始 state 的每个顶层路径都拥有整个子树，比较根键即可。
+  const statePaths = Object.keys(state)
+  const byName = new Map()
+  const conflict = (a, b) => a === b || a.startsWith(b + '.') || b.startsWith(a + '.')
+  const deps = new Map()
+  for (const [index, def] of defs.entries()) {
+    const { name, expr } = def.node.props
+    if (typeof name !== 'string' || name.length > 200 || !DERIVE_NAME.test(name) || name.split('.').some((part) => RESERVED.has(part))) {
+      rejected.set(index, 'derive.name 需要安全的点号路径')
+    } else if (byName.has(name)) {
+      rejected.set(index, `derive.name 重复：${name}`)
+    } else {
+      const deriveHit = [...byName.keys()].find((path) => conflict(name, path))
+      const bindHit = bindPaths.find((path) => conflict(name, path))
+      const stateHit = statePaths.find((path) => conflict(name, path))
+      if (deriveHit !== undefined) rejected.set(index, `derive.name 与派生路径冲突：${deriveHit}`)
+      else if (bindHit !== undefined) rejected.set(index, `derive.name 与控件绑定冲突：${bindHit}`)
+      else if (stateHit !== undefined) rejected.set(index, `derive.name 与初始 state 冲突：${stateHit}`)
+      else if (typeof expr !== 'string' || expr.trim() === '') rejected.set(index, 'derive.expr 必填')
+      else if (expr.length > EXPR_LIMITS.chars) rejected.set(index, `derive.expr 超过 ${EXPR_LIMITS.chars} 字符`)
+      else {
+        const compiled = compileExpr(expr)
+        if (!compiled.ok) rejected.set(index, `derive.expr 不合法：${compiled.error}`)
+        else byName.set(name, { index, name, compiled })
+      }
+    }
+  }
+
+  for (const { index, compiled } of byName.values()) {
+    const set = new Set()
+    for (const ref of compiled.refs) {
+      if (ref.scope !== 'state') continue
+      for (const [name, target] of byName) {
+        if (ref.key === name || ref.key.startsWith(name + '.')) set.add(target.index)
+      }
+    }
+    deps.set(index, set)
+  }
+  // 自环与循环检测（DFS 三色）
+  const color = new Map()
+  const stack = []
+  const cyclic = new Set()
+  const visit = (index) => {
+    color.set(index, 1)
+    stack.push(index)
+    for (const next of deps.get(index) ?? []) {
+      if (next === index) cyclic.add(index)
+      else if (color.get(next) === 1) {
+        const pos = stack.indexOf(next)
+        if (pos >= 0) for (let at = pos; at < stack.length; at += 1) cyclic.add(stack[at])
+      } else if (color.get(next) === undefined) visit(next)
+    }
+    stack.pop()
+    color.set(index, 2)
+  }
+  for (const index of deps.keys()) if (color.get(index) === undefined) visit(index)
+  for (const index of cyclic) rejected.set(index, `derive 循环引用：${defs[index].node.props.name}`)
+  let deriveCount = 0
+  for (const { index } of byName.values()) {
+    if (rejected.has(index)) continue
+    deriveCount += 1
+    if (deriveCount > LIMITS.derive) rejected.set(index, `derive 最多 ${LIMITS.derive} 个`)
+  }
+
+  // 按原运行时的就绪队列排序。无依赖条目先按文档顺序入队，再加入解除依赖的条目。
+  const active = [...byName.values()].filter(({ index }) => !rejected.has(index))
+  const waiting = new Map(active.map((entry) => [entry.index, { entry, count: 0, dependents: [] }]))
+  for (const [index, item] of waiting) {
+    for (const dependency of deps.get(index)) {
+      const target = waiting.get(dependency)
+      if (target === undefined) continue
+      item.count += 1
+      target.dependents.push(item)
+    }
+  }
+  const ready = [...waiting.values()].filter((item) => item.count === 0)
+  const ordered = []
+  for (let cursor = 0; cursor < ready.length; cursor += 1) {
+    const { entry, dependents } = ready[cursor]
+    ordered.push({ name: entry.name, compiled: entry.compiled })
+    for (const dependent of dependents) {
+      dependent.count -= 1
+      if (dependent.count === 0) ready.push(dependent)
+    }
+  }
+  return { ordered, rejected }
 }
 
 /**
@@ -136,14 +277,25 @@ function stateSafe(value, depth = 0) {
  *  - 子节点不合法 → 只把该子树替换成 fallback 文本节点，兄弟与父布局保留；
  *  - 未知组件、props 不合法、subtree 预算越界都走同一条降级路径。
  *
- * @returns {{ok:true, ast, errors:string[], degraded:number} | {ok:false, errors:string[], fallback:string}}
+ * @returns {{ok:true, ast, derivePlan:Array, errors:string[], degraded:number} | {ok:false, errors:string[], fallback:string}}
  */
 export function validateAst(input) {
   const fatal = []
   let nodes = 0
   let degraded = 0
-  let deriveCount = 0
-  const deriveNames = new Set()
+  let copyButtons = 0
+  const derives = []
+  const bindPaths = []
+  const fallback = typeof input?.fallback === 'string' ? input.fallback : ''
+  const state = input?.state ?? {}
+  if (!isRecord(state) || !fitsStateBudget(state)) {
+    return { ok: false, errors: ['state 超过容量预算或包含不安全属性'], fallback }
+  }
+  // 根级 density：安全枚举，非法值整份拒绝（根属性 fail-closed）
+  const density = input?.density === undefined || input?.density === null || input?.density === '' ? 'panel' : input.density
+  if (!DENSITIES.includes(density)) {
+    return { ok: false, errors: [`density 只能是 ${DENSITIES.join('/')}`], fallback }
+  }
 
   const failNode = (node, path, reason) => {
     degraded += 1
@@ -152,7 +304,6 @@ export function validateAst(input) {
   }
 
   const walk = (node, depth, path) => {
-    if (!isRecord(node)) return failNode(node, path, '不是对象')
     if (depth > LIMITS.depth) {
       fatal.push(`${path} 超过最大深度 ${LIMITS.depth}`)
       return null
@@ -162,17 +313,31 @@ export function validateAst(input) {
       fatal.push(`节点数超过 ${LIMITS.nodes}`)
       return null
     }
+    if (!isRecord(node)) return failNode(node, path, '不是对象')
+    if (typeof node.type !== 'string') return failNode(node, path, '组件类型需要字符串')
+    if (!Object.hasOwn(REGISTRY, node.type)) return failNode(node, path, `未知组件类型 ${node.type}`)
     const spec = REGISTRY[node.type]
-    if (spec === undefined) return failNode(node, path, `未知组件类型 ${String(node.type)}`)
+    if (spec.children && Array.isArray(node.children) && node.children.length > LIMITS.nodes - nodes) {
+      fatal.push(`节点数超过 ${LIMITS.nodes}`)
+      return null
+    }
     const props = isRecord(node.props) ? node.props : {}
-    if (props.bind !== undefined && readBinding(props.bind).scope !== 'state') {
-      return failNode(node, path, 'bind 只能绑定 $state.*')
+    if (props.weight !== undefined && !WEIGHTS.includes(props.weight)) {
+      return failNode(node, path, 'weight 只能是 primary/secondary/optional')
     }
-    if (node.type === 'segmented' && (!Array.isArray(props.options) || props.options.length === 0 || props.options.length > LIMITS.options)) {
-      return failNode(node, path, `options 需要 1–${LIMITS.options} 项`)
-    }
-    if (node.type === 'toggle' || node.type === 'slider' || node.type === 'input') {
-      if (readBinding(props.bind).scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
+    const binding = Object.hasOwn(spec.props, 'bind') ? readBinding(props.bind) : null
+    if (binding !== null && binding.scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
+    if (node.type === 'segmented') {
+      const options = props.options
+      if (!Array.isArray(options) || options.length === 0 || options.length > LIMITS.options) {
+        return failNode(node, path, `options 需要 1–${LIMITS.options} 项`)
+      }
+      for (const option of options) {
+        if (!isRecord(option) || typeof option.label !== 'string' || option.label.trim() === '' || option.label.length > LIMITS.text
+          || !Object.hasOwn(option, 'value') || !fitsStateBudget(option.value)) {
+          return failNode(node, path, 'options 各项需要 label 和安全的 JSON value')
+        }
+      }
     }
     if (node.type === 'slider') {
       for (const key of ['min', 'max', 'step']) {
@@ -185,20 +350,6 @@ export function validateAst(input) {
         return failNode(node, path, 'slider.max 需大于 slider.min')
       }
     }
-    if (node.type === 'derive') {
-      const name = props.name
-      if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u.test(name) || name.split('.').some((part) => RESERVED.has(part))) {
-        return failNode(node, path, 'derive.name 需要安全的点号路径')
-      }
-      if (deriveNames.has(name)) return failNode(node, path, `derive.name 重复：${name}`)
-      if (deriveCount >= LIMITS.derive) return failNode(node, path, `derive 最多 ${LIMITS.derive} 个`)
-      if (typeof props.expr !== 'string' || props.expr.trim() === '') return failNode(node, path, 'derive.expr 必填')
-      if (props.expr.length > EXPR_LIMITS.chars) return failNode(node, path, `derive.expr 超过 ${EXPR_LIMITS.chars} 字符`)
-      const compiled = compileExpr(props.expr)
-      if (compiled.ok === false) return failNode(node, path, `derive.expr 不合法：${compiled.error}`)
-      deriveNames.add(name)
-      deriveCount += 1
-    }
     if (node.type === 'details') {
       if (typeof props.label !== 'string' || props.label.trim() === '') return failNode(node, path, 'details.label 必填')
       if (props.tone !== undefined && !TONES.includes(props.tone)) return failNode(node, path, `details.tone 只能是 ${TONES.join('/')}`)
@@ -208,6 +359,8 @@ export function validateAst(input) {
       // 唯一宿主动作：只允许真实剪贴板写入；其余动作名一律拒绝（不是白名单外的未来开关）
       if (props.action !== 'copy') return failNode(node, path, 'button.action 只支持 copy')
       if (props.value === undefined) return failNode(node, path, 'button.value 必填')
+      copyButtons += 1
+      if (copyButtons > MAX_COPY_BUTTONS) return failNode(node, path, `copy 按钮最多 ${MAX_COPY_BUTTONS} 个`)
       if (typeof props.value === 'string' && readBinding(props.value).scope === undefined) {
         if (props.value.length > LIMITS.text) return failNode(node, path, 'button.value 文本超限')
       } else if (props.value !== null && typeof props.value === 'object') {
@@ -377,26 +530,33 @@ export function validateAst(input) {
         children.push(walked)
       }
     }
-    return { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props, children }
+    // 属性白名单：只保留组件 REGISTRY 声明的 props + 通用属性，未知属性（onClick/style/…）一律剥离
+    const allowed = new Set([...Object.keys(spec.props), ...UNIVERSAL_PROPS])
+    const safeProps = {}
+    for (const key of Object.keys(props)) {
+      if (allowed.has(key)) safeProps[key] = props[key]
+    }
+    const normalized = { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props: safeProps, children }
+    if (node.type === 'derive') derives.push({ node: normalized, source: node, path })
+    if (binding !== null) bindPaths.push(binding.key)
+    return normalized
   }
 
   const root = walk(input?.root, 1, 'root')
+  if (fatal.length > 0 || root === null) return { ok: false, errors: fatal, fallback }
+  const { ordered: derivePlan, rejected } = planDerives(derives, bindPaths, state)
+  for (const [index, reason] of rejected) {
+    const derive = derives[index]
+    Object.assign(derive.node, failNode(derive.source, derive.path, reason))
+  }
   // 根节点若只能降级，等于整份文档没有可信结构 → 整段拒绝（不做半残渲染）
-  if (root !== null && root.degraded === true) fatal.push('根节点不合法')
-  if (fatal.length > 0 || root === null) {
-    return { ok: false, errors: fatal.length > 0 ? fatal : ['根节点不合法'], fallback: typeof input?.fallback === 'string' ? input.fallback : '' }
-  }
-  const state = input?.state ?? {}
-  let stateBytes = Infinity
-  try { stateBytes = JSON.stringify(state).length } catch { /* 循环或异常输入拒绝 */ }
-  if (!isRecord(state) || !stateSafe(state) || stateBytes > LIMITS.stateBytes) {
-    return { ok: false, errors: ['state 超过容量预算或包含不安全属性'], fallback: typeof input?.fallback === 'string' ? input.fallback : '' }
-  }
+  if (root.degraded === true) return { ok: false, errors: ['根节点不合法'], fallback }
   return {
     ok: true,
     errors: [],
     degraded,
-    ast: { version: IUI_VERSION, state, root, fallback: typeof input?.fallback === 'string' ? input.fallback : '', title: typeof input?.title === 'string' ? input.title : '' },
+    derivePlan,
+    ast: { version: IUI_VERSION, state, root, density, fallback, title: typeof input?.title === 'string' ? input.title : '' },
   }
 }
 

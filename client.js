@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const IUI_PLUGIN_VERSION = "0.1.1"
+    const IUI_PLUGIN_VERSION = "0.2.0-rc.1"
     const C = {
       text: 'var(--dsw-alias-label-primary, #ddd)',
       muted: 'var(--dsw-alias-label-secondary, #999)',
@@ -327,6 +327,33 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /** 从编译后的受限 AST 中提取全部引用（去重、按 scope+key 排序，确定性）。 */
+      function collectRefs(program) {
+        const refs = []
+        const seen = new Set()
+        const stack = [program]
+        while (stack.length > 0) {
+          const node = stack.pop()
+          if (node === null || typeof node !== 'object') continue
+          if (node.t === 'ref') {
+            const key = node.scope + '\u0000' + node.key
+            if (!seen.has(key)) {
+              seen.add(key)
+              refs.push({ scope: node.scope, key: node.key })
+            }
+            continue
+          }
+          if (node.t === 'cond') stack.push(node.a, node.b, node.c)
+          else if (node.t === 'bin') stack.push(node.l, node.r)
+          else if (node.t === 'unary') stack.push(node.x)
+          else if (node.t === 'call') stack.push(...node.args)
+          else if (node.t === 'arr') stack.push(...node.items)
+          else if (node.t === 'obj') for (const [, value] of node.entries) stack.push(value)
+        }
+        refs.sort((a, b) => (a.scope === b.scope ? (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) : a.scope < b.scope ? -1 : 1))
+        return refs
+      }
+
       const cache = new Map()
 
       /**
@@ -346,7 +373,7 @@ window.__ModuleLoader__.load({
         if (lexed.ok === false) result = fail(lexed.error)
         else {
           const parsed = createParser(lexed.tokens).parse()
-          result = parsed.ok === false ? fail(parsed.error) : { ok: true, source: text, program: parsed.program }
+          result = parsed.ok === false ? fail(parsed.error) : { ok: true, source: text, program: parsed.program, refs: collectRefs(parsed.program) }
         }
         if (cache.size >= EXPR_LIMITS.cache) cache.delete(cache.keys().next().value)
         cache.set(text, result)
@@ -507,6 +534,20 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * 提取编译结果中的引用（供 derive 依赖图使用）。
+       * @param {unknown} compiled
+       * @returns {{ok:true, refs:Array<{scope:'state'|'data', key:string}>} | {ok:false, error:string}}
+       */
+      function exprRefs(compiled) {
+        if (compiled === null || typeof compiled !== 'object' || compiled.ok !== true || typeof compiled.source !== 'string') {
+          return fail('expr 未编译')
+        }
+        const fresh = compileExpr(compiled.source)
+        if (fresh.ok === false) return fail(fresh.error)
+        return { ok: true, refs: fresh.refs.map((ref) => ({ scope: ref.scope, key: ref.key })) }
+      }
+
+      /**
        * 在给定作用域内求值编译后的表达式。失败返回结构化错误，绝不抛异常。
        * @param {unknown} compiled
        * @param {{state?:object, data?:object}} scope
@@ -527,7 +568,7 @@ window.__ModuleLoader__.load({
           return fail('expr 求值失败')
         }
       }
-      return { EXPR_LIMITS, compileExpr, evaluateExpr }
+      return { EXPR_LIMITS, compileExpr, evaluateExpr, exprRefs }
     })()
     const IUI_AST = (() => {
       const { EXPR_LIMITS, compileExpr } = IUI_EXPR
@@ -595,6 +636,9 @@ window.__ModuleLoader__.load({
 
       const BIND = /^\$(state|data)\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)$/u
       const RESERVED = new Set(['__proto__', 'prototype', 'constructor'])
+      const STATE_ARRAY_ITEMS = 128
+      const STATE_DEPTH = 8
+      const STATE_KEY_LENGTH = 64
 
       function isRecord(value) {
         return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -649,15 +693,153 @@ window.__ModuleLoader__.load({
       }
 
       /** 本地状态也是来自模型的 JSON；避免超大对象和原型属性污染。 */
-      function stateSafe(value, depth = 0) {
-        if (depth > 8) return false
+      function stateSafe(value, depth = 0, budget = { remaining: LIMITS.stateBytes }) {
+        // 每个值和键至少占一个字符，先限制遍历，再对有限结果计算序列化体积。
+        budget.remaining -= typeof value === 'string' ? value.length + 1 : 1
+        if (depth > STATE_DEPTH || budget.remaining < 0) return false
         if (value === null || typeof value === 'boolean') return true
         if (typeof value === 'number') return Number.isFinite(value)
         if (typeof value === 'string') return value.length <= LIMITS.text
-        if (Array.isArray(value)) return value.length <= 128 && value.every((item) => stateSafe(item, depth + 1))
+        if (Array.isArray(value)) return value.length <= STATE_ARRAY_ITEMS && value.every((item) => stateSafe(item, depth + 1, budget))
         if (!isRecord(value)) return false
         const keys = Object.keys(value)
-        return keys.length <= 64 && keys.every((key) => key.length <= 64 && !RESERVED.has(key) && stateSafe(value[key], depth + 1))
+        return keys.length <= 64 && keys.every((key) => {
+          budget.remaining -= key.length + 1
+          return key.length <= STATE_KEY_LENGTH && !RESERVED.has(key) && stateSafe(value[key], depth + 1, budget)
+        })
+      }
+
+      function fitsStateBudget(value) {
+        try {
+          return stateSafe(value) && JSON.stringify(value).length <= LIMITS.stateBytes
+        } catch {
+          return false
+        }
+      }
+
+      /** 本地写入只复制目标分支，保留原状态直到新值通过完整状态预算。 */
+      function writeStatePath(source, path, value) {
+        if (!isRecord(source) || typeof path !== 'string' || path.length > STATE_DEPTH * (STATE_KEY_LENGTH + 1)) return source
+        const parts = path.split('.')
+        if (parts.length > STATE_DEPTH || parts.some((part) => part.length > STATE_KEY_LENGTH || !/^[A-Za-z0-9_]+$/u.test(part) || RESERVED.has(part))) return source
+
+        const updated = { ...source }
+        let container = updated
+        for (const [index, part] of parts.entries()) {
+          if (Array.isArray(container)) {
+            // 数组只允许替换或追加有效索引，不能写 length 或制造稀疏数组。
+            if (!/^(0|[1-9]\d*)$/u.test(part) || Number(part) >= STATE_ARRAY_ITEMS || Number(part) > container.length) return source
+          }
+          if (index === parts.length - 1) {
+            if (Object.hasOwn(container, part) && Object.is(container[part], value)) return source
+            container[part] = value
+          } else {
+            const child = Object.hasOwn(container, part) ? container[part] : undefined
+            container[part] = Array.isArray(child) ? [...child] : isRecord(child) ? { ...child } : {}
+            container = container[part]
+          }
+        }
+        return fitsStateBudget(updated) ? updated : source
+      }
+
+      /** 任意组件都可携带的通用属性：显隐（when/is）与语义重要程度（weight）。 */
+      const UNIVERSAL_PROPS = Object.freeze(['when', 'is', 'weight'])
+      const WEIGHTS = Object.freeze(['primary', 'secondary', 'optional'])
+      const DENSITIES = Object.freeze(['inline', 'compact', 'panel', 'auto'])
+      const DERIVE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u
+      const MAX_COPY_BUTTONS = 4
+
+      /** 在通过结构校验的节点中检测派生路径冲突和循环。 */
+      function planDerives(defs, bindPaths, state) {
+        const rejected = new Map()
+        if (defs.length === 0) return { ordered: [], rejected }
+
+        // 初始 state 的每个顶层路径都拥有整个子树，比较根键即可。
+        const statePaths = Object.keys(state)
+        const byName = new Map()
+        const conflict = (a, b) => a === b || a.startsWith(b + '.') || b.startsWith(a + '.')
+        const deps = new Map()
+        for (const [index, def] of defs.entries()) {
+          const { name, expr } = def.node.props
+          if (typeof name !== 'string' || name.length > 200 || !DERIVE_NAME.test(name) || name.split('.').some((part) => RESERVED.has(part))) {
+            rejected.set(index, 'derive.name 需要安全的点号路径')
+          } else if (byName.has(name)) {
+            rejected.set(index, `derive.name 重复：${name}`)
+          } else {
+            const deriveHit = [...byName.keys()].find((path) => conflict(name, path))
+            const bindHit = bindPaths.find((path) => conflict(name, path))
+            const stateHit = statePaths.find((path) => conflict(name, path))
+            if (deriveHit !== undefined) rejected.set(index, `derive.name 与派生路径冲突：${deriveHit}`)
+            else if (bindHit !== undefined) rejected.set(index, `derive.name 与控件绑定冲突：${bindHit}`)
+            else if (stateHit !== undefined) rejected.set(index, `derive.name 与初始 state 冲突：${stateHit}`)
+            else if (typeof expr !== 'string' || expr.trim() === '') rejected.set(index, 'derive.expr 必填')
+            else if (expr.length > EXPR_LIMITS.chars) rejected.set(index, `derive.expr 超过 ${EXPR_LIMITS.chars} 字符`)
+            else {
+              const compiled = compileExpr(expr)
+              if (!compiled.ok) rejected.set(index, `derive.expr 不合法：${compiled.error}`)
+              else byName.set(name, { index, name, compiled })
+            }
+          }
+        }
+
+        for (const { index, compiled } of byName.values()) {
+          const set = new Set()
+          for (const ref of compiled.refs) {
+            if (ref.scope !== 'state') continue
+            for (const [name, target] of byName) {
+              if (ref.key === name || ref.key.startsWith(name + '.')) set.add(target.index)
+            }
+          }
+          deps.set(index, set)
+        }
+        // 自环与循环检测（DFS 三色）
+        const color = new Map()
+        const stack = []
+        const cyclic = new Set()
+        const visit = (index) => {
+          color.set(index, 1)
+          stack.push(index)
+          for (const next of deps.get(index) ?? []) {
+            if (next === index) cyclic.add(index)
+            else if (color.get(next) === 1) {
+              const pos = stack.indexOf(next)
+              if (pos >= 0) for (let at = pos; at < stack.length; at += 1) cyclic.add(stack[at])
+            } else if (color.get(next) === undefined) visit(next)
+          }
+          stack.pop()
+          color.set(index, 2)
+        }
+        for (const index of deps.keys()) if (color.get(index) === undefined) visit(index)
+        for (const index of cyclic) rejected.set(index, `derive 循环引用：${defs[index].node.props.name}`)
+        let deriveCount = 0
+        for (const { index } of byName.values()) {
+          if (rejected.has(index)) continue
+          deriveCount += 1
+          if (deriveCount > LIMITS.derive) rejected.set(index, `derive 最多 ${LIMITS.derive} 个`)
+        }
+
+        // 按原运行时的就绪队列排序。无依赖条目先按文档顺序入队，再加入解除依赖的条目。
+        const active = [...byName.values()].filter(({ index }) => !rejected.has(index))
+        const waiting = new Map(active.map((entry) => [entry.index, { entry, count: 0, dependents: [] }]))
+        for (const [index, item] of waiting) {
+          for (const dependency of deps.get(index)) {
+            const target = waiting.get(dependency)
+            if (target === undefined) continue
+            item.count += 1
+            target.dependents.push(item)
+          }
+        }
+        const ready = [...waiting.values()].filter((item) => item.count === 0)
+        const ordered = []
+        for (let cursor = 0; cursor < ready.length; cursor += 1) {
+          const { entry, dependents } = ready[cursor]
+          ordered.push({ name: entry.name, compiled: entry.compiled })
+          for (const dependent of dependents) {
+            dependent.count -= 1
+            if (dependent.count === 0) ready.push(dependent)
+          }
+        }
+        return { ordered, rejected }
       }
 
       /**
@@ -668,14 +850,25 @@ window.__ModuleLoader__.load({
        *  - 子节点不合法 → 只把该子树替换成 fallback 文本节点，兄弟与父布局保留；
        *  - 未知组件、props 不合法、subtree 预算越界都走同一条降级路径。
        *
-       * @returns {{ok:true, ast, errors:string[], degraded:number} | {ok:false, errors:string[], fallback:string}}
+       * @returns {{ok:true, ast, derivePlan:Array, errors:string[], degraded:number} | {ok:false, errors:string[], fallback:string}}
        */
       function validateAst(input) {
         const fatal = []
         let nodes = 0
         let degraded = 0
-        let deriveCount = 0
-        const deriveNames = new Set()
+        let copyButtons = 0
+        const derives = []
+        const bindPaths = []
+        const fallback = typeof input?.fallback === 'string' ? input.fallback : ''
+        const state = input?.state ?? {}
+        if (!isRecord(state) || !fitsStateBudget(state)) {
+          return { ok: false, errors: ['state 超过容量预算或包含不安全属性'], fallback }
+        }
+        // 根级 density：安全枚举，非法值整份拒绝（根属性 fail-closed）
+        const density = input?.density === undefined || input?.density === null || input?.density === '' ? 'panel' : input.density
+        if (!DENSITIES.includes(density)) {
+          return { ok: false, errors: [`density 只能是 ${DENSITIES.join('/')}`], fallback }
+        }
 
         const failNode = (node, path, reason) => {
           degraded += 1
@@ -684,7 +877,6 @@ window.__ModuleLoader__.load({
         }
 
         const walk = (node, depth, path) => {
-          if (!isRecord(node)) return failNode(node, path, '不是对象')
           if (depth > LIMITS.depth) {
             fatal.push(`${path} 超过最大深度 ${LIMITS.depth}`)
             return null
@@ -694,17 +886,31 @@ window.__ModuleLoader__.load({
             fatal.push(`节点数超过 ${LIMITS.nodes}`)
             return null
           }
+          if (!isRecord(node)) return failNode(node, path, '不是对象')
+          if (typeof node.type !== 'string') return failNode(node, path, '组件类型需要字符串')
+          if (!Object.hasOwn(REGISTRY, node.type)) return failNode(node, path, `未知组件类型 ${node.type}`)
           const spec = REGISTRY[node.type]
-          if (spec === undefined) return failNode(node, path, `未知组件类型 ${String(node.type)}`)
+          if (spec.children && Array.isArray(node.children) && node.children.length > LIMITS.nodes - nodes) {
+            fatal.push(`节点数超过 ${LIMITS.nodes}`)
+            return null
+          }
           const props = isRecord(node.props) ? node.props : {}
-          if (props.bind !== undefined && readBinding(props.bind).scope !== 'state') {
-            return failNode(node, path, 'bind 只能绑定 $state.*')
+          if (props.weight !== undefined && !WEIGHTS.includes(props.weight)) {
+            return failNode(node, path, 'weight 只能是 primary/secondary/optional')
           }
-          if (node.type === 'segmented' && (!Array.isArray(props.options) || props.options.length === 0 || props.options.length > LIMITS.options)) {
-            return failNode(node, path, `options 需要 1–${LIMITS.options} 项`)
-          }
-          if (node.type === 'toggle' || node.type === 'slider' || node.type === 'input') {
-            if (readBinding(props.bind).scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
+          const binding = Object.hasOwn(spec.props, 'bind') ? readBinding(props.bind) : null
+          if (binding !== null && binding.scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
+          if (node.type === 'segmented') {
+            const options = props.options
+            if (!Array.isArray(options) || options.length === 0 || options.length > LIMITS.options) {
+              return failNode(node, path, `options 需要 1–${LIMITS.options} 项`)
+            }
+            for (const option of options) {
+              if (!isRecord(option) || typeof option.label !== 'string' || option.label.trim() === '' || option.label.length > LIMITS.text
+                || !Object.hasOwn(option, 'value') || !fitsStateBudget(option.value)) {
+                return failNode(node, path, 'options 各项需要 label 和安全的 JSON value')
+              }
+            }
           }
           if (node.type === 'slider') {
             for (const key of ['min', 'max', 'step']) {
@@ -717,20 +923,6 @@ window.__ModuleLoader__.load({
               return failNode(node, path, 'slider.max 需大于 slider.min')
             }
           }
-          if (node.type === 'derive') {
-            const name = props.name
-            if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u.test(name) || name.split('.').some((part) => RESERVED.has(part))) {
-              return failNode(node, path, 'derive.name 需要安全的点号路径')
-            }
-            if (deriveNames.has(name)) return failNode(node, path, `derive.name 重复：${name}`)
-            if (deriveCount >= LIMITS.derive) return failNode(node, path, `derive 最多 ${LIMITS.derive} 个`)
-            if (typeof props.expr !== 'string' || props.expr.trim() === '') return failNode(node, path, 'derive.expr 必填')
-            if (props.expr.length > EXPR_LIMITS.chars) return failNode(node, path, `derive.expr 超过 ${EXPR_LIMITS.chars} 字符`)
-            const compiled = compileExpr(props.expr)
-            if (compiled.ok === false) return failNode(node, path, `derive.expr 不合法：${compiled.error}`)
-            deriveNames.add(name)
-            deriveCount += 1
-          }
           if (node.type === 'details') {
             if (typeof props.label !== 'string' || props.label.trim() === '') return failNode(node, path, 'details.label 必填')
             if (props.tone !== undefined && !TONES.includes(props.tone)) return failNode(node, path, `details.tone 只能是 ${TONES.join('/')}`)
@@ -740,6 +932,8 @@ window.__ModuleLoader__.load({
             // 唯一宿主动作：只允许真实剪贴板写入；其余动作名一律拒绝（不是白名单外的未来开关）
             if (props.action !== 'copy') return failNode(node, path, 'button.action 只支持 copy')
             if (props.value === undefined) return failNode(node, path, 'button.value 必填')
+            copyButtons += 1
+            if (copyButtons > MAX_COPY_BUTTONS) return failNode(node, path, `copy 按钮最多 ${MAX_COPY_BUTTONS} 个`)
             if (typeof props.value === 'string' && readBinding(props.value).scope === undefined) {
               if (props.value.length > LIMITS.text) return failNode(node, path, 'button.value 文本超限')
             } else if (props.value !== null && typeof props.value === 'object') {
@@ -909,26 +1103,33 @@ window.__ModuleLoader__.load({
               children.push(walked)
             }
           }
-          return { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props, children }
+          // 属性白名单：只保留组件 REGISTRY 声明的 props + 通用属性，未知属性（onClick/style/…）一律剥离
+          const allowed = new Set([...Object.keys(spec.props), ...UNIVERSAL_PROPS])
+          const safeProps = {}
+          for (const key of Object.keys(props)) {
+            if (allowed.has(key)) safeProps[key] = props[key]
+          }
+          const normalized = { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props: safeProps, children }
+          if (node.type === 'derive') derives.push({ node: normalized, source: node, path })
+          if (binding !== null) bindPaths.push(binding.key)
+          return normalized
         }
 
         const root = walk(input?.root, 1, 'root')
+        if (fatal.length > 0 || root === null) return { ok: false, errors: fatal, fallback }
+        const { ordered: derivePlan, rejected } = planDerives(derives, bindPaths, state)
+        for (const [index, reason] of rejected) {
+          const derive = derives[index]
+          Object.assign(derive.node, failNode(derive.source, derive.path, reason))
+        }
         // 根节点若只能降级，等于整份文档没有可信结构 → 整段拒绝（不做半残渲染）
-        if (root !== null && root.degraded === true) fatal.push('根节点不合法')
-        if (fatal.length > 0 || root === null) {
-          return { ok: false, errors: fatal.length > 0 ? fatal : ['根节点不合法'], fallback: typeof input?.fallback === 'string' ? input.fallback : '' }
-        }
-        const state = input?.state ?? {}
-        let stateBytes = Infinity
-        try { stateBytes = JSON.stringify(state).length } catch { /* 循环或异常输入拒绝 */ }
-        if (!isRecord(state) || !stateSafe(state) || stateBytes > LIMITS.stateBytes) {
-          return { ok: false, errors: ['state 超过容量预算或包含不安全属性'], fallback: typeof input?.fallback === 'string' ? input.fallback : '' }
-        }
+        if (root.degraded === true) return { ok: false, errors: ['根节点不合法'], fallback }
         return {
           ok: true,
           errors: [],
           degraded,
-          ast: { version: IUI_VERSION, state, root, fallback: typeof input?.fallback === 'string' ? input.fallback : '', title: typeof input?.title === 'string' ? input.title : '' },
+          derivePlan,
+          ast: { version: IUI_VERSION, state, root, density, fallback, title: typeof input?.title === 'string' ? input.title : '' },
         }
       }
 
@@ -954,7 +1155,7 @@ window.__ModuleLoader__.load({
       function degradeToText(text) {
         return { id: 'degraded', type: 'text', props: { text: String(text ?? '') }, children: [] }
       }
-      return { IUI_VERSION, REGISTRY, LIMITS, INLINE_TYPES, TONES, ICONS, readBinding, resolveValue, validateAst, tableMatrix, chartMatrix, degradeToText }
+      return { IUI_VERSION, REGISTRY, LIMITS, INLINE_TYPES, TONES, ICONS, readBinding, resolveValue, validateAst, writeStatePath, tableMatrix, chartMatrix, degradeToText }
     })()
     const MIOPIIK_ML = (() => {
       /**
@@ -1026,7 +1227,7 @@ window.__ModuleLoader__.load({
       })
 
       const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true })
-      // 交互控件、step 与图形原语一律写成自闭合：<toggle …/>、<step …/>、<node …/>、<edge …/>
+      // 交互控件和图形原语隐式闭合。step 也保留旧的无闭合写法。
       const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true })
 
       function decodeEntities(text) {
@@ -1110,6 +1311,7 @@ window.__ModuleLoader__.load({
         const text = String(source ?? '')
         const root = { name: '#root', attrs: {}, children: [], unclosed: false }
         const stack = [root]
+        const stepBody = /[^<]*<\/step\s*>/uy
         let cursor = 0
         let index = 0
         const pushText = (raw) => {
@@ -1144,7 +1346,12 @@ window.__ModuleLoader__.load({
           }
           const element = { name: tag.name, attrs: tag.attrs, children: [], unclosed: false }
           stack[stack.length - 1].children.push(element)
-          if (tag.selfClosing || VOID_TAGS[tag.name] === true) continue
+          if (tag.selfClosing) continue
+          if (VOID_TAGS[tag.name] === true) {
+            stepBody.lastIndex = tag.end
+            // Only explicit text bodies opt a step out of legacy implicit closing.
+            if (tag.name !== 'step' || !stepBody.test(text)) continue
+          }
           stack.push(element)
         }
         pushText(text.slice(cursor))
@@ -1266,7 +1473,7 @@ window.__ModuleLoader__.load({
         for (const child of ui.children) {
           if (child.name === '#text') {
             const raw = String(child.text ?? '').trim()
-            if (raw !== '') children.push({ kind: 'degraded', text: raw })
+            if (raw !== '') children.push({ ...child, text: raw })
             continue
           }
           if (child.name === 'state') {
@@ -1308,7 +1515,7 @@ window.__ModuleLoader__.load({
           const type = ML_TAGS[element.name]
           const attrs = normalizeAttrs(element)
           // when/is 是通用显隐通道：任何组件都可携带；值交给校验器把关（只允许 $state 绑定）
-          const control = readProps(attrs, ['when', 'is'])
+          const control = readProps(attrs, ['when', 'is', 'weight'])
           const fallbackText = typeof attrs.fallback === 'string' ? attrs.fallback : ''
           const innerText = textOf(element)
           const degrade = (reason) => {
@@ -1319,6 +1526,20 @@ window.__ModuleLoader__.load({
           }
           if (type === undefined || type === 'root' || type === 'state') return degrade('未知标签')
           if (element.unclosed) return degrade('没有闭合')
+          if (element.name === 'callout' && element.children.some((child) => child.name !== '#text')) {
+            const children = element.children
+              .map((child) => {
+                if (child.name === '#text') {
+                  const text = String(child.text ?? '').trim()
+                  return text === '' ? null : { id: 'ml-callout-text', type: 'text', props: { text }, children: [] }
+                }
+                const item = compile(child)
+                return item.kind === 'node' ? item.node : { id: 'ml-callout-degraded', type: 'text', props: { text: item.text }, children: [] }
+              })
+              .filter(Boolean)
+            const props = { ...control, ...readProps(attrs, TEXT_PROPS.callout) }
+            return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-callout', type: 'callout', props, children } }
+          }
           const INLINE_LEAVES = { badge: 'text', emphasis: 'text', b: 'text', code: 'text', a: 'text', link: 'text', callout: 'text', progress: 'label', empty: 'text' }
           if (INLINE_LEAVES[element.name] !== undefined) {
             const key = INLINE_LEAVES[element.name]
@@ -1336,20 +1557,6 @@ window.__ModuleLoader__.load({
           if (element.name === 'text') {
             const text = typeof element.attrs.text === 'string' ? element.attrs.text : innerText
             return text === '' ? degrade('没有内容') : { kind: 'node', node: { id: typeof element.attrs.id === 'string' && element.attrs.id !== '' ? element.attrs.id : 'ml-text', type: 'text', props: { ...control, text }, children: [] } }
-          }
-          if (element.name === 'callout' && element.children.some((child) => child.name !== '#text')) {
-            const children = element.children
-              .map((child) => {
-                if (child.name === '#text') {
-                  const text = String(child.text ?? '').trim()
-                  return text === '' ? null : { id: 'ml-callout-text', type: 'text', props: { text }, children: [] }
-                }
-                const item = compile(child)
-                return item.kind === 'node' ? item.node : { id: 'ml-callout-degraded', type: 'text', props: { text: item.text }, children: [] }
-              })
-              .filter(Boolean)
-            const props = { ...control, ...readProps(attrs, TEXT_PROPS.callout) }
-            return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-callout', type: 'callout', props, children } }
           }
           if (element.name === 'diagram') {
             // 结构图形：lane 是显式列；散落的 node 按出现顺序汇成最前一列；
@@ -1403,8 +1610,15 @@ window.__ModuleLoader__.load({
               },
             }
           }
-          if (element.children.length > 0) return degrade('该标签不接受子内容')
-          return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }, children: [] } }
+          const props = { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }
+          if (type === 'step' && element.children.every((child) => child.name === '#text')) {
+            if (props.title === undefined && typeof attrs.label === 'string') props.title = attrs.label
+            const note = attrs.desc ?? innerText
+            if (props.note === undefined && typeof note === 'string' && note !== '') props.note = note
+          } else if (element.children.length > 0) {
+            return degrade('该标签不接受子内容')
+          }
+          return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props, children: [] } }
         }
 
         const compiled = children.map((child) => compile(child))
@@ -1413,7 +1627,7 @@ window.__ModuleLoader__.load({
         )
         let rootNode = null
         if (mapped.length === 1) rootNode = mapped[0]
-        else if (mapped.length > 1) rootNode = { id: 'ml-root', type: 'column', props: { gap: 10 }, children: mapped }
+        else if (mapped.length > 1) rootNode = { id: 'ml-root', type: 'column', props: {}, children: mapped }
         if (rootNode === null) return { ok: false, errors: ['<ui> 里没有可渲染内容'], degraded }
 
         // 稳定 key：同类型节点按出现顺序编号，回放与状态不漂移
@@ -1431,6 +1645,7 @@ window.__ModuleLoader__.load({
           doc: {
             title: typeof ui.attrs.title === 'string' ? ui.attrs.title : '',
             fallback: typeof ui.attrs.fallback === 'string' ? ui.attrs.fallback : '',
+            density: typeof ui.attrs.density === 'string' ? ui.attrs.density : undefined,
             state,
             root: withIds,
           },
@@ -1455,10 +1670,40 @@ window.__ModuleLoader__.load({
        */
 
       const INLINE_TOKEN = /\{\{(badge|icon|code):([^{}\n]{1,120}?)\}\}/gu
-      // 新主路径是 ```iui；```html 是无脚本沙箱文档通道（F-42）；```ink-view 只为历史消息保留只读兼容。
-      // 收尾围栏必须独占一行（≤3 空格缩进）：否则围栏内容里行内的 ```（例如示例代码、表格里的
-      // "```html" 字样）会把文档当场腰斩，前半截进沙箱帧、后半截漏成聊天正文（rc.13 实测翻车）。
+      // 保留旧正则导出，实际切分由 scanFences 保留外层 Markdown 代码围栏。
       const BLOCK_FENCE = /^[ \t]{0,3}```(iui|ink-view|html)[ \t]*\r?\n([\s\S]*?)^[ \t]{0,3}```[ \t]*\r?$/gmu
+
+      const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)(\r?\n|$)/gmu
+      const TRUSTED_FENCE = /^(iui|ink-view|html)[ \t]*$/u
+      const BARE_UI = /(?:^|\n)[ \t]*(<ui\b[\s\S]*?<\/ui>)/gu
+
+      function scanFences(source) {
+        const fences = []
+        let open = null
+        for (const match of source.matchAll(FENCE_LINE)) {
+          const [line, marker, info, newline] = match
+          if (open !== null) {
+            if (marker[0] === open.marker[0] && marker.length >= open.marker.length && /^[ \t]*$/u.test(info)) {
+              open.contentEnd = match.index
+              open.end = match.index + line.length - newline.length
+              open = null
+            }
+            continue
+          }
+          if (marker[0] === '`' && info.includes('`')) continue
+          const trusted = marker === '```' && newline !== '' ? TRUSTED_FENCE.exec(info) : null
+          open = {
+            marker,
+            lang: trusted?.[1] ?? null,
+            start: match.index,
+            contentStart: match.index + line.length,
+            contentEnd: null,
+            end: null,
+          }
+          fences.push(open)
+        }
+        return fences
+      }
 
       function readInline(kind, payload) {
         if (kind === 'icon') {
@@ -1477,55 +1722,7 @@ window.__ModuleLoader__.load({
        * @returns {Array<{kind:'text', text:string} | {kind:'block', raw:string} | {kind:'inline', node:object}>}
        */
       function splitTrustedMarkdown(text) {
-        const source = String(text ?? '')
-        const parts = []
-        const pushText = (value) => {
-          if (value !== '') parts.push({ kind: 'text', text: value })
-        }
-        let cursor = 0
-        // 先切块级围栏，再在每段普通文本里切行内 token
-        BLOCK_FENCE.lastIndex = 0
-        let fence = BLOCK_FENCE.exec(source)
-        while (fence !== null) {
-          pushTrustedInline(source.slice(cursor, fence.index), pushText, parts)
-          parts.push({ kind: 'block', raw: fence[2], lang: fence[1] })
-          cursor = fence.index + fence[0].length
-          fence = BLOCK_FENCE.exec(source)
-        }
-        pushTrustedInline(source.slice(cursor), pushText, parts)
-        return parts.length === 0 ? [{ kind: 'text', text: source }] : parts
-      }
-
-      /** 其他语言的代码围栏：里面的内容一律原样保留，不识别 UI/行内标记。 */
-      const CODE_FENCE = /```[A-Za-z0-9_-]*[ \t]*\r?\n[\s\S]*?```/gu
-      /** 行首独立出现的顶层 <ui>…</ui>：模型偶尔忘了写围栏，仍按受控 ML 处理。 */
-      const BARE_UI = /(?:^|\n)[ \t]*(<ui\b[\s\S]*?<\/ui>)/gu
-
-      function pushTrustedInline(text, pushText, parts) {
-        if (text === '') return
-        let cursor = 0
-        const handlePlain = (plain) => {
-          BARE_UI.lastIndex = 0
-          let bare = BARE_UI.exec(plain)
-          let innerCursor = 0
-          while (bare !== null) {
-            pushInlineTokens(plain.slice(innerCursor, bare.index), pushText, parts)
-            // 保留块前必要的换行，避免把上一段文字粘到块里
-            parts.push({ kind: 'block', raw: bare[1], lang: 'ml-bare' })
-            innerCursor = bare.index + bare[0].length
-            bare = BARE_UI.exec(plain)
-          }
-          pushInlineTokens(plain.slice(innerCursor), pushText, parts)
-        }
-        CODE_FENCE.lastIndex = 0
-        let fence = CODE_FENCE.exec(text)
-        while (fence !== null) {
-          handlePlain(text.slice(cursor, fence.index))
-          pushText(fence[0])
-          cursor = fence.index + fence[0].length
-          fence = CODE_FENCE.exec(text)
-        }
-        handlePlain(text.slice(cursor))
+        return splitMarkdown(text, true)
       }
 
       function pushInlineTokens(text, pushText, parts) {
@@ -1544,56 +1741,47 @@ window.__ModuleLoader__.load({
 
       /** 是否含任何受信标记（用于快速路径：没有标记时行为与原生完全一致）。 */
       function hasTrustedMarkup(text) {
-        const source = String(text ?? '')
-        BLOCK_FENCE.lastIndex = 0
-        if (BLOCK_FENCE.test(source)) return true
-        INLINE_TOKEN.lastIndex = 0
-        return INLINE_TOKEN.test(source)
+        return splitTrustedMarkdown(text).some((part) => part.kind !== 'text')
       }
 
       /** 块级专用切分：只按闭合围栏/行首裸 <ui> 分段，行内 token 保持字面量留在文本段里，
        *  交给 fork 层的「先原生渲染后 DOM 嫁接」（跨 token 完整性根修）。
        *  其他语言的代码围栏内的内容一律原样保留，不识别。 */
       function splitTrustedBlocks(text) {
+        return splitMarkdown(text, false)
+      }
+
+      function splitMarkdown(text, splitInline) {
         const source = String(text ?? '')
         const parts = []
         const pushText = (value) => {
-          if (value !== '') parts.push({ kind: 'text', text: value })
+          if (value === '') return
+          const last = parts[parts.length - 1]
+          if (last?.kind === 'text') last.text += value
+          else parts.push({ kind: 'text', text: value })
         }
-        const pushBareBlocks = (plain) => {
-          BARE_UI.lastIndex = 0
-          let bare = BARE_UI.exec(plain)
+        const pushPlainText = splitInline ? (value) => pushInlineTokens(value, pushText, parts) : pushText
+        const pushPlain = (plain) => {
           let innerCursor = 0
-          while (bare !== null) {
-            pushText(plain.slice(innerCursor, bare.index))
+          for (const bare of plain.matchAll(BARE_UI)) {
+            pushPlainText(plain.slice(innerCursor, bare.index))
             parts.push({ kind: 'block', raw: bare[1], lang: 'ml-bare' })
             innerCursor = bare.index + bare[0].length
-            bare = BARE_UI.exec(plain)
           }
-          pushText(plain.slice(innerCursor))
+          pushPlainText(plain.slice(innerCursor))
         }
-        const handlePlain = (plain) => {
-          CODE_FENCE.lastIndex = 0
-          let fence = CODE_FENCE.exec(plain)
-          let innerCursor = 0
-          while (fence !== null) {
-            pushBareBlocks(plain.slice(innerCursor, fence.index))
-            pushText(fence[0])
-            innerCursor = fence.index + fence[0].length
-            fence = CODE_FENCE.exec(plain)
-          }
-          pushBareBlocks(plain.slice(innerCursor))
-        }
+
         let cursor = 0
-        BLOCK_FENCE.lastIndex = 0
-        let fence = BLOCK_FENCE.exec(source)
-        while (fence !== null) {
-          handlePlain(source.slice(cursor, fence.index))
-          parts.push({ kind: 'block', raw: fence[2], lang: fence[1] })
-          cursor = fence.index + fence[0].length
-          fence = BLOCK_FENCE.exec(source)
+        for (const fence of scanFences(source)) {
+          pushPlain(source.slice(cursor, fence.start))
+          if (fence.lang !== null && fence.end !== null) {
+            parts.push({ kind: 'block', raw: source.slice(fence.contentStart, fence.contentEnd), lang: fence.lang })
+          } else {
+            pushText(source.slice(fence.start, fence.end ?? source.length))
+          }
+          cursor = fence.end ?? source.length
         }
-        handlePlain(source.slice(cursor))
+        pushPlain(source.slice(cursor))
         return parts.length === 0 ? [{ kind: 'text', text: source }] : parts
       }
 
@@ -1604,14 +1792,9 @@ window.__ModuleLoader__.load({
        */
       function splitStreamingFence(text) {
         const source = String(text ?? '')
-        const starts = [...source.matchAll(/^[ \t]{0,3}```iui[ \t]*\r?\n/gmu)]
-        if (starts.length === 0) return { pre: source, live: '', hasOpen: false }
-        const last = starts[starts.length - 1]
-        const contentStart = last.index + last[0].length
-        const tail = source.slice(contentStart)
-        // 收尾与块级切分同规则：独占一行才算闭合，行内 ``` 不结束围栏。
-        if (/^[ \t]{0,3}```[ \t]*\r?$/mu.test(tail)) return { pre: source, live: '', hasOpen: false }
-        return { pre: source.slice(0, last.index), live: tail, hasOpen: true }
+        const last = scanFences(source).at(-1)
+        if (last?.lang !== 'iui' || last.end !== null) return { pre: source, live: '', hasOpen: false }
+        return { pre: source.slice(0, last.start), live: source.slice(last.contentStart), hasOpen: true }
       }
 
       /**
@@ -2245,11 +2428,63 @@ window.__ModuleLoader__.load({
       return itemProps.is === undefined ? Boolean(actual) : sameValue(actual, resolve(itemProps.is))
     }
 
-    function IuiDiagram({ item, resolve }) {
+    /** 根密度：模型只表达「嵌在正文里 / 紧凑卡 / 完整面板」，真实间距与边框由渲染器决定。 */
+    const DENSITY_STYLE = {
+      inline: { gap: 6, border: 'none', borderRadius: 0, padding: 0 },
+      compact: { gap: 8, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 },
+      panel: { gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 },
+    }
+
+    const DENSITY_CONTROLS = new Set(['segmented', 'toggle', 'slider', 'input'])
+    const DENSITY_STRUCTURES = new Set(['card', 'table', 'chart', 'steps', 'diagram'])
+
+    /** Use the declared structure and ignore collapsed details so layout stays stable during interaction. */
+    function inferDensity(root) {
+      let controls = 0
+      let structures = 0
+      const visit = (item) => {
+        if (item.type === 'details') return
+        if (DENSITY_CONTROLS.has(item.type)) controls += 1
+        if (DENSITY_STRUCTURES.has(item.type)) structures += 1
+        for (const child of item.children) visit(child)
+      }
+      visit(root)
+      if (controls >= 2 || structures >= 2) return 'panel'
+      return structures === 1 ? 'compact' : 'inline'
+    }
+
+    const WEIGHT_STYLE = {
+      primary: { fontWeight: 600 },
+      secondary: { fontWeight: 500 },
+      optional: { fontWeight: 400 },
+    }
+    const METRIC_FONT_SIZE = { primary: 23, secondary: 18, optional: 16 }
+
+    function weightOf(props) {
+      return props !== null && props !== undefined && WEIGHT_STYLE[props.weight] !== undefined ? props.weight : undefined
+    }
+
+    /** 把 weight 落到节点自身的根元素：DOM 元素合并 style；组件元素透传 weight，由组件落在自己的根上。 */
+    function applyWeight(element, weight) {
+      if (element === null || element === undefined || weight === undefined) return element
+      const weightStyle = WEIGHT_STYLE[weight]
+      if (typeof element.type === 'string') {
+        const props = element.props ?? {}
+        const extra = { 'data-iui-weight': weight, style: { ...(props.style ?? {}), ...weightStyle } }
+        if (typeof React.cloneElement === 'function') return React.cloneElement(element, extra)
+        return { ...element, props: { ...props, ...extra } }
+      }
+      if (typeof React.cloneElement === 'function') return React.cloneElement(element, { weight })
+      return { ...element, props: { ...(element.props ?? {}), weight } }
+    }
+
+    function IuiDiagram({ item, resolve, resolveText, weight }) {
       // 泳道图：真实浏览器挂载后一次实测锚点（等比 1:1 坐标，箭头精确落在药丸边缘）；
       // stub / 无 DOM 环境回落到近似几何（360 逻辑坐标），保住测试通道与降级路径。
       const props = item.props ?? {}
-      const resolveText = (value) => (value === undefined || value === null ? '' : String(value))
+      const str = (value) => (value === undefined || value === null ? '' : String(value))
+      // 文本类属性走字面量回退解析；diagram 子树的 label/note 与主树同一套规则。
+      const read = (value) => str(resolveText === undefined ? resolve(value) : resolveText(value))
       const kids = Array.isArray(item.children) ? item.children : []
       const lanes = []
       const notes = []
@@ -2267,8 +2502,8 @@ window.__ModuleLoader__.load({
               ...laneChild,
               props: {
                 ...(laneChild.props ?? {}),
-                label: resolveText(resolve(laneChild.props?.label)),
-                note: resolveText(resolve(laneChild.props?.note)),
+                label: read(laneChild.props?.label),
+                note: read(laneChild.props?.note),
               },
             }))
           if (!laneVisible) {
@@ -2276,20 +2511,20 @@ window.__ModuleLoader__.load({
             continue
           }
           if (visibleNodes.length === 0) continue
-          lanes.push({ ...child, props: { ...(child.props ?? {}), label: resolveText(resolve(child.props?.label)) }, children: visibleNodes })
+          lanes.push({ ...child, props: { ...(child.props ?? {}), label: read(child.props?.label) }, children: visibleNodes })
         } else if (child.type === 'node') {
           if (!isItemVisible(child, resolve)) continue
           freeNodes.push({
             ...child,
             props: {
               ...(child.props ?? {}),
-              label: resolveText(resolve(child.props?.label)),
-              note: resolveText(resolve(child.props?.note)),
+              label: read(child.props?.label),
+              note: read(child.props?.note),
             },
           })
         } else if (child.type === 'edge') {
           if (!isItemVisible(child, resolve)) continue
-          edges.push({ ...child, props: { ...(child.props ?? {}), label: resolveText(resolve(child.props?.label)) } })
+          edges.push({ ...child, props: { ...(child.props ?? {}), label: read(child.props?.label) } })
         } else notes.push(child)
       }
       if (freeNodes.length > 0) lanes.unshift({ props: {}, children: freeNodes })
@@ -2342,11 +2577,12 @@ window.__ModuleLoader__.load({
       const svgHeight = measured ? geo.height : rowsHeight
       const markerId = 'miopiik-arrow-' + String(item.id ?? 'diagram').replace(/[^A-Za-z0-9_-]/gu, '')
       const markerSize = measured ? 7 : 6
-      const titleText = resolveText(resolve(props.title))
-      const sourceText = resolveText(resolve(props.source))
+      const titleText = read(props.title)
+      const sourceText = read(props.source)
+      const weightStyle = weight !== undefined ? WEIGHT_STYLE[weight] : undefined
       return h(
         'div',
-        { className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
+        { className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), 'data-iui-weight': weightStyle === undefined ? undefined : weight, style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, ...(weightStyle ?? {}) } },
         h('div', { ref: wrapRef, style: { position: 'relative', width: '100%' } },
           h('svg', {
             viewBox: `0 0 ${svgWidth} ${svgHeight}`,
@@ -2380,7 +2616,9 @@ window.__ModuleLoader__.load({
               ...slots[li].map((child, si) => {
                 const cp = child.props ?? {}
                 const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
-                return h('div', { key: `node-${si}`, 'data-iui-diagram-node': String(cp.id ?? ''), style: { height: PILL, minWidth: 56, maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, border: `1px ${cp.tone === 'accent' ? 'dashed' : 'solid'} ${cp.tone ? toneColor : C.border}`, borderRadius: 8, padding: '2px 8px', boxSizing: 'border-box', textAlign: 'center', color: cp.tone ? toneColor : C.text } },
+                const nodeWeight = weightOf(cp)
+                const nodeWeightStyle = nodeWeight === undefined ? undefined : WEIGHT_STYLE[nodeWeight]
+                return h('div', { key: `node-${si}`, 'data-iui-diagram-node': String(cp.id ?? ''), 'data-iui-weight': nodeWeightStyle === undefined ? undefined : nodeWeight, style: { height: PILL, minWidth: 56, maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, border: `1px ${cp.tone === 'accent' ? 'dashed' : 'solid'} ${cp.tone ? toneColor : C.border}`, borderRadius: 8, padding: '2px 8px', boxSizing: 'border-box', textAlign: 'center', color: cp.tone ? toneColor : C.text, ...(nodeWeightStyle ?? {}) } },
                   h('div', { style: { fontSize: 11, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.label ?? '')),
                   String(cp.note ?? '') !== '' ? h('div', { style: { fontSize: 9, lineHeight: '11px', color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.note)) : null)
               }),
@@ -2389,129 +2627,34 @@ window.__ModuleLoader__.load({
           needsDrop ? h('div', { key: 'drop', style: { height: 48 } }) : null,
         ),
         titleText !== '' || sourceText !== '' ? h('div', { style: { fontSize: 10, color: C.muted } }, [titleText, sourceText !== '' ? `来源：${sourceText}` : ''].filter((part) => part !== '').join(' · ')) : null,
-        ...notes.map((note, index) => h('div', { key: `note-${index}`, style: { fontSize: 10, color: C.muted } }, resolveText(resolve(note.props?.text)))),
+        ...notes.map((note, index) => h('div', { key: `note-${index}`, style: { fontSize: 10, color: C.muted } }, read(note.props?.text))),
       )
     }
 
-    /** derive 名字：点号路径，段首字母/下划线；保留名段禁止（渲染层按 AST 校验规则再守一道）。 */
-    const DERIVE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u
     const RESERVED_STATE_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
     function isRecordValue(value) {
       return value !== null && typeof value === 'object' && !Array.isArray(value)
     }
-    // 表达式引擎由构建器以 IUI_EXPR 闭包注入；缺失或接口异常时 derive 全部解析为 undefined（组件显示兜底），不抛异常。
-    const EXPR_ENGINE = (() => {
-      try {
-        return typeof IUI_EXPR === 'undefined' ? null : IUI_EXPR
-      } catch {
-        return null
-      }
-    })()
-    const EXPR_CACHE = new Map()
-    const DERIVE_MAX = Number.isInteger(IUI_AST.LIMITS?.derive) ? IUI_AST.LIMITS.derive : 64
 
-    function compileDeriveExpr(source) {
-      const key = String(source)
-      if (EXPR_CACHE.has(key)) return EXPR_CACHE.get(key)
-      let compiled = null
-      try {
-        compiled = EXPR_ENGINE === null ? null : EXPR_ENGINE.compileExpr(source)
-      } catch {
-        compiled = null
+    /** 文档校验已确定依赖顺序。局部交互时只重算结果，不重新扫描、编译或排序节点。 */
+    function deriveState(plan, baseState) {
+      let state = baseState
+      let errors = 0
+      for (const { name, compiled } of plan) {
+        const result = IUI_EXPR.evaluateExpr(compiled, { state })
+        const next = result.ok ? writeStatePath(state, name, result.value) : state
+        if (next === state) errors += 1
+        state = next
       }
-      if (compiled === null || typeof compiled !== 'object' || compiled.ok !== true) {
-        compiled = { ok: false, error: typeof compiled?.error === 'string' ? compiled.error : '表达式不可用' }
-      }
-      // 有界缓存：同一 source 重复出现不重复编译（引擎自身缓存之外再守一道）
-      if (EXPR_CACHE.size >= 256) EXPR_CACHE.delete(EXPR_CACHE.keys().next().value)
-      EXPR_CACHE.set(key, compiled)
-      return compiled
+      return { state, errors }
     }
-
-    /** derive 结果必须是 JSON-safe 值（有限数/字符串/布尔/null/数组/纯对象），否则该派生值按 undefined 处理。 */
-    function safeDerivedValue(value, depth) {
-      if (depth > 8) return null
-      if (value === null) return { ok: true, value }
-      const kind = typeof value
-      if (kind === 'boolean') return { ok: true, value }
-      if (kind === 'number') return Number.isFinite(value) ? { ok: true, value } : null
-      if (kind === 'string') return value.length <= IUI_AST.LIMITS.text ? { ok: true, value } : null
-      if (kind !== 'object') return null
-      if (Array.isArray(value)) {
-        if (value.length > 128) return null
-        const items = []
-        for (const entry of value) {
-          const safe = safeDerivedValue(entry, depth + 1)
-          if (safe === null) return null
-          items.push(safe.value)
-        }
-        return { ok: true, value: items }
-      }
-      const keys = Object.keys(value)
-      if (keys.length > 64) return null
-      const record = {}
-      for (const key of keys) {
-        if (key.length > 64 || RESERVED_STATE_KEYS.has(key)) return null
-        const safe = safeDerivedValue(value[key], depth + 1)
-        if (safe === null) return null
-        record[key] = safe.value
-      }
-      return { ok: true, value: record }
-    }
-
-    /** DFS（文档顺序）收集 derive 节点。 */
-    function collectDeriveNodes(root) {
-      const found = []
-      const walk = (item) => {
-        if (item === null || typeof item !== 'object') return
-        if (item.type === 'derive') found.push(item)
-        const kids = Array.isArray(item.children) ? item.children : []
-        for (const kid of kids) walk(kid)
-      }
-      walk(root)
-      return found
-    }
-
-    /** 依次求值派生链，返回「原始 state + 派生值」合并后的只读 scope.state（不修改 React state）。 */
-    function deriveState(root, baseState) {
-      const nodes = collectDeriveNodes(root)
-      if (nodes.length === 0) return baseState
-      let merged = baseState
-      const seen = new Set()
-      const total = Math.min(nodes.length, DERIVE_MAX)
-      for (let index = 0; index < total; index += 1) {
-        const node = nodes[index]
-        const props = node.props ?? {}
-        const name = props.name
-        if (typeof name !== 'string' || name === '' || name.length > 200 || !DERIVE_NAME.test(name)) continue
-        if (name.split('.').some((part) => RESERVED_STATE_KEYS.has(part))) continue
-        if (seen.has(name)) continue
-        seen.add(name)
-        let value
-        if (EXPR_ENGINE !== null && typeof props.expr === 'string') {
-          const compiled = compileDeriveExpr(props.expr)
-          if (compiled.ok) {
-            let evaluated = null
-            try {
-              evaluated = EXPR_ENGINE.evaluateExpr(compiled, { state: merged, data: {} })
-            } catch {
-              evaluated = null
-            }
-            if (evaluated !== null && typeof evaluated === 'object' && evaluated.ok === true) {
-              const safe = safeDerivedValue(evaluated.value, 0)
-              if (safe !== null) value = safe.value
-            }
-          }
-        }
-        // 失败/非法值同样写入 undefined：依赖它的后续 derive 与组件都能读到「不可用」，不会回落到原始 state 的旧值。
-        merged = writeStatePath(merged, name, value)
-      }
-      return merged
-    }
-
 
     function IuiSheet({ sample, format, degraded, streaming }) {
-      const checked = IUI_AST.validateAst(sample)
+      const checked = React.useMemo(() => IUI_AST.validateAst(sample), [sample])
+      const density = React.useMemo(() => {
+        if (!checked.ok) return 'panel'
+        return checked.ast.density === 'auto' ? inferDensity(checked.ast.root) : checked.ast.density
+      }, [checked])
       // 依赖必须是**内容**而不是对象引用：正文每次渲染都会产生新对象，用引用会导致状态被重置。
       const sampleKey = React.useMemo(() => {
         try {
@@ -2521,10 +2664,18 @@ window.__ModuleLoader__.load({
         }
       }, [sample])
       const [state, setState] = React.useState(checked.ok ? checked.ast.state : {})
+      // Keep disclosure state by position so conditional unmounting preserves it.
+      const [openDetails, setOpenDetails] = React.useState(() => new Map())
       React.useEffect(() => {
         if (checked.ok) setState(checked.ast.state)
+        // 只有文档内容变化（新块/流式分片）才重置展开态；同一文档的控件交互不得清空。
+        setOpenDetails((prev) => (prev.size === 0 ? prev : new Map()))
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [sampleKey])
+      const derived = React.useMemo(
+        () => checked.ok ? deriveState(checked.derivePlan, state) : { state, errors: 0 },
+        [checked, state],
+      )
       const degradedCount = (Array.isArray(degraded) ? degraded.length : 0) + (checked.ok ? checked.degraded : 0)
       if (!checked.ok) {
         return h(
@@ -2535,22 +2686,38 @@ window.__ModuleLoader__.load({
         )
       }
       const ast = checked.ast
-      // 派生状态：每次渲染按 DFS 顺序求值 derive 链，与原始 state 合并成统一 scope；
-      // 之后所有 $state.* 读取（控件 + 全部组件）都看到派生结果（跨组件同源）。
-      const scopedState = deriveState(ast.root, state)
+      // All bindings read the same state, including computed values.
+      const scopedState = derived.state
+      const deriveErrors = derived.errors
       const scope = { state: scopedState, data: {} }
       const resolve = (value) => IUI_AST.resolveValue(value, scope)
       const textOf = (value) => (value === undefined || value === null ? '' : String(value))
-      const node = (item, key) => {
+      // 文本类属性：绑定解析为 undefined 且字面量形如 $state.*/$data.* 时按字面量显示（旧文档兼容）；
+      // 数值类属性（metric.value/progress.value 等）仍显示 —。
+      const literalText = (value) => (typeof value === 'string' && /^\$(?:state|data)\./u.test(value) ? value : undefined)
+      const resolveText = (value) => {
+        const resolved = resolve(value)
+        return resolved !== undefined ? resolved : literalText(value)
+      }
+      const toggleDetails = (detailsId) => {
+        setOpenDetails((prev) => {
+          const next = new Map(prev)
+          next.set(detailsId, !(next.get(detailsId) === true))
+          return next
+        })
+      }
+      // 语义权重在 node() 出口统一落属性/视觉，分支内部不重复处理。
+      const node = (item, key) => (item === null || item === undefined ? null : applyWeight(nodeRaw(item, key), weightOf(item.props)))
+      const nodeRaw = (item, key) => {
         const props = item.props ?? {}
         // when/is：本地显隐（可选 is 做等值切换）。只读 $state，不执行任何表达式。
         if (!isItemVisible(item, resolve)) return null
         if (item.type === 'derive') return null
         if (item.type === 'text') {
-          return h('div', { key, style: { fontSize: 12, lineHeight: '18px', color: C.text } }, textOf(resolve(props.text)))
+          return h('div', { key, style: { fontSize: 12, lineHeight: '18px', color: C.text } }, textOf(resolveText(props.text)))
         }
         if (item.type === 'divider') {
-          const label = resolve(props.label)
+          const label = resolveText(props.label)
           if (!label) return h('hr', { key, 'data-iui-divider': '1', style: { border: 'none', borderTop: `1px solid ${C.border}`, width: '100%' } })
           return h(
             'div',
@@ -2561,16 +2728,17 @@ window.__ModuleLoader__.load({
         }
         if (item.type === 'metric') {
           const tone = TONE_COLORS[props.tone] ?? [null, C.muted]
-          const label = resolve(props.label)
+          const label = resolveText(props.label)
           const value = resolve(props.value)
-          const unit = resolve(props.unit)
-          const delta = resolve(props.delta)
-          const described = resolve(props.caption ?? props.note)
+          // unit 与 label 同为文本类：解析失败时回退字面量（0.1.1 回归测试按 resolve(props.unit) 片段核对绑定路径）
+          const unit = resolve(props.unit) ?? literalText(props.unit)
+          const delta = resolveText(props.delta)
+          const described = resolveText(props.caption ?? props.note)
           return h(
             'div',
             { key, 'data-iui-metric': textOf(label), style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 0' } },
             h('div', { style: { fontSize: 11, color: C.muted } }, textOf(label)),
-            h('div', { style: { fontSize: 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } }, `${value === undefined || value === null ? '—' : String(value)}${textOf(unit)}`),
+            h('div', { style: { fontSize: METRIC_FONT_SIZE[props.weight] ?? 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } }, `${value === undefined || value === null ? '—' : String(value)}${textOf(unit)}`),
             delta !== undefined && delta !== null && String(delta) !== ''
               ? h('div', { 'data-iui-delta': String(delta), style: { fontSize: 11, color: String(delta).startsWith('-') ? '#d1242f' : '#2ea043' } }, String(delta))
               : null,
@@ -2578,7 +2746,7 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'segmented') {
-          const label = resolve(props.label)
+          const label = resolveText(props.label)
           const binding = IUI_AST.readBinding(props.bind)
           const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const options = Array.isArray(props.options) ? props.options : []
@@ -2616,7 +2784,7 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'toggle') {
-          const label = resolve(props.label)
+          const label = resolveText(props.label)
           const binding = IUI_AST.readBinding(props.bind)
           const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const on = current === true || current === 'true'
@@ -2660,8 +2828,8 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'slider') {
-          const label = resolve(props.label)
-          const unit = resolve(props.unit)
+          const label = resolveText(props.label)
+          const unit = resolveText(props.unit)
           const binding = IUI_AST.readBinding(props.bind)
           const min = typeof props.min === 'number' && Number.isFinite(props.min) ? props.min : 0
           const max = typeof props.max === 'number' && Number.isFinite(props.max) && props.max > min ? props.max : Math.max(100, min + 1)
@@ -2693,7 +2861,7 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'input') {
-          const label = resolve(props.label)
+          const label = resolveText(props.label)
           const binding = IUI_AST.readBinding(props.bind)
           const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const ariaLabel = label ? textOf(label) : String(props.bind ?? '')
@@ -2722,8 +2890,8 @@ window.__ModuleLoader__.load({
             { key, className: 'miopiik-enter', 'data-iui-steps': String(item.children.length), style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
             ...item.children.map((child, index) => {
               const cp = child.props ?? {}
-              const title = resolve(cp.title)
-              const note = resolve(cp.note)
+              const title = resolveText(cp.title)
+              const note = resolveText(cp.note)
               const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
               const glyph = { success: '✓', warning: '!', danger: '✕' }[cp.tone] ?? String(index + 1)
               const last = index === item.children.length - 1
@@ -2756,19 +2924,20 @@ window.__ModuleLoader__.load({
             accent: { bg: 'rgba(65,118,230,0.16)', fg: C.brand },
           }
           const ICON_GLYPH = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }
-          const inline = (child, index) => {
+          const inline = (child, index) => applyWeight(inlineRaw(child, index), weightOf(child?.props ?? {}))
+          const inlineRaw = (child, index) => {
             const key2 = `${key}-${index}`
             if (!isItemVisible(child, resolve)) return null
-            if (child.type === 'text') return h('span', { key: key2 }, textOf(resolve(child.props.text)))
+            if (child.type === 'text') return h('span', { key: key2 }, textOf(resolveText(child.props.text)))
             if (child.type === 'badge') {
               const tone = TONE[child.props.tone] ?? TONE.neutral
-              return h('span', { key: key2, 'data-iui-badge': String(child.props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', margin: '0 2px', borderRadius: 999, fontSize: 11, lineHeight: '18px', background: tone.bg, color: tone.fg } }, textOf(resolve(child.props.text)))
+              return h('span', { key: key2, 'data-iui-badge': String(child.props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', margin: '0 2px', borderRadius: 999, fontSize: 11, lineHeight: '18px', background: tone.bg, color: tone.fg } }, textOf(resolveText(child.props.text)))
             }
-            if (child.type === 'emphasis') return h(child.props.strong === false ? 'em' : 'strong', { key: key2 }, textOf(resolve(child.props.text)))
-            if (child.type === 'code') return h('code', { key: key2, style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, background: 'rgba(127,127,127,0.14)', borderRadius: 4, padding: '0 4px' } }, textOf(resolve(child.props.text)))
+            if (child.type === 'emphasis') return h(child.props.strong === false ? 'em' : 'strong', { key: key2 }, textOf(resolveText(child.props.text)))
+            if (child.type === 'code') return h('code', { key: key2, style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, background: 'rgba(127,127,127,0.14)', borderRadius: 4, padding: '0 4px' } }, textOf(resolveText(child.props.text)))
             // href 不参与绑定解析：链接目标保持静态白名单，避免状态数据变成任意跳转目标。
-            if (child.type === 'link') return h('a', { key: key2, href: String(child.props.href ?? ''), target: '_blank', rel: 'noreferrer noopener', style: { color: C.brand, textDecoration: 'underline' } }, textOf(resolve(child.props.text)))
-            if (child.type === 'icon') return h('span', { key: key2, 'data-iui-icon': String(child.props.name ?? ''), role: 'img', 'aria-label': textOf(resolve(child.props.label ?? child.props.name)), style: { margin: '0 2px' } }, ICON_GLYPH[child.props.name] ?? '•')
+            if (child.type === 'link') return h('a', { key: key2, href: String(child.props.href ?? ''), target: '_blank', rel: 'noreferrer noopener', style: { color: C.brand, textDecoration: 'underline' } }, textOf(resolveText(child.props.text)))
+            if (child.type === 'icon') return h('span', { key: key2, 'data-iui-icon': String(child.props.name ?? ''), role: 'img', 'aria-label': textOf(resolveText(child.props.label ?? child.props.name)), style: { margin: '0 2px' } }, ICON_GLYPH[child.props.name] ?? '•')
             return h('span', { key: key2 }, '')
           }
           return h(
@@ -2779,14 +2948,14 @@ window.__ModuleLoader__.load({
         }
         if (item.type === 'badge') {
           const tone = TONE_COLORS[props.tone] ?? TONE_COLORS.neutral
-          return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(resolve(props.text)))
+          return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(resolveText(props.text)))
         }
-        if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve })
+        if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve, resolveText })
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')
           const color = (TONE_COLORS[tone] ?? TONE_COLORS.neutral)[1]
-          const title = resolve(props.title)
-          const text = resolve(props.text)
+          const title = resolveText(props.title)
+          const text = resolveText(props.text)
           const kids = item.children.map((child, index) => node(child, `${key}-${index}`))
           return h(
             'div',
@@ -2797,7 +2966,7 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'progress') {
-          const label = resolve(props.label)
+          const label = resolveText(props.label)
           const shown = resolve(props.value)
           const numeric = Number(shown)
           const max = Number(props.max ?? 1)
@@ -2812,8 +2981,8 @@ window.__ModuleLoader__.load({
         }
         if (item.type === 'empty') {
           const glyph = { check: '✓', alert: '!', dot: '•', 'arrow-right': '→', spark: '✳', chart: '▤', layers: '▦', shield: '⛨', clock: '◷', inbox: '▣', info: 'ℹ' }
-          const title = resolve(props.title)
-          const description = resolve(props.description ?? props.text)
+          const title = resolveText(props.title)
+          const description = resolveText(props.description ?? props.text)
           return h(
             'div',
             { key, 'data-iui-empty': '1', style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, textAlign: 'center', padding: '14px 0', color: C.muted } },
@@ -2823,8 +2992,8 @@ window.__ModuleLoader__.load({
           )
         }
         if (item.type === 'card') {
-          const title = resolve(props.title)
-          const subtitle = resolve(props.subtitle)
+          const title = resolveText(props.title)
+          const subtitle = resolveText(props.subtitle)
           const kids = item.children.map((child, index) => node(child, `${key}-${index}`))
           const span = Number(props.span ?? 1)
           return h(
@@ -2905,7 +3074,7 @@ window.__ModuleLoader__.load({
           const allRows = normalized.rows
           const filtered = query === '' ? allRows : allRows.filter((row) => row.some((cell) => String(cell ?? '').toLowerCase().includes(query)))
           const rows = filtered.length === 0 && query !== '' ? [columns.map((_, cellIndex) => (cellIndex === 0 ? '无匹配项' : ''))] : filtered
-          const captionValue = resolve(props.caption)
+          const captionValue = resolveText(props.caption)
           const captionText = [
             captionValue ? String(captionValue) : '',
             query !== '' ? `已过滤 ${filtered.length}/${allRows.length} 行` : '',
@@ -2949,12 +3118,15 @@ window.__ModuleLoader__.load({
         }
         if (item.type === 'row' || item.type === 'column') {
           const isRow = item.type === 'row'
+          const columns = ast.density === 'auto'
+            ? 'repeat(auto-fit, minmax(min(100%, 108px), 1fr))'
+            : `repeat(${Math.max(1, item.children.length)}, minmax(0, 1fr))`
           return h(
             'div',
             {
               key,
               'data-iui-container': item.type,
-              style: { display: isRow ? 'grid' : 'flex', gridTemplateColumns: isRow ? `repeat(${Math.max(1, item.children.length)}, minmax(0, 1fr))` : undefined, flexDirection: isRow ? undefined : 'column', gap: Number(props.gap ?? 10) },
+              style: { display: isRow ? 'grid' : 'flex', gridTemplateColumns: isRow ? columns : undefined, flexDirection: isRow ? undefined : 'column', gap: Number(props.gap ?? DENSITY_STYLE[density].gap) },
             },
             ...item.children.map((child, index) => node(child, `${key}-${index}`)),
           )
@@ -2963,7 +3135,7 @@ window.__ModuleLoader__.load({
           const series = resolve(props.series)
           const rows = IUI_AST.chartMatrix(series)
           const kind = String(props.kind ?? 'bar')
-          const source = resolve(props.source)
+          const source = resolveText(props.source)
           return h(
             'div',
             { key, className: 'miopiik-enter', 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
@@ -2973,72 +3145,110 @@ window.__ModuleLoader__.load({
             textOf(source) === '' ? null : h('div', { style: { fontSize: 10, color: C.muted } }, `来源：${textOf(source)}`),
           )
         }
-        if (item.type === 'details') return h(IuiDetails, { key, item, render: node, resolve })
-        if (item.type === 'button') return h(IuiCopyAction, { key, item, resolve })
+        if (item.type === 'details') {
+          return h(IuiDetails, {
+            key,
+            item,
+            render: (child, index) => node(child, `${key}-${index}`),
+            resolve,
+            resolveText,
+            open: openDetails.get(key) === true,
+            onToggle: () => toggleDetails(key),
+          })
+        }
+        if (item.type === 'button') return h(IuiCopyAction, { key, item, resolve, resolveText })
         return null
       }
       return h(
         'div',
         // 流式分片期间不挂入场动画：逐分片重挂载会让淡入闪成频闪
-        { className: streaming === true ? undefined : 'miopiik-enter', 'data-iui-output': 'ok', 'data-iui-format': format ?? 'json', 'data-iui-degraded': String(degradedCount), 'data-iui-streaming': streaming === true ? '1' : undefined, style: { display: 'flex', flexDirection: 'column', gap: 10, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 } },
-        ast.title ? h('div', { style: { fontSize: 13, fontWeight: 600 } }, ast.title) : null,
+        {
+          className: streaming === true ? undefined : 'miopiik-enter',
+          'data-iui-output': 'ok',
+          'data-iui-format': format ?? 'json',
+          'data-iui-degraded': String(degradedCount),
+          'data-iui-streaming': streaming === true ? '1' : undefined,
+          'data-iui-density': density,
+          'data-iui-derive-errors': String(deriveErrors),
+          style: { display: 'flex', flexDirection: 'column', minWidth: 0, overflowWrap: 'anywhere', ...DENSITY_STYLE[density] },
+        },
+        // inline 密度嵌在正文里：标题用小号弱化样式，避免抢正文层级
+        ast.title ? h('div', { style: density === 'inline' ? { fontSize: 11, fontWeight: 600, color: C.muted, lineHeight: '16px' } : { fontSize: 13, fontWeight: 600 } }, ast.title) : null,
         node(ast.root, 'root'),
       )
     }
 
-    /** details 折叠容器：展开状态是组件本地 React state——IuiSheet 重渲染（切场景/改滑杆）不会重置。 */
-    function IuiDetails({ item, render, resolve }) {
-      const [open, setOpen] = React.useState(false)
+    /** A disclosure whose open state belongs to its IUI fragment. */
+    function IuiDetails({ item, render, resolve, resolveText, open, onToggle, weight }) {
       const props = item.props ?? {}
-      const rawLabel = resolve === undefined ? props.label : resolve(props.label)
+      const rawLabel = resolveText === undefined ? (resolve === undefined ? props.label : resolve(props.label)) : resolveText(props.label)
       const label = rawLabel === undefined || rawLabel === null || String(rawLabel) === '' ? '详情' : String(rawLabel)
-      const bodyId = 'iui-details-' + String(item.id ?? 'root').replace(/[^A-Za-z0-9_-]/gu, '')
+      const bodyId = React.useId()
       const children = Array.isArray(item.children) ? item.children : []
+      const expanded = open === true
+      const weightStyle = weight !== undefined ? WEIGHT_STYLE[weight] : undefined
       return h(
         'div',
-        { 'data-iui-details': open ? 'open' : 'closed', style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
+        { 'data-iui-details': expanded ? 'open' : 'closed', 'data-iui-weight': weightStyle === undefined ? undefined : weight, style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, ...(weightStyle ?? {}) } },
         h('button', {
           type: 'button',
           className: 'miopiik-ctl',
-          'aria-expanded': open ? 'true' : 'false',
+          'aria-expanded': expanded ? 'true' : 'false',
           'aria-controls': bodyId,
-          onClick: () => setOpen((value) => !value),
+          onClick: () => {
+            if (typeof onToggle === 'function') onToggle()
+          },
           style: { alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', color: C.text, padding: '3px 9px', fontSize: 12, lineHeight: '18px', cursor: 'pointer' },
-        }, `${open ? '▾' : '▸'} ${label}`),
-        open
-          ? h('div', { id: bodyId, 'data-iui-details-body': '1', style: { display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 2, minWidth: 0 } }, ...children.map((child, index) => render(child, `${item.id ?? 'details'}-${index}`)))
-          : null,
+        }, h('span', { 'aria-hidden': true }, expanded ? '▾' : '▸'), label),
+        h('div', { id: bodyId, hidden: !expanded, 'data-iui-details-body': expanded ? '1' : undefined, style: { display: expanded ? 'flex' : 'none', flexDirection: 'column', gap: 8, paddingLeft: 2, minWidth: 0 } },
+          ...(expanded ? children.map(render) : []),
+        ),
       )
     }
 
+    /**
+     * 待复制载荷：字符串原样、其余 JSON 序列化。
+     * 解析失败 → parsed:false（摘要显示 —）；超过 stateBytes → copyable:false（点击一律 unsupported，不假报成功）。
+     */
+    function copyPayloadOf(value) {
+      let text = null
+      try {
+        const payload = typeof value === 'string' ? value : JSON.stringify(value)
+        if (typeof payload === 'string') text = payload
+      } catch {
+        text = null
+      }
+      if (text === null) return { parsed: false, copyable: false, bytes: 0, text: null }
+      const bytes = text.length
+      return bytes > IUI_AST.LIMITS.stateBytes
+        ? { parsed: true, copyable: false, bytes, text: null }
+        : { parsed: true, copyable: true, bytes, text }
+    }
+
     /** button：唯一宿主授权动作 copy（仅用户点击后写剪贴板）；状态本地，role=status 播报。 */
-    function IuiCopyAction({ item, resolve }) {
+    function IuiCopyAction({ item, resolve, resolveText, weight }) {
       const [status, setStatus] = React.useState('idle')
       const props = item.props ?? {}
       const action = props.action
-      const rawLabel = resolve === undefined ? props.label : resolve(props.label)
+      const read = (value) => (resolveText === undefined ? resolve(value) : resolveText(value))
+      const rawLabel = read(props.label)
       const label = rawLabel === undefined || rawLabel === null || String(rawLabel) === '' ? '复制' : String(rawLabel)
-      const done = resolve === undefined ? props.done : resolve(props.done)
-      const unsupported = resolve === undefined ? props.unsupported : resolve(props.unsupported)
+      const done = read(props.done)
+      const unsupported = read(props.unsupported)
+      // 可见摘要必须是「真实待复制内容」的可核对版本，不能拿 label 冒充。
+      const value = resolve(props.value)
+      const payload = copyPayloadOf(value)
+      const kind = typeof value === 'string' ? '文本' : 'JSON'
+      const summary = payload.copyable ? `待复制：${kind} · ${payload.bytes} 字符` : '待复制：—'
+      const baseDone = done === undefined || done === null || String(done) === '' ? '已复制' : String(done)
       const statusText = status === 'ok'
-        ? (done === undefined || done === null || String(done) === '' ? '已复制' : String(done))
+        ? `${baseDone} · ${payload.bytes} 字符`
         : status === 'unsupported'
           ? (unsupported === undefined || unsupported === null || String(unsupported) === '' ? '当前不支持此动作' : String(unsupported))
           : ''
       const copy = () => {
         // 只实现 copy：任何其他 action 一律按不支持处理（AST 校验器已先拒绝）。
-        if (action !== 'copy') {
-          setStatus('unsupported')
-          return
-        }
-        let payload
-        try {
-          const value = resolve(props.value)
-          payload = typeof value === 'string' ? value : JSON.stringify(value)
-          if (typeof payload !== 'string') throw new Error('无法序列化为字符串')
-          // 契约预算对绑定载荷同样生效：超限直接按不支持处理，不写剪贴板（done 只是 UI 文案，不拼 payload）
-          if (payload.length > IUI_AST.LIMITS.stateBytes) throw new Error('复制载荷超出预算')
-        } catch {
+        if (action !== 'copy' || !payload.copyable) {
           setStatus('unsupported')
           return
         }
@@ -3048,27 +3258,38 @@ window.__ModuleLoader__.load({
         } catch {
           clipboard = null
         }
+        // 剪贴板缺失/写入被拒（权限/焦点）→ unsupported；不读剪贴板、无网络、不假报成功。
         if (clipboard === null || clipboard === undefined || typeof clipboard.writeText !== 'function') {
           setStatus('unsupported')
           return
         }
         try {
-          Promise.resolve(clipboard.writeText(payload)).then(() => setStatus('ok'), () => setStatus('unsupported'))
+          Promise.resolve(clipboard.writeText(payload.text)).then(() => setStatus('ok'), () => setStatus('unsupported'))
         } catch {
           setStatus('unsupported')
         }
       }
       const marked = status === 'ok' || status === 'unsupported' ? status : undefined
+      const weightStyle = weight !== undefined ? WEIGHT_STYLE[weight] : undefined
       return h(
         'div',
-        { 'data-iui-action-wrap': '1', style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 } },
+        { 'data-iui-action-wrap': '1', 'data-iui-weight': weightStyle === undefined ? undefined : weight, style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0, ...(weightStyle ?? {}) } },
         h('button', {
           type: 'button',
           className: 'miopiik-ctl',
           'data-iui-action': 'copy',
+          'data-iui-copy-bytes': payload.parsed ? String(payload.bytes) : undefined,
           onClick: copy,
           style: { border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', color: C.text, padding: '3px 10px', fontSize: 12, lineHeight: '18px', cursor: 'pointer' },
         }, label),
+        h('span', {
+          'data-iui-copy-summary': '1',
+          style: { fontSize: 10, lineHeight: '16px', color: C.muted },
+        }, summary),
+        payload.copyable ? h('details', { style: { fontSize: 11, minWidth: 0, maxWidth: '100%' } },
+          h('summary', { style: { color: C.text, cursor: 'pointer' } }, '预览复制内容'),
+          h('pre', { 'data-iui-copy-preview': '1', style: { margin: '4px 0', padding: 6, maxHeight: 144, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, payload.text),
+        ) : null,
         h('span', {
           role: 'status',
           'aria-live': 'polite',
@@ -3085,19 +3306,7 @@ window.__ModuleLoader__.load({
       }
       return cursor
     }
-    function writeStatePath(source, path, value) {
-      const parts = String(path).split('.')
-      const clone = Array.isArray(source) ? [...source] : { ...source }
-      let cursor = clone
-      for (let index = 0; index < parts.length - 1; index += 1) {
-        const part = parts[index]
-        const child = cursor[part]
-        cursor[part] = child !== null && typeof child === 'object' ? (Array.isArray(child) ? [...child] : { ...child }) : {}
-        cursor = cursor[part]
-      }
-      cursor[parts[parts.length - 1]] = value
-      return clone
-    }
+    const writeStatePath = IUI_AST.writeStatePath
     function sameValue(a, b) {
       if (a === b) return true
       try {
@@ -3550,6 +3759,9 @@ function registerIuiSettings(ctx) {
             chrome = document.createElement("style")
             chrome.id = "miopiik-iui-chrome"
             chrome.textContent = "@keyframes miopiik-enter{from{opacity:0}}.miopiik-enter{animation:miopiik-enter .14s ease-out}.miopiik-ctl:hover{filter:brightness(1.18)}.miopiik-ctl:active{filter:brightness(.92)}.miopiik-ctl:focus-visible,[data-iui-slider] input:focus-visible,[data-iui-input] input:focus-visible{outline:2px solid var(--dsw-static-deepseek-500,#4176e6);outline-offset:2px}.miopiik-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}@media(pointer:coarse){.miopiik-ctl{min-height:32px;padding:4px 12px}input.miopiik-ctl{min-height:32px}[data-iui-slider] input{height:32px}[data-iui-input] input{min-height:32px}}@media(forced-colors:active){.miopiik-ctl{border:1px solid ButtonBorder;forced-color-adjust:auto}.miopiik-ctl:focus-visible{outline:2px solid Highlight}}@media(prefers-reduced-motion:reduce){.miopiik-enter{animation:none}.miopiik-ctl:hover,.miopiik-ctl:active{filter:none}}"
+            chrome.textContent +=
+              "[data-miopiik-segments=block]>[data-miopiik-block-wrap]{margin-block:8px}" +
+              "[data-miopiik-segments=block]>[data-miopiik-block-wrap]:has(>[data-iui-density=inline]){margin-block:5px}"
             document.head.appendChild(chrome)
           }
         }

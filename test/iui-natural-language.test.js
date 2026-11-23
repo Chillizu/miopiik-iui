@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { chartMatrix, readBinding, tableMatrix, validateAst } from '../shared/iui-ast.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
+import { IUI_CHARTER } from '../index.js'
+import { splitTrustedBlocks } from '../shared/markdown-segments.js'
 
 const compile = (source) => {
   const parsed = parseMiopiikMl(source)
@@ -98,13 +100,10 @@ test('模型常驻章程把用不用交给模型判断，并给出可解析的�
   assert.doesNotMatch(prompt, /优先普通 Markdown/u)
   assert.doesNotMatch(prompt, /展示协议（Extra 层，删掉也不影响主干）/u)
 
-  // 章程里的完整示例必须始终可解析、零降级：模型照抄的就是这些块。
-  // 示例一律写成单行完整块，占位形式（<ui title="…">）不算示例。
-  const blocks = prompt
-    .split('\n')
-    .filter((line) => line.includes('<ui') && line.includes('</ui>'))
-    .map((line) => line.slice(line.indexOf('<ui'), line.lastIndexOf('</ui>') + '</ui>'.length))
-  assert.ok(blocks.length >= 2, '章程至少应有两个完整示例')
+  const blocks = splitTrustedBlocks(IUI_CHARTER)
+    .filter((part) => part.kind === 'block')
+    .map((part) => part.raw)
+  assert.ok(blocks.length >= 2, '章程至少应有两个完整围栏示例')
   for (const block of blocks) {
     const parsed = parseMiopiikMl(block)
     assert.equal(parsed.ok, true, block)
@@ -112,6 +111,27 @@ test('模型常驻章程把用不用交给模型判断，并给出可解析的�
     assert.equal(result.ok, true, block)
     assert.equal(result.degraded + parsed.degraded.length, 0, block)
   }
+})
+
+test('自然声明可组合嵌套 callout，并保留邻接的普通文字', () => {
+  const { parsed, result } = compile('<ui density="auto">先说明 &amp; 保留<callout tone="info" title="校验"><metric label="可用" value="8"/></callout></ui>')
+  assert.deepEqual(parsed.degraded, [])
+  assert.equal(result.ok, true)
+  assert.equal(result.degraded, 0)
+  assert.equal(walk(result.ast.root, 'text').props.text, '先说明 & 保留')
+  assert.equal(walk(result.ast.root, 'callout').children[0].type, 'metric')
+})
+
+test('模型把步骤说明写成正文或 label/desc 时归一到既有属性', () => {
+  const { parsed, result } = compile('<ui><steps><step title="看分布">拉 P95 和 P99。</step><step label="拆阶段" desc="记录每段耗时。"/><step title="检查旧写法" note="隐式闭合"></steps></ui>')
+  assert.deepEqual(parsed.degraded, [])
+  assert.equal(result.ok, true)
+  assert.equal(result.degraded, 0)
+  assert.deepEqual(result.ast.root.children.map(({ props }) => props), [
+    { title: '看分布', note: '拉 P95 和 P99。' },
+    { title: '拆阶段', note: '记录每段耗时。' },
+    { title: '检查旧写法', note: '隐式闭合' },
+  ])
 })
 
 // fork 是生成物（gitignore、不随仓库分发），干净 clone / CI 里不存在；

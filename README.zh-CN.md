@@ -4,8 +4,8 @@
 
 [English](README.md) | **简体中文**
 
-> **Version 0.1.1 — 正式版（stable）。**
-> 本版本为正式版（stable），未发布到 npm registry，属于独立插件而非 DeepSeek Harness 上游内置功能；聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
+> **Version 0.2.0-rc.1 — 预发布候选。**
+> 本版本为本地候选，未发布到 npm registry，属于独立插件而非 DeepSeek Harness 上游内置功能；聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
 
 MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输出包含受信行内 token 与受控 `iui` 围栏的普通 Markdown，浏览器将其渲染为声明式界面组件。本插件不依赖 MiOpIIk 的 Mind/Ink/Operator Agent，不维护账本，也不注册模型工具。
 
@@ -21,7 +21,9 @@ MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输�
 
 ## 发布状态
 
-**Version 0.1.1** 为正式版（stable）。发布时仍有两项限制未消除，已记录为已知限制（不阻塞发布，但影响安装步骤与兼容承诺）：
+**0.2.0-rc.1** 为自然表达的本地验收候选，新增片段自动密度、派生状态、折叠与用户主动复制。见[示例和评估](docs/NATURAL-EXPRESSION.md)。
+
+已知限制：
 
 1. **非官方、版本耦合的宿主补丁。** 聊天内联渲染需要由 [tools/fork-chat-embeds.mjs](tools/fork-chat-embeds.mjs) 基于特定 DSH 版本（`0.2.2-rc.1`）生成的本地 `@deepseek-ai/dsh-client-ui-chat` fork。DSH 上游尚未提供 Markdown 嵌入 API。未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，插件页预览仍可使用，设置页诊断会显式报告未检测到补丁。
 2. **无多版本兼容矩阵。** 当前仅针对 DSH `0.2.2-rc.1` 基线验证，尚未建立跨多个 DSH 版本的兼容矩阵与干净 profile 冷启动全链路验证。
@@ -36,7 +38,7 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 
 | | **MiOpIIk IUI**（本仓库） | **MiOpIIk Agent** |
 |---|---|---|
-| 包 | `miopiik-iui` 0.1.1，stable | `miopiik-dsh` 0.1.2，stable |
+| 包 | `miopiik-iui` 0.2.0-rc.1，预发布 | `miopiik-dsh` 0.1.2，stable |
 | 层次 | 纯表现层：浏览器侧的受信 Markdown 片段 | host 侧：记忆、治理、后台执行 |
 | 主要面 | 行内 token、`iui` 围栏、声明式组件、本地状态 | `ink_*` 工具面、收件箱/事实/开环/鱼骨账本、Operator 派发 |
 | 状态 | 浏览器 `localStorage` 中的单个渲染偏好 | 工作区 `.dsh/miopiik/` 下的 append-only JSONL 账本 |
@@ -261,7 +263,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 ## 安装、升级、回滚
 
-`0.1.1` 为**正式版（stable）**，但聊天内联渲染仍需配置本地宿主补丁（见上文已知限制）。请在受控的 DSH profile 中安装，并确保可安全重启 DSH Web 服务。
+请在独立 DSH profile 中验证本候选。聊天内联渲染依赖从此 checkout 生成的本地宿主补丁。
 
 ### 前置条件
 
@@ -281,7 +283,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
    ```sh
    npm pack --pack-destination .dsh/tmp/packs
-   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.1.1.tgz
+   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.2.0-rc.1.tgz
    ```
 
    也可使用封装脚本 [tools/install-plugin.mjs](tools/install-plugin.mjs)（默认 dry-run；写入运行中的 `web` profile 需显式加 `--allow-running-profile`）：

@@ -309,6 +309,33 @@ function createParser(tokens) {
   }
 }
 
+/** 从编译后的受限 AST 中提取全部引用（去重、按 scope+key 排序，确定性）。 */
+function collectRefs(program) {
+  const refs = []
+  const seen = new Set()
+  const stack = [program]
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (node === null || typeof node !== 'object') continue
+    if (node.t === 'ref') {
+      const key = node.scope + '\u0000' + node.key
+      if (!seen.has(key)) {
+        seen.add(key)
+        refs.push({ scope: node.scope, key: node.key })
+      }
+      continue
+    }
+    if (node.t === 'cond') stack.push(node.a, node.b, node.c)
+    else if (node.t === 'bin') stack.push(node.l, node.r)
+    else if (node.t === 'unary') stack.push(node.x)
+    else if (node.t === 'call') stack.push(...node.args)
+    else if (node.t === 'arr') stack.push(...node.items)
+    else if (node.t === 'obj') for (const [, value] of node.entries) stack.push(value)
+  }
+  refs.sort((a, b) => (a.scope === b.scope ? (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) : a.scope < b.scope ? -1 : 1))
+  return refs
+}
+
 const cache = new Map()
 
 /**
@@ -328,7 +355,7 @@ export function compileExpr(source) {
   if (lexed.ok === false) result = fail(lexed.error)
   else {
     const parsed = createParser(lexed.tokens).parse()
-    result = parsed.ok === false ? fail(parsed.error) : { ok: true, source: text, program: parsed.program }
+    result = parsed.ok === false ? fail(parsed.error) : { ok: true, source: text, program: parsed.program, refs: collectRefs(parsed.program) }
   }
   if (cache.size >= EXPR_LIMITS.cache) cache.delete(cache.keys().next().value)
   cache.set(text, result)
@@ -486,6 +513,20 @@ function evaluate(node, scope, depth = 0) {
     return finite(Math.min(args[2], Math.max(args[1], args[0])))
   }
   return fail('未知表达式节点')
+}
+
+/**
+ * 提取编译结果中的引用（供 derive 依赖图使用）。
+ * @param {unknown} compiled
+ * @returns {{ok:true, refs:Array<{scope:'state'|'data', key:string}>} | {ok:false, error:string}}
+ */
+export function exprRefs(compiled) {
+  if (compiled === null || typeof compiled !== 'object' || compiled.ok !== true || typeof compiled.source !== 'string') {
+    return fail('expr 未编译')
+  }
+  const fresh = compileExpr(compiled.source)
+  if (fresh.ok === false) return fail(fresh.error)
+  return { ok: true, refs: fresh.refs.map((ref) => ({ scope: ref.scope, key: ref.key })) }
 }
 
 /**

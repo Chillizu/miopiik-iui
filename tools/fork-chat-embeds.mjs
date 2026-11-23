@@ -93,7 +93,7 @@ const HELPER = `${MARK_BEGIN}
 			const registry = globalThis.__miopiikMarkdownEmbeds;
 			return registry !== undefined && typeof registry.renderBlock === "function" ? registry : null;
 		}
-		// 流式增量：文本尾部有未闭合 iui 围栏时，pre 段交原生，live 段逐分片实时渲染。
+		// 流式增量：尾部未闭合的 iui 围栏逐分片渲染，已定稿前缀仍走常规切分。
 		function miopiikStreamSplit(text) {
 			try {
 				if (!miopiikEnabled()) return null;
@@ -121,11 +121,11 @@ const HELPER = `${MARK_BEGIN}
 		}
 		// 跨 token 完整性根修：原生 Markdown 先渲染完整文本（加粗/选择/阅读顺序保留），
 		// 挂载后把叶子文本里的受信 token 原位嫁接（幂等，每个渲染帧执行一次）。
-		function MiopiikGraftText({ text, streaming, labels, mentions, pathImages }) {
+		function MiopiikGraftText(props) {
 			const ref = react.useRef(null);
 			react.useLayoutEffect(() => {
 				// 流式期间 React 每分片重渲，不做 DOM 突变；消息完成后一次性嫁接（稳态安全）。
-				if (streaming === true) return;
+				if (props.streaming === true || !miopiikEnabled()) return;
 				const node = ref.current;
 				if (node === null) return;
 				const registry = miopiikRegistry();
@@ -139,8 +139,22 @@ const HELPER = `${MARK_BEGIN}
 			return (0, react_jsx_runtime.jsx)("div", {
 				ref,
 				style: { display: "contents" },
-				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text, streaming, labels, fileMentions: mentions, pathImages })
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, props)
 			});
+		}
+		function miopiikRenderText(text, markdownProps, key) {
+			const props = { ...markdownProps, text };
+			if (text.includes("{{") && miopiikEnabled()) {
+				try {
+					const registry = miopiikRegistry();
+					if (typeof registry?.segments === "function" && registry.segments(text).some(part => part.kind === "inline")) {
+						return (0, react_jsx_runtime.jsx)(MiopiikGraftText, props, key);
+					}
+				} catch {
+					// 无法识别行内标记时保留原生 Markdown。
+				}
+			}
+			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, props, key);
 		}
 		function MiopiikBlockSegment({ raw, lang, streaming, labels, mentions, pathImages }) {
 			const registry = miopiikRegistry();
@@ -158,52 +172,17 @@ ${MARK_END}`
 
 const PATCHED_TEXT_CASE = `\t\t\t\t\tcase "text": {
 						const streamSplit = streaming === true ? miopiikStreamSplit(block.text) : null;
-						if (streamSplit !== null) {
-							rendered.push((0, react_jsx_runtime.jsx)("div", {
-								"data-miopiik-stream": "1",
-								style: { width: "100%", minWidth: 0 },
-								children: [
-									streamSplit.pre !== "" ? (0, react_jsx_runtime.jsx)(MiopiikGraftText, { text: streamSplit.pre, streaming: true, labels, mentions, pathImages }, "pre") : null,
-									(0, react_jsx_runtime.jsx)("div", {
-										"data-miopiik-block-wrap": "1",
-										style: { width: "100%", flexBasis: "100%", minWidth: 0 },
-										children: streamSplit.live
-									}, "live")
-								]
-							}, i));
-							break;
-						}
-						const segments = miopiikBlockSegments(block.text);
-						if (segments === null) {
-							rendered.push((0, react_jsx_runtime.jsx)(MiopiikGraftText, {
-								text: block.text,
-								streaming,
-								labels,
-								mentions,
-								pathImages
-							}, i));
-							break;
-						}
-						if (segments.length === 1 && segments[0].kind === "text") {
-							rendered.push((0, react_jsx_runtime.jsx)(MiopiikGraftText, {
-								text: segments[0].text,
-								streaming,
-								labels,
-								mentions,
-								pathImages
-							}, i));
+						const text = streamSplit?.pre ?? block.text;
+						const segments = miopiikBlockSegments(text) ?? [{ kind: "text", text }];
+						const markdownProps = { streaming, labels, fileMentions: mentions, pathImages };
+						if (streamSplit === null && segments.length === 1 && segments[0].kind === "text") {
+							rendered.push(miopiikRenderText(text, { ...markdownProps, textInteractionSource }, i));
 							break;
 						}
 						const segmentNodes = [];
 						segments.forEach((part, partIndex) => {
 							if (part.kind === "text") {
-								segmentNodes.push((0, react_jsx_runtime.jsx)(MiopiikGraftText, {
-									text: part.text,
-									streaming,
-									labels,
-									mentions,
-									pathImages
-								}, i + ":" + partIndex));
+								if (part.text !== "") segmentNodes.push(miopiikRenderText(part.text, markdownProps, i + ":" + partIndex));
 								return;
 							}
 							// 块组件必须独占整行，不能被外层 flex 压成窄卡片。
@@ -213,8 +192,17 @@ const PATCHED_TEXT_CASE = `\t\t\t\t\tcase "text": {
 								children: (0, react_jsx_runtime.jsx)(MiopiikBlockSegment, { raw: part.raw, lang: part.lang, streaming, labels, mentions, pathImages })
 							}, i + ":" + partIndex + ":block"));
 						});
+						if (streamSplit !== null) {
+							segmentNodes.push((0, react_jsx_runtime.jsx)("div", {
+								"data-miopiik-block-wrap": "1",
+								style: { width: "100%", flexBasis: "100%", minWidth: 0 },
+								children: streamSplit.live
+							}, "live"));
+						}
 						rendered.push((0, react_jsx_runtime.jsx)("div", {
 							"data-miopiik-segments": "block",
+							"data-miopiik-stream": streamSplit !== null ? "1" : undefined,
+							style: { width: "100%", minWidth: 0 },
 							children: segmentNodes
 						}, i));
 						break;

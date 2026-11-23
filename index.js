@@ -6,23 +6,23 @@
 /** Three literal backticks, built at runtime so this file carries no bare code fence. */
 const FENCE = '\u0060\u0060\u0060'
 
+/** The host presents Markdown and IUI as one response surface. */
 export const IUI_CHARTER = [
-  '界面是这个回答媒介的一部分，和段落、代码块一样。用不用、用多少、哪些内容写文字、哪些交给组件，由你按内容判断：读者是否更快看懂，是唯一标准。不必等用户要求，也不要为了填满版面而用。',
-  '直接写出来，不要为了画界面去查源码、探服务状态或调用工具。',
-  `${FENCE}iui 围栏里是一棵受控组件树（miopiik-ml，不是 HTML 也不是 JSX）：根节点 <ui title="…" fallback="整块失败时显示的文字">，内部按树嵌套。布局用 row / column / grid(columns 1-6) / card(title subtitle span) / divider(label)，过程清单用 <steps><step title="…" note="…" tone="…"/>…</steps>，段落用 p，纯文本用 text。`,
-  '行内与强调：<p>字里混排 <badge text="通过" tone="success"/> <icon name="check"/> <b text="重点" strong="true"/> <code text="npm test"/> <a text="链接" href="https://…"/>。</p> href 还接受站内 /path 与 #锚点。',
-  `数据：<metric label value unit delta caption tone/>、<table columns='["项","值"]' rows='[["a",1]]' caption filter/>、<chart kind="bar|line|donut" series='[["周一",420]]' source="来源"/>、<progress label value max tone/>、<empty title description icon/>。表格 rows 也可写对象行（columns 配 {key,label}），图表 series 还接受纯数字数组与 {label,value} 点列。`,
-  `图形（泳道/链路/流程）：<diagram title="…" source="…"><lane label="列名"><node id="a" label="节点" tone="info" note="…"/>…</lane><edge from="a" to="b" label="关系" kind="solid|dashed"/>…</diagram>。node 也可直接写在 diagram 里（合成最前一列），diagram 内的纯文本行按注释渲染；泳道 ≤6 列、节点 ≤24、连线 ≤24，箭头自动布线。`,
-  '沙箱文档：完整 HTML 文档写进 ```html 围栏即可内嵌渲染，经无脚本沙箱帧呈现——CSS/SVG 自由排版，JS 一行不执行、零网络、≤256KB；高度按内容自动收紧（120–1600，超出内部滚动），<!-- height: 480 --> 只作首次绘制高度，尺寸不可拖动。宿主主题与排版已自动注入，并预置 mi-card / mi-row / mi-grid / mi-metric / mi-badge / mi-callout / mi-progress / mi-divider 类与 data-tone=success|warn|danger|brand：优先复用它们，别手写配色，也别自己铺暗色底。',
-  '说明与反馈：<callout tone="info|success|warning|danger" title="…">…</callout>。tone 六种：neutral / success / warning / danger / info / accent；图标：check alert dot arrow-right spark chart layers shield clock inbox info。',
-  `交互只有一个模型：控件写 $state，其余读 $state。<state name="r" value='{"on":true}'/> 声明初值；<segmented bind="$state.r.cur" options='[{"label":"近7天","value":"7d"}]'/> 单选、<toggle bind="$state.r.on" label="…"/> 开关、<slider bind="$state.r.th" min="0" max="100" unit="%"/> 数值、<input bind="$state.r.q" placeholder="…"/> 文本；任意属性值写 "$state.r.x" 即绑定；节点可加 when="$state.r.x" 控制显隐，配 is="值" 做等值切换；table 可加 filter="$state.r.q" 本地过滤。交互只在浏览器内变化，不产生消息、不调用工具；要用户做决定的事仍用对话提问，不要在卡片里造提交表单。`,
-  '选型：对比与账目用 table，趋势用 line，占比用 donut，过程与清单用 steps，结构图（链路/流程/泳道）用 diagram。',
-  `完整形状一（数据）：<ui title="请求概览" fallback="1240 次请求，成功率 98.2%"><row gap="12"><metric label="请求" value="1240" unit="次"/><metric label="成功率" value="98.2" unit="%" tone="success" delta="+0.4"/></row><chart kind="bar" series='[["周一",420],["周二",510]]' source="网关日志"/><table columns='["区间","请求"]' rows='[["小于 100ms",1190],["100ms 以上",50]]'/></ui>`,
-  `完整形状二（交互）：<ui title="时间范围" fallback="切换时间范围"><state name="r" value='{"cur":"7d","s":[["周一",420]]}'/><segmented label="范围" bind="$state.r.cur" options='[{"label":"近7天","value":"7d"},{"label":"近30天","value":"30d"}]'/> <chart kind="line" series="$state.r.s"/></ui>`,
-  `完整形状三（对比）：<ui title="方案对比" fallback="A：12 万 / 3 周 / 中风险；B：18 万 / 5 周 / 低风险"><row gap="12"><metric label="A 成本" value="12" unit="万"/><metric label="B 成本" value="18" unit="万"/></row><table columns='["方案","成本","耗时","风险"]' rows='[["A",12,3,"中"],["B",18,5,"低"]]'/><callout tone="info" title="结论">选 A，多花的 6 万只把中风险换成低风险。</callout></ui>`,
-  `完整形状四（本地小应用）：<ui title="渠道分布" fallback="Web 46 / CLI 32 / API 22"><state name="r" value='{"cur":"占比","on":true,"q":"","s":[["Web",46],["CLI",32],["API",22]]}'/><segmented label="视图" bind="$state.r.cur" options='[{"label":"占比","value":"占比"},{"label":"清单","value":"清单"}]'/><chart kind="donut" series="$state.r.s" source="演示数据" when="$state.r.cur" is="占比"/><steps when="$state.r.cur" is="清单"><step title="Web" note="46 次"/><step title="CLI" note="32 次"/><step title="API" note="22 次"/></steps><toggle label="明细表" bind="$state.r.on"/><input bind="$state.r.q" placeholder="过滤渠道…"/><table columns='["渠道","次数"]' rows='[["Web",46],["CLI",32],["API",22]]' caption="演示数据" filter="$state.r.q" when="$state.r.on"/></ui>`,
-  '预算：嵌套 6 层、节点 120、表格 200 行、图表 60 点；超出整块不渲染，所以别堆。',
-  '完整 HTML 文档仅经 ```html 无脚本沙箱围栏内嵌，其余任意 HTML / JavaScript / CSS、事件处理与网络请求一律禁止；数字注明来源或“演示数据”。',
+  '用 Markdown 回答。文字、行内标记和交互片段可以自然混排，是否使用 IUI、放在哪里，由你按内容判断。不要为了画界面去查源码或调用工具。',
+  '让每个片段替读者完成一件事，例如扫一眼趋势、改一个前提、查一个口径。同一组数字或步骤只放在最顺手的一处。正文交代结论与边界，片段承接比较、结构或试算。一个句子能交代清楚的内容可以直接写。',
+  '句子中可以直接补一个简短的范围或状态，例如 样本 {{badge:neutral:300 次请求}}。行内也支持 {{icon:check}} 和 {{code:npm test}}。图表和控件作为独立 iui 围栏嵌在前后文之间。',
+  'iui 围栏内用 miopiik-ml。以 <ui density="auto" fallback="一句话说明主要结果"> 开始，以 </ui> 结束。auto 按内容选择无边框片段、紧凑块或面板，也可指定 inline / compact / panel。用 weight="primary" 突出主要结果，用 details 收起次要口径。排版、主题与响应式交给宿主。',
+  '组合原语：row/column/grid/card 排列内容，p/text/badge 描述，metric/progress/table/chart 展示数据，steps/diagram 呈现顺序与关系，details 展开细节。图表和表格应注明数据来源或标明是演示数据。',
+  `数据写法：<metric label="耗时" value="24" unit=" ms"/>；<chart kind="line" series='[["周一",24],["周二",17]]'/>（bar/line/donut）；<table columns='["项","值"]' rows='[["缓存",24]]'/>。流程图用 <diagram><node id="a" label="入口"/><node id="b" label="缓存"/><edge from="a" to="b"/></diagram>。`,
+  `联动值写入 bind="$state.x"，when 加 is 控制显隐。state 的 value 和 columns/rows/series/options 用合法 JSON，例如 <state name="mode" value='"week"'/>、<segmented bind="$state.mode" options='[{"label":"一周","value":"week"}]'/>。运算都放进 derive 的 expr，支持算术、==、!=、条件表达式和 round/min/max。展示属性可以整体绑定为 "$state.result"。`,
+  '读者能用给定数据改一个前提来复算时，可以放一个控件。控件写入 state，derive 读取它，至少一个可见结果读取派生值。输出前用两个输入验算，确认结果真的变化。固定事实用固定结果表达，示例或假设注明口径。',
+  `${FENCE}iui
+<ui density="auto" fallback="试跑耗时先下降，最后小幅回升"><chart kind="line" series='[["第 1 次",24],["第 2 次",17],["第 3 次",19]]' source="演示数据"/></ui>
+${FENCE}`,
+  `${FENCE}iui
+<ui density="auto" fallback="25% 折扣时，原价 200 元实付 150 元"><state name="discount" value="25"/><derive name="total" expr="200 * (100 - $state.discount) / 100"/><slider label="折扣" bind="$state.discount" min="0" max="50" unit="%"/><metric label="实付" value="$state.total" unit=" 元" weight="primary"/><details label="计算口径"><text>原价 200 元 × 折后比例。</text></details></ui>
+${FENCE}`,
+  '交互只在当前片段内生效。button 的唯一动作是用户点击复制（action="copy" + value）。每块最多 120 节点、6 层、60 图点、200 表格行。禁止自定义脚本、样式、网络和工具调用。',
 ].join('\n')
 
 export function apply(ctx) {

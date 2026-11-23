@@ -67,7 +67,7 @@ export const ML_TAGS = Object.freeze({
 })
 
 const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true })
-// 交互控件、step 与图形原语一律写成自闭合：<toggle …/>、<step …/>、<node …/>、<edge …/>
+// 交互控件和图形原语隐式闭合。step 也保留旧的无闭合写法。
 const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true })
 
 function decodeEntities(text) {
@@ -151,6 +151,7 @@ function parseDocument(source) {
   const text = String(source ?? '')
   const root = { name: '#root', attrs: {}, children: [], unclosed: false }
   const stack = [root]
+  const stepBody = /[^<]*<\/step\s*>/uy
   let cursor = 0
   let index = 0
   const pushText = (raw) => {
@@ -185,7 +186,12 @@ function parseDocument(source) {
     }
     const element = { name: tag.name, attrs: tag.attrs, children: [], unclosed: false }
     stack[stack.length - 1].children.push(element)
-    if (tag.selfClosing || VOID_TAGS[tag.name] === true) continue
+    if (tag.selfClosing) continue
+    if (VOID_TAGS[tag.name] === true) {
+      stepBody.lastIndex = tag.end
+      // Only explicit text bodies opt a step out of legacy implicit closing.
+      if (tag.name !== 'step' || !stepBody.test(text)) continue
+    }
     stack.push(element)
   }
   pushText(text.slice(cursor))
@@ -307,7 +313,7 @@ export function parseMiopiikMl(source) {
   for (const child of ui.children) {
     if (child.name === '#text') {
       const raw = String(child.text ?? '').trim()
-      if (raw !== '') children.push({ kind: 'degraded', text: raw })
+      if (raw !== '') children.push({ ...child, text: raw })
       continue
     }
     if (child.name === 'state') {
@@ -349,7 +355,7 @@ export function parseMiopiikMl(source) {
     const type = ML_TAGS[element.name]
     const attrs = normalizeAttrs(element)
     // when/is 是通用显隐通道：任何组件都可携带；值交给校验器把关（只允许 $state 绑定）
-    const control = readProps(attrs, ['when', 'is'])
+    const control = readProps(attrs, ['when', 'is', 'weight'])
     const fallbackText = typeof attrs.fallback === 'string' ? attrs.fallback : ''
     const innerText = textOf(element)
     const degrade = (reason) => {
@@ -360,6 +366,20 @@ export function parseMiopiikMl(source) {
     }
     if (type === undefined || type === 'root' || type === 'state') return degrade('未知标签')
     if (element.unclosed) return degrade('没有闭合')
+    if (element.name === 'callout' && element.children.some((child) => child.name !== '#text')) {
+      const children = element.children
+        .map((child) => {
+          if (child.name === '#text') {
+            const text = String(child.text ?? '').trim()
+            return text === '' ? null : { id: 'ml-callout-text', type: 'text', props: { text }, children: [] }
+          }
+          const item = compile(child)
+          return item.kind === 'node' ? item.node : { id: 'ml-callout-degraded', type: 'text', props: { text: item.text }, children: [] }
+        })
+        .filter(Boolean)
+      const props = { ...control, ...readProps(attrs, TEXT_PROPS.callout) }
+      return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-callout', type: 'callout', props, children } }
+    }
     const INLINE_LEAVES = { badge: 'text', emphasis: 'text', b: 'text', code: 'text', a: 'text', link: 'text', callout: 'text', progress: 'label', empty: 'text' }
     if (INLINE_LEAVES[element.name] !== undefined) {
       const key = INLINE_LEAVES[element.name]
@@ -377,20 +397,6 @@ export function parseMiopiikMl(source) {
     if (element.name === 'text') {
       const text = typeof element.attrs.text === 'string' ? element.attrs.text : innerText
       return text === '' ? degrade('没有内容') : { kind: 'node', node: { id: typeof element.attrs.id === 'string' && element.attrs.id !== '' ? element.attrs.id : 'ml-text', type: 'text', props: { ...control, text }, children: [] } }
-    }
-    if (element.name === 'callout' && element.children.some((child) => child.name !== '#text')) {
-      const children = element.children
-        .map((child) => {
-          if (child.name === '#text') {
-            const text = String(child.text ?? '').trim()
-            return text === '' ? null : { id: 'ml-callout-text', type: 'text', props: { text }, children: [] }
-          }
-          const item = compile(child)
-          return item.kind === 'node' ? item.node : { id: 'ml-callout-degraded', type: 'text', props: { text: item.text }, children: [] }
-        })
-        .filter(Boolean)
-      const props = { ...control, ...readProps(attrs, TEXT_PROPS.callout) }
-      return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-callout', type: 'callout', props, children } }
     }
     if (element.name === 'diagram') {
       // 结构图形：lane 是显式列；散落的 node 按出现顺序汇成最前一列；
@@ -444,8 +450,15 @@ export function parseMiopiikMl(source) {
         },
       }
     }
-    if (element.children.length > 0) return degrade('该标签不接受子内容')
-    return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }, children: [] } }
+    const props = { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }
+    if (type === 'step' && element.children.every((child) => child.name === '#text')) {
+      if (props.title === undefined && typeof attrs.label === 'string') props.title = attrs.label
+      const note = attrs.desc ?? innerText
+      if (props.note === undefined && typeof note === 'string' && note !== '') props.note = note
+    } else if (element.children.length > 0) {
+      return degrade('该标签不接受子内容')
+    }
+    return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props, children: [] } }
   }
 
   const compiled = children.map((child) => compile(child))
@@ -454,7 +467,7 @@ export function parseMiopiikMl(source) {
   )
   let rootNode = null
   if (mapped.length === 1) rootNode = mapped[0]
-  else if (mapped.length > 1) rootNode = { id: 'ml-root', type: 'column', props: { gap: 10 }, children: mapped }
+  else if (mapped.length > 1) rootNode = { id: 'ml-root', type: 'column', props: {}, children: mapped }
   if (rootNode === null) return { ok: false, errors: ['<ui> 里没有可渲染内容'], degraded }
 
   // 稳定 key：同类型节点按出现顺序编号，回放与状态不漂移
@@ -472,6 +485,7 @@ export function parseMiopiikMl(source) {
     doc: {
       title: typeof ui.attrs.title === 'string' ? ui.attrs.title : '',
       fallback: typeof ui.attrs.fallback === 'string' ? ui.attrs.fallback : '',
+      density: typeof ui.attrs.density === 'string' ? ui.attrs.density : undefined,
       state,
       root: withIds,
     },

@@ -94,6 +94,43 @@ test('容错不越界：代码围栏或行内代码里的 <ui> 不得被当成�
   assert.equal(inline.some((part) => part.kind === 'block'), false)
 })
 
+test('外层 Markdown 围栏完整保留内部 IUI 示例，包括未闭合的示例', () => {
+  const example = '```iui\n<ui fallback="示例"></ui>\n```\n{{badge:success:示例}}'
+  for (const source of [
+    `前文\n\n\`\`\`\`md\n${example}\n\`\`\`\`\n\n后文`,
+    `前文\n\n~~~markdown 示例\n${example}\n~~~~\n\n后文`,
+    `前文\n\n\`\`\`javascript 参考\n<ui fallback="示例"></ui>\n{{icon:check}}\n\`\`\`\n\n后文`,
+    '```md\n说明\n```iui\n<ui fallback="流式示例">',
+    '~~~~md\n说明\n~~~\n```iui\n<ui fallback="流式示例">',
+    '```iui\n<ui fallback="未闭合">{{badge:success:尚未定稿}}',
+  ]) {
+    assert.deepEqual(splitTrustedMarkdown(source), [{ kind: 'text', text: source }])
+    assert.deepEqual(splitTrustedBlocks(source), [{ kind: 'text', text: source }])
+    assert.equal(hasTrustedMarkup(source), false)
+  }
+  for (const outer of ['````md', '~~~md', '```text']) {
+    const source = outer + '\n```iui\n<ui fallback="流式示例">'
+    assert.deepEqual(splitStreamingFence(source), { pre: source, live: '', hasOpen: false })
+  }
+})
+
+test('定稿围栏与代码示例之后，只有尾部未闭合的真 IUI 参与流式切分', () => {
+  const pre = '前文\r\n```iui\r\n<ui>一</ui>\r\n````\r\n\r\n~~~~md\r\n```iui\r\n<ui>举例</ui>\r\n~~~\r\n~~~~~\r\n\r\n'
+  const live = '<ui>二'
+  const source = `${pre}   \`\`\`iui\r\n${live}`
+  const stream = splitStreamingFence(source)
+  assert.deepEqual(stream, { pre, live, hasOpen: true })
+  const earlier = splitTrustedBlocks(stream.pre)
+  assert.deepEqual(earlier.map((part) => part.kind), ['text', 'block', 'text'])
+  assert.equal(earlier[1].raw, '<ui>一</ui>\r\n')
+  assert.match(earlier[2].text, /<ui>举例<\/ui>/u)
+
+  const closed = `${source}</ui>\r\n   \`\`\`\r\n收尾`
+  const blocks = splitTrustedBlocks(closed).filter((part) => part.kind === 'block')
+  assert.deepEqual(blocks.map((part) => part.raw), ['<ui>一</ui>\r\n', '<ui>二</ui>\r\n'])
+  assert.equal(splitStreamingFence(closed).hasOpen, false)
+})
+
 test('容错仍受安全边界：裸 <ui> 解析失败时渲染层回退为文本（切分器不吞内容）', () => {
   const parts = splitTrustedMarkdown('<ui title="坏" fallback="f"><script>alert(1)</script></ui>')
   assert.equal(parts[0].kind, 'block')
