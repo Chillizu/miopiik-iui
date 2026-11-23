@@ -21,7 +21,15 @@
 
     const SANS = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif'
 
-    function renderChart(columns, rows, kind) {
+    /** 图表可访问摘要：读屏用户拿到的应是数据本身，而不只是"一张图"。 */
+    function chartSummary(rows, kind) {
+      const kindName = { bar: '柱状图', line: '折线图', donut: '占比图' }[kind] ?? '图表'
+      const parts = rows.slice(0, 8).map((row) => `${String(row[0] ?? '')} ${String(row[1] ?? '')}`)
+      const suffix = rows.length > 8 ? `，等共 ${rows.length} 项` : ''
+      return `${kindName}：${parts.join('，')}${suffix}`
+    }
+
+    function renderChart(columns, rows, kind, label) {
       const values = rows.map((row) => Number(row[1]) || 0)
       const max = Math.max(1, ...values)
       const labels = rows.map((row) => String(row[0] ?? ''))
@@ -59,7 +67,7 @@
             h('text', { key: `lab-${index}`, x: point.x, y: height - 7, fontSize: 8.5, fill: C.muted, fontFamily: SANS, textAnchor: 'middle' }, labels[index]),
           )
         })
-        return svgCanvas(width, height, parts)
+        return svgCanvas(width, height, parts, label)
       }
       if (kind === 'donut') {
         const size = 124
@@ -90,7 +98,7 @@
         return h(
           'div',
           { style: { display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' } },
-          h('div', { style: { width: size, flex: 'none' } }, svgCanvas(size, size, arcs)),
+          h('div', { style: { width: size, flex: 'none' } }, svgCanvas(size, size, arcs, label)),
           h(
             'div',
             { style: { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11 } },
@@ -323,7 +331,7 @@
           const selectedIndex = options.findIndex((option) => sameValue(option?.value, current))
           return h(
             'div',
-            { key, style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+            { key, role: 'group', 'aria-label': props.label === undefined ? undefined : String(props.label), style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
             props.label ? h('span', { style: { fontSize: 11, color: C.muted } }, String(props.label)) : null,
             ...options.map((option, index) =>
               h(
@@ -612,7 +620,7 @@
             { key, className: 'miopiik-enter', 'data-iui-table': String(filtered.length), 'data-iui-table-filtered': query === '' ? undefined : '1', 'data-iui-table-cols': String(columns.length), style: { overflowX: 'auto', maxWidth: '100%' } },
             h(
               'table',
-              { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12, color: C.text } },
+              { 'aria-label': captionText === '' ? `数据表，${rows.length} 行 ${columns.length} 列` : captionText, style: { width: '100%', borderCollapse: 'collapse', fontSize: 12, color: C.text } },
               h(
                 'thead',
                 null,
@@ -620,7 +628,7 @@
                   'tr',
                   null,
                   ...columns.map((column, index) =>
-                    h('th', { key: `h${index}`, style: { textAlign: 'left', padding: '6px 8px', borderBottom: `1px solid ${C.border}`, color: C.muted, fontWeight: 500 } }, String(column)),
+                    h('th', { key: `h${index}`, scope: 'col', style: { textAlign: 'left', padding: '6px 8px', borderBottom: `1px solid ${C.border}`, color: C.muted, fontWeight: 500 } }, String(column)),
                   ),
                 ),
               ),
@@ -638,7 +646,10 @@
                 ),
               ),
             ),
-            captionText !== '' ? h('div', { style: { fontSize: 10, color: C.muted, paddingTop: 4 } }, captionText) : null,
+            query === ''
+              ? (captionText !== '' ? h('div', { style: { fontSize: 10, color: C.muted, paddingTop: 4 } }, captionText) : null)
+              // 过滤结果用 live region 播报，读屏用户能听到行数变化
+              : h('div', { role: 'status', 'aria-live': 'polite', style: { fontSize: 10, color: C.muted, paddingTop: 4 } }, captionText),
           )
         }
         if (item.type === 'row' || item.type === 'column') {
@@ -662,7 +673,7 @@
             { key, className: 'miopiik-enter', 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
             rows === null
               ? h('div', { 'data-iui-chart-empty': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '18px 0' } }, '暂无有效图表数据')
-              : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' || kind === 'donut' ? kind : 'bar'),
+              : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' || kind === 'donut' ? kind : 'bar', chartSummary(rows, kind === 'line' || kind === 'donut' ? kind : 'bar')),
             props.source ? h('div', { style: { fontSize: 10, color: C.muted } }, `来源：${String(props.source)}`) : null,
           )
         }

@@ -5,7 +5,7 @@
 | 项 | MiOpIIk IUI |
 |---|---|
 | 包名 | `miopiik-iui` |
-| 当前版本 | `0.1.0`（stable / 正式版） |
+| 当前版本 | `0.1.1`（stable / 正式版） |
 | 包类型 | 独立可安装的 DSH Web 插件包（零第三方运行时依赖） |
 | 依赖另一个包 | 否：可单装（仅提供 IUI 表现层），也可与 MiOpIIk Agent 同装 |
 | Tarball 安装 | 支持（由 `npm run check` 执行真实打包并校验 import 图） |
@@ -19,7 +19,7 @@
 
 ## 聊天内联渲染的宿主补丁条件
 
-IUI 的聊天内嵌渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合的实验性 chat 包补丁**（见 `patches/chat-markdown-embeds.patch` 与 `tools/fork-chat-embeds.mjs`）。这也是 `0.1.0` 发布时仍未消除的首要已知限制（不阻塞发布，但决定了安装步骤）。未加载该补丁时：
+IUI 的聊天内嵌渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合的实验性 chat 包补丁**（见 `patches/chat-markdown-embeds.patch` 与 `tools/fork-chat-embeds.mjs`）。这也是 `0.1.0` 起仍未消除的首要已知限制（不阻塞发布，但决定了安装步骤）。未加载该补丁时：
 
 - 插件页、设置页、示例复制与状态诊断均可正常使用；
 - 聊天中的 `iui` 围栏按普通 Markdown 代码块显示，行内 token 按字面文本显示；

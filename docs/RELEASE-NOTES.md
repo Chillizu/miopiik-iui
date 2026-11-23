@@ -2,7 +2,20 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0` 为正式版（stable），属于独立插件，而非 DSH 上游内置功能。** 发布时仍有两项已知限制：聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁（未加载时聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用），以及尚无多版本兼容矩阵。二者不阻塞本版发布，但决定了安装步骤与兼容承诺。
+> **当前版本 `0.1.1` 为正式版（stable），属于独立插件，而非 DSH 上游内置功能。** 发布时仍有两项已知限制：聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁（未加载时聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用），以及尚无多版本兼容矩阵。二者不阻塞本版发布，但决定了安装步骤与兼容承诺。
+
+## miopiik-iui 0.1.1 — stable（2026-11-23）
+
+**状态**：**正式版（stable）**，两项已知限制不变（非官方宿主补丁、无多版本矩阵）。本版为无障碍与触摸兼容批。
+
+- **可见焦点环**：`segmented` / `toggle` / `slider` / `input` 键盘聚焦时显示 `:focus-visible` 描边（品牌色，2px + offset），不再依赖浏览器默认轮廓。
+- **读屏语义**：表格 `<th>` 增加 `scope="col"`，表格本身带 `aria-label`（caption 或「数据表，N 行 M 列」）；过滤时行数变化通过 `role="status"` + `aria-live="polite"` 播报；`segmented` 容器补 `role="group"` 与可访问名。
+- **图表数据摘要**：SVG 图表的 `aria-label` 从「一张图」升级为数据本身（如「占比图：Web 46，CLI 32，API 22」），读屏用户可直接听到数值。
+- **触摸目标**：`@media (pointer:coarse)` 下控件最小高度 32px、内边距加大，滑块与输入框同步增高。
+- **强制色彩**：`@media (forced-colors:active)` 下改用系统色边框与 `Highlight` 焦点环，避免高对比模式下控件消失。
+- **减少动效**：沿用既有 `prefers-reduced-motion` 处理（入场淡入与 hover 滤镜同时关闭）。
+- **验证**：97 项全绿；真 Chromium 新增断言——焦点环、sr-only、粗指针目标、强制色彩兜底、表头 `scope`、图表数据摘要、分组语义、表格可访问名。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.1.tgz` 安装并重启 DSH；已知限制与安装前提同 `0.1.0`。
 
 ## miopiik-iui 0.1.0 — stable（2026-11-23）
 

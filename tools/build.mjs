@@ -69,7 +69,7 @@ export function build() {
     '          if (document.getElementById("miopiik-iui-chrome") === null) {',
     '            chrome = document.createElement("style")',
     '            chrome.id = "miopiik-iui-chrome"',
-    '            chrome.textContent = "@keyframes miopiik-enter{from{opacity:0}}.miopiik-enter{animation:miopiik-enter .14s ease-out}.miopiik-ctl:hover{filter:brightness(1.18)}.miopiik-ctl:active{filter:brightness(.92)}@media(prefers-reduced-motion:reduce){.miopiik-enter{animation:none}.miopiik-ctl:hover,.miopiik-ctl:active{filter:none}}"',
+    '            chrome.textContent = "@keyframes miopiik-enter{from{opacity:0}}.miopiik-enter{animation:miopiik-enter .14s ease-out}.miopiik-ctl:hover{filter:brightness(1.18)}.miopiik-ctl:active{filter:brightness(.92)}.miopiik-ctl:focus-visible,[data-iui-slider] input:focus-visible,[data-iui-input] input:focus-visible{outline:2px solid var(--dsw-static-deepseek-500,#4176e6);outline-offset:2px}.miopiik-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}@media(pointer:coarse){.miopiik-ctl{min-height:32px;padding:4px 12px}input.miopiik-ctl{min-height:32px}[data-iui-slider] input{height:32px}[data-iui-input] input{min-height:32px}}@media(forced-colors:active){.miopiik-ctl{border:1px solid ButtonBorder;forced-color-adjust:auto}.miopiik-ctl:focus-visible{outline:2px solid Highlight}}@media(prefers-reduced-motion:reduce){.miopiik-enter{animation:none}.miopiik-ctl:hover,.miopiik-ctl:active{filter:none}}"',
     '            document.head.appendChild(chrome)',
     '          }',
     '        }',

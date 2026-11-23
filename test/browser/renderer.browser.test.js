@@ -216,6 +216,15 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/class="miopiik-enter"/u,'块与显隐内容应有入场淡入类')
   assert.match(html,/prefers-reduced-motion/u,'定妆样式应尊重减少动效偏好')
   assert.match(html,/class="miopiik-ctl"/u,'交互按钮应有 hover/active 反馈类')
+  // rc.16 无障碍与触摸：焦点环、sr-only、粗指针目标、表头 scope、图表数据摘要、分组语义
+  assert.match(html,/:focus-visible/u,'交互控件必须有可见焦点环')
+  assert.match(html,/\.miopiik-sr\{/u,'需要 sr-only 工具类（live region 用）')
+  assert.match(html,/pointer:coarse/u,'触摸屏需放大点击目标')
+  assert.match(html,/forced-colors:active/u,'强制色彩模式需有兜底边框')
+  assert.match(html,/scope="col"/u,'表头单元格需要 scope=col')
+  assert.match(html,/aria-label="占比图：/u,'图表需要数据摘要供读屏')
+  assert.match(html,/role="group"/u,'segmented 需要分组语义')
+  assert.match(html,/aria-label="演示数据"/u,'表格应带可访问名（caption 或行列数）')
   // rc.9 泳道图：确定性几何布线在真实 DOM 中渲染
   assert.match(html,/data-iui-diagram="2"/u,'泳道图应渲染两条 lane')
   assert.match(html,/data-iui-diagram-node="m1"/u,'节点药丸应携带图内 id')
