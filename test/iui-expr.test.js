@@ -59,6 +59,8 @@ test('expr: 字符串拼接与数组/对象字面量', () => {
 test('expr: 函数白名单与错误参数', () => {
   assert.equal(value('round(33.5)'), 34)
   assert.equal(value('round(32.4)'), 32)
+  assert.equal(value('round(32.456, 2)'), 32.46)
+  assert.equal(value('round(-2.5, 0)'), -2)
   assert.equal(value('floor(2.9)'), 2)
   assert.equal(value('ceil(2.1)'), 3)
   assert.equal(value('abs(-7)'), 7)
@@ -66,12 +68,92 @@ test('expr: 函数白名单与错误参数', () => {
   assert.equal(value('max(3, 1, 2)'), 3)
   assert.equal(value('clamp(15, 0, 10)'), 10)
   assert.match(rejected('clamp(5, 10, 0)'), /lo <= hi/u)
-  assert.match(rejected('round(1, 2)'), /参数个数/u)
+  assert.match(rejected('round(1, 2, 3)'), /参数个数/u)
+  assert.match(rejected('round(1, 13)'), /小数位/u)
   assert.match(rejected('min("a")'), /有限数字/u)
   // 非白名单函数/成员访问一律拒绝
   assert.match(rejected('eval(1)'), /未知标识符/u)
   assert.match(rejected('Math.round(1)'), /未知标识符|不支持的字符/u)
   assert.match(rejected('$state.a.toString()'), /不支持|多余内容/u)
+})
+
+test('expr: 序列索引、收集、并列与拼接保留数组顺序和类型', () => {
+  assert.equal(value('len([])'), 0)
+  assert.equal(value('len([1, [2, 3], null])'), 3)
+  assert.deepEqual(value('at([1, [2, 3], null], 1)'), [2, 3])
+  assert.deepEqual(value('gather(["A", "B", "C"], [2, 0, 2])'), ['C', 'A', 'C'])
+  assert.deepEqual(value('gather([], [])'), [])
+  assert.deepEqual(value('zip(["A", "B"], [1, 2], [true, false])'), [['A', 1, true], ['B', 2, false]])
+  assert.deepEqual(value('zip([1], [2], [3], [4], [5], [6])'), [[1, 2, 3, 4, 5, 6]])
+  assert.deepEqual(value('zip([], [])'), [])
+  assert.equal(value('join(gather(["一", "二", "三"], [2, 0]), " → ")'), '三 → 一')
+  assert.equal(value('join([null, true, 2], " ")'), 'null true 2')
+  assert.equal(value('join([], ",")'), '')
+
+  const shared = [['A']]
+  const gathered = value('gather($state.a, [0, 0])', { state: { a: shared } })
+  gathered[0].push('B')
+  assert.deepEqual(shared, [['A']])
+  assert.deepEqual(gathered[1], ['A'])
+})
+
+test('expr: 线性运算按矩形行向量求值并正确处理大数与小数', () => {
+  assert.equal(value('dot([1, -3, 2], [4, 2, 5])'), 8)
+  assert.equal(value('dot([], [])'), 0)
+  assert.deepEqual(value('matvec([[1, 2, 3], [4, 5, 6]], [2, -1, 3])'), [9, 21])
+  assert.deepEqual(value('matvec([], [1, 2])'), [])
+  assert.deepEqual(value('scale([1, -2, 3], 0.5)'), [0.5, -1, 1.5])
+  assert.deepEqual(value('roundEach([1.23456, -3.45678, 2], 2)'), [1.23, -3.46, 2])
+  assert.deepEqual(value('roundEach($state.big, 12)', { state: { big: [1e300] } }), [1e300])
+})
+
+test('expr: softmax 先减最大值，大 logits 下保持归一', () => {
+  const probabilities = value('softmax([10000, 10001, 10002])')
+  const shifted = value('softmax([0, 1, 2])')
+  assert.deepEqual(probabilities, shifted)
+  assert.ok(Math.abs(probabilities.reduce((sum, item) => sum + item, 0) - 1) < 1e-14)
+  assert.ok(probabilities[0] < probabilities[1] && probabilities[1] < probabilities[2])
+  assert.deepEqual(value('softmax($state.extreme)', { state: { extreme: [-Number.MAX_VALUE, Number.MAX_VALUE] } }), [0, 1])
+  assert.deepEqual(value('softmax([8000])'), [1])
+})
+
+test('expr: 序列与矩阵拒绝错误形状、类型、索引和非有限结果', () => {
+  for (const [source, reason] of [
+    ['len("ab")', /有界数组/u], ['at([1], -1)', /整数索引/u], ['at([1], 1)', /整数索引/u],
+    ['at([1], "0")', /整数索引/u], ['gather([1, 2], [0.5])', /整数索引/u], ['gather([1], 0)', /索引数组/u],
+    ['dot([1], [1, 2])', /等长/u], ['dot([1], ["2"])', /有限数字/u],
+    ['matvec([[1, 2], [3]], [4, 5])', /矩形/u], ['matvec([[1, 2]], [3])', /矩形/u],
+    ['scale([1], "2")', /有限数字系数/u], ['softmax([])', /至少/u], ['softmax([true])', /有限数字/u],
+    ['roundEach([1], -1)', /小数位/u], ['roundEach([1], 13)', /小数位/u], ['roundEach([1], 1.5)', /小数位/u],
+    ['zip([1], [])', /等长/u], ['zip([1])', /参数个数/u], ['zip([], [], [], [], [], [], [])', /参数个数/u],
+    ['join([1], 0)', /字符串分隔符/u], ['join([[1]], ",")', /标量数组/u],
+  ]) assert.match(rejected(source), reason, source)
+  const scope = { state: { large: [1e300], infinity: [Infinity] } }
+  assert.match(rejected('dot($state.large, $state.large)', scope), /有限数字/u)
+  assert.match(rejected('len(scale($state.large, 10000000000))', scope), /有限数字/u)
+  assert.match(rejected('softmax($state.infinity)', scope), /有限数字/u)
+  assert.match(rejected('at($state.sparse, 0)', { state: { sparse: Array(1) } }), /整数索引/u)
+})
+
+test('expr: 序列操作、比较与输出遵守累计预算', () => {
+  const text = '界'.repeat(1500)
+  const data = { state: { text, list: Array.from({ length: 6 }, () => text) } }
+  assert.equal(value('len($state.list)', data), 6)
+  assert.match(rejected('join([$state.text, $state.text], ",")', data), /字符串超限/u)
+  assert.match(rejected('len(zip($state.list, $state.list))', data), /结果总量/u)
+  assert.match(rejected('gather($state.list, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])', data), /结果总量/u)
+  assert.match(rejected('[$state.list, $state.list]', data), /结果总量/u)
+  assert.match(rejected('[$state.list, $state.list] == [0]', data), /结果总量/u)
+  assert.match(rejected('len($state.big)', { state: { big: Array(EXPR_LIMITS.items + 1).fill(0) } }), /有界数组/u)
+
+  const vector = Array(64).fill(1)
+  const row = Array(64).fill(2)
+  const rows = Array(64).fill(row)
+  const matvec = 'matvec($state.rows, $state.vector)'
+  assert.deepEqual(value(matvec, { state: { rows, vector } }), Array(64).fill(128))
+  assert.match(rejected(matvec, { state: { rows: [...rows, row], vector } }), /矩阵单元数超限/u)
+  const repeated = `len([${Array(8).fill(matvec).join(', ')}])`
+  assert.match(rejected(repeated, { state: { rows, vector } }), /求值预算超限/u)
 })
 
 test('expr: 只读 $state/$data 点号路径', () => {

@@ -34,16 +34,22 @@ export const REGISTRY = Object.freeze({
   progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
   empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
   chart: { props: { kind: 'string', series: 'value', source: 'string?' }, children: false },
+  drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
+  rect: { props: { x: 'number', y: 'number', width: 'number', height: 'number', rx: 'number?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
+  circle: { props: { cx: 'number', cy: 'number', r: 'number', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
+  line: { props: { x1: 'number', y1: 'number', x2: 'number', y2: 'number', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
+  path: { props: { d: 'string', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
+  label: { props: { x: 'number', y: 'number', text: 'value', fill: 'string?', size: 'number?', align: 'string?', opacity: 'number?' }, children: false },
   segmented: { props: { label: 'string?', options: 'value', bind: 'string' }, children: false },
   divider: { props: { label: 'string?' }, children: false },
   // 本地交互控件：只写 $state，与 segmented 同一模型，不产生消息/工具调用
   toggle: { props: { label: 'string?', bind: 'string' }, children: false },
   slider: { props: { label: 'string?', bind: 'string', min: 'number?', max: 'number?', step: 'number?', unit: 'string?' }, children: false },
   input: { props: { label: 'string?', bind: 'string', placeholder: 'string?' }, children: false },
-  // 实验原语：受信派生状态（纯函数表达式，不执行代码）、折叠容器、唯一宿主动作（copy）
+  // 派生状态、折叠和动作。只有 copy 接触宿主剪贴板。
   derive: { props: { name: 'string', expr: 'string' }, children: false },
   details: { props: { label: 'string', tone: 'string?' }, children: true },
-  button: { props: { label: 'string', action: 'string', value: 'value', done: 'string?', unsupported: 'string?' }, children: false },
+  button: { props: { label: 'string', action: 'string', bind: 'string?', value: 'value', min: 'number?', max: 'number?', done: 'string?', unsupported: 'string?' }, children: false },
   // 过程与清单：steps 只接受 step 子节点（与 paragraph 只接受行内组件同一校验模式）
   steps: { props: {}, children: true },
   step: { props: { title: 'string', note: 'string?', tone: 'string?' }, children: false },
@@ -176,6 +182,108 @@ export const DENSITIES = Object.freeze(['inline', 'compact', 'panel', 'auto'])
 const DERIVE_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u
 const MAX_COPY_BUTTONS = 4
 
+const DRAWING_SHAPES = new Set(['rect', 'circle', 'line', 'path', 'label'])
+const DRAWING_MAX_SHAPES = 64
+const DRAWING_COLOR = new Set(['text', 'muted', 'border', 'surface', 'accent', 'neutral', 'success', 'warning', 'danger', 'info', 'none'])
+const DRAWING_ALIGN = new Set(['start', 'middle', 'end'])
+const DRAWING_STATIC = new Set(['d', 'align'])
+const DRAWING_AXIS = [-2048, 2048]
+const DRAWING_VIEWPORT = [24, 1024]
+const DRAWING_LENGTH = [0.1, 2048]
+const DRAWING_NUMERIC_LIMITS = { width: DRAWING_LENGTH, height: DRAWING_LENGTH, r: DRAWING_LENGTH, rx: [0, 1024], size: [8, 64], strokeWidth: [0, 24], opacity: [0, 1] }
+const DRAWING_PATH_ARITY = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0 }
+const DRAWING_PATH_TOKEN = /[MmLlHhVvCcSsQqTtAaZz]|[+-]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[Ee][+-]?[0-9]+)?|[ ,\t\r\n]+/gu
+
+function boundedDrawingNumber(value, min, max) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
+}
+
+function normalizeDrawingPath(value) {
+  if (typeof value !== 'string' || value.length > 1400) return null
+  const tokens = []
+  let cursor = 0
+  let command = null
+  let remaining = 0
+  let awaitingGroup = false
+  let segments = 0
+  for (const match of value.matchAll(DRAWING_PATH_TOKEN)) {
+    if (match.index !== cursor) return null
+    const token = match[0]
+    cursor += token.length
+    if (/^[ ,\t\r\n]/u.test(token)) continue
+    tokens.push(token)
+    const upper = token.toUpperCase()
+    if (Object.hasOwn(DRAWING_PATH_ARITY, upper)) {
+      if (remaining !== 0 || awaitingGroup || (command === null && upper !== 'M')) return null
+      command = upper
+      awaitingGroup = upper !== 'Z'
+      if (upper === 'Z') segments += 1
+    } else {
+      if (command === null || command === 'Z') return null
+      const arity = DRAWING_PATH_ARITY[command]
+      if (remaining === 0) remaining = arity
+      const position = arity - remaining
+      const number = Number(token)
+      if (!boundedDrawingNumber(number, ...DRAWING_AXIS)) return null
+      if (command === 'A' && ((position < 2 && number < 0) || ((position === 3 || position === 4) && token !== '0' && token !== '1'))) return null
+      remaining -= 1
+      if (remaining === 0) {
+        awaitingGroup = false
+        segments += 1
+      }
+    }
+    if (segments > 96) return null
+  }
+  return cursor === value.length && remaining === 0 && !awaitingGroup && segments > 0 ? tokens.join(' ') : null
+}
+
+function drawingAttribute(type, key, value) {
+  if (key === 'd') return normalizeDrawingPath(value)
+  if (key === 'fill' || key === 'stroke') return DRAWING_COLOR.has(value) ? value : null
+  if (key === 'align') return DRAWING_ALIGN.has(value) ? value : null
+  if (key === 'label' || key === 'text') {
+    if (key === 'text' && typeof value === 'number' && Number.isFinite(value)) return String(value)
+    return typeof value === 'string' && value.trim() !== '' && value.length <= 180 ? value : null
+  }
+  const limits = type === 'drawing' ? DRAWING_VIEWPORT : DRAWING_NUMERIC_LIMITS[key] ?? DRAWING_AXIS
+  return boundedDrawingNumber(value, ...limits) ? value : null
+}
+
+/** SVG props are allowlisted and revalidated after resolving the permitted bindings. */
+export function drawingProps(type, props, resolve = null) {
+  if (type !== 'drawing' && !DRAWING_SHAPES.has(type)) return null
+  const safe = {}
+  for (const [key, rule] of Object.entries(REGISTRY[type].props)) {
+    let value = props?.[key]
+    if (value === undefined && rule.endsWith('?')) continue
+    const canBind = !DRAWING_STATIC.has(key) && (type !== 'drawing' || key === 'label')
+    if (canBind && readBinding(value).scope !== undefined) {
+      if (resolve === null) {
+        safe[key] = value
+        continue
+      }
+      value = resolve(value)
+    }
+    const normalized = drawingAttribute(type, key, value)
+    if (normalized === null) return null
+    safe[key] = normalized
+  }
+  return safe
+}
+const LOCAL_BUTTON_ACTIONS = Object.freeze(['set', 'append', 'pop', 'reset'])
+const DEFAULT_APPEND_LIMIT = 32
+
+/** The next value of a local binding. Undefined means there is no valid transition. */
+export function localActionValue(state, initialState, props, value) {
+  if (props.action === 'set') return value
+  if (props.action === 'reset') return resolveValue(props.bind, { state: initialState })
+  const current = resolveValue(props.bind, { state })
+  if (!Array.isArray(current)) return undefined
+  if (props.action === 'append' && value !== undefined && current.length < (props.max ?? DEFAULT_APPEND_LIMIT)) return [...current, value]
+  if (props.action === 'pop' && current.length > (props.min ?? 0)) return current.slice(0, -1)
+  return undefined
+}
+
 /** 在通过结构校验的节点中检测派生路径冲突和循环。 */
 function planDerives(defs, bindPaths, state) {
   const rejected = new Map()
@@ -303,7 +411,7 @@ export function validateAst(input) {
     return { id: `${path}-degraded`, type: 'text', props: { text }, children: [], degraded: true }
   }
 
-  const walk = (node, depth, path) => {
+  const walk = (node, depth, path, parentType) => {
     if (depth > LIMITS.depth) {
       fatal.push(`${path} 超过最大深度 ${LIMITS.depth}`)
       return null
@@ -316,6 +424,8 @@ export function validateAst(input) {
     if (!isRecord(node)) return failNode(node, path, '不是对象')
     if (typeof node.type !== 'string') return failNode(node, path, '组件类型需要字符串')
     if (!Object.hasOwn(REGISTRY, node.type)) return failNode(node, path, `未知组件类型 ${node.type}`)
+    if (parentType === 'drawing' && !DRAWING_SHAPES.has(node.type)) return failNode(node, path, 'drawing 只接受图形原语')
+    if (parentType !== 'drawing' && DRAWING_SHAPES.has(node.type)) return failNode(node, path, '图形原语需要放在 drawing 里')
     const spec = REGISTRY[node.type]
     if (spec.children && Array.isArray(node.children) && node.children.length > LIMITS.nodes - nodes) {
       fatal.push(`节点数超过 ${LIMITS.nodes}`)
@@ -325,7 +435,8 @@ export function validateAst(input) {
     if (props.weight !== undefined && !WEIGHTS.includes(props.weight)) {
       return failNode(node, path, 'weight 只能是 primary/secondary/optional')
     }
-    const binding = Object.hasOwn(spec.props, 'bind') ? readBinding(props.bind) : null
+    const writesState = node.type === 'button' ? LOCAL_BUTTON_ACTIONS.includes(props.action) : Object.hasOwn(spec.props, 'bind')
+    const binding = writesState ? readBinding(props.bind) : null
     if (binding !== null && binding.scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
     if (node.type === 'segmented') {
       const options = props.options
@@ -356,17 +467,30 @@ export function validateAst(input) {
     }
     if (node.type === 'button') {
       if (typeof props.label !== 'string' || props.label.trim() === '') return failNode(node, path, 'button.label 必填')
-      // 唯一宿主动作：只允许真实剪贴板写入；其余动作名一律拒绝（不是白名单外的未来开关）
-      if (props.action !== 'copy') return failNode(node, path, 'button.action 只支持 copy')
-      if (props.value === undefined) return failNode(node, path, 'button.value 必填')
-      copyButtons += 1
-      if (copyButtons > MAX_COPY_BUTTONS) return failNode(node, path, `copy 按钮最多 ${MAX_COPY_BUTTONS} 个`)
-      if (typeof props.value === 'string' && readBinding(props.value).scope === undefined) {
-        if (props.value.length > LIMITS.text) return failNode(node, path, 'button.value 文本超限')
-      } else if (props.value !== null && typeof props.value === 'object') {
-        let bytes = Infinity
-        try { bytes = JSON.stringify(props.value).length } catch { /* 循环输入拒绝 */ }
-        if (bytes > LIMITS.stateBytes) return failNode(node, path, 'button.value 超出容量预算')
+      if (props.action === 'copy') {
+        if (props.value === undefined) return failNode(node, path, 'button.value 必填')
+        copyButtons += 1
+        if (copyButtons > MAX_COPY_BUTTONS) return failNode(node, path, `copy 按钮最多 ${MAX_COPY_BUTTONS} 个`)
+        if (typeof props.value === 'string' && readBinding(props.value).scope === undefined) {
+          if (props.value.length > LIMITS.text) return failNode(node, path, 'button.value 文本超限')
+        } else if (props.value !== null && typeof props.value === 'object') {
+          let bytes = Infinity
+          try { bytes = JSON.stringify(props.value).length } catch { /* 循环输入拒绝 */ }
+          if (bytes > LIMITS.stateBytes) return failNode(node, path, 'button.value 超出容量预算')
+        }
+      } else {
+        if (!writesState) return failNode(node, path, 'button.action 需要 copy、set、append、pop 或 reset')
+        if ((props.action === 'append' || props.action === 'set') && !fitsStateBudget(props.value)) {
+          return failNode(node, path, 'button.value 需要安全的 JSON 值')
+        }
+        if (props.action === 'append' && props.max !== undefined
+          && (!Number.isInteger(props.max) || props.max < 1 || props.max > STATE_ARRAY_ITEMS)) {
+          return failNode(node, path, `button.max 需要 1–${STATE_ARRAY_ITEMS} 的整数`)
+        }
+        if (props.action === 'pop' && props.min !== undefined
+          && (!Number.isInteger(props.min) || props.min < 0 || props.min >= STATE_ARRAY_ITEMS)) {
+          return failNode(node, path, `button.min 需要 0–${STATE_ARRAY_ITEMS - 1} 的整数`)
+        }
       }
     }
     if (node.type === 'steps') {
@@ -448,13 +572,20 @@ export function validateAst(input) {
     if (node.type === 'table' && props.filter !== undefined && readBinding(props.filter).scope !== 'state') {
       return failNode(node, path, 'table.filter 只能绑定 $state.*')
     }
-    if (props.when !== undefined && readBinding(props.when).scope !== 'state') {
-      return failNode(node, path, 'when 只能绑定 $state.*')
+    if (props.when !== undefined && typeof props.when !== 'boolean' && readBinding(props.when).scope !== 'state') {
+      return failNode(node, path, 'when 需要布尔值或 $state.* 绑定')
     }
     if (node.type === 'chart') {
       if (!['bar', 'line', 'donut'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut')
       const binding = readBinding(props.series)
       if (binding.scope === undefined && chartMatrix(binding.literal) === null) return failNode(node, path, 'chart.series 需要有效点列或状态绑定')
+    }
+    if (node.type === 'drawing') {
+      const count = Array.isArray(node.children) ? node.children.length : 0
+      if (count === 0 || count > DRAWING_MAX_SHAPES) return failNode(node, path, `drawing 需要 1–${DRAWING_MAX_SHAPES} 个图形原语`)
+    }
+    if ((node.type === 'drawing' || DRAWING_SHAPES.has(node.type)) && drawingProps(node.type, props) === null) {
+      return failNode(node, path, `${node.type} 的图形属性无效或超出预算`)
     }
     if (node.type === 'text' && typeof props.text === 'string' && props.text.length > LIMITS.text) {
       return failNode(node, path, `text 超过 ${LIMITS.text} 字`)
@@ -525,7 +656,7 @@ export function validateAst(input) {
     const children = []
     if (spec.children && Array.isArray(node.children)) {
       for (const [index, child] of node.children.entries()) {
-        const walked = walk(child, depth + 1, `${path}.children[${index}]`)
+        const walked = walk(child, depth + 1, `${path}.children[${index}]`, node.type)
         if (walked === null) return null
         children.push(walked)
       }

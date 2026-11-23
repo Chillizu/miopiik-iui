@@ -3,7 +3,7 @@
  * Scope: React h/React, IUI_AST, MIOPIIK_ML, C, SANS. No legacy Widget/Ink deps.
  * This source is bundled verbatim into client.js by tools/build.mjs.
  */
-    function svgCanvas(width, height, children, label) {
+    function svgCanvas(width, height, children, label, drawing = false) {
       return h(
         'svg',
         {
@@ -13,13 +13,59 @@
           preserveAspectRatio: 'xMidYMid meet',
           role: 'img',
           'aria-label': label === undefined || label === '' ? undefined : label,
-          style: { display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto', overflow: 'visible' },
+          'data-iui-drawing': drawing ? '1' : undefined,
+          style: { display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto', overflow: drawing ? 'hidden' : 'visible' },
         },
         ...children,
       )
     }
 
     const SANS = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif'
+
+    const DRAWING_COLORS = {
+      text: C.text,
+      muted: C.muted,
+      border: C.border,
+      surface: 'var(--dsw-alias-bg-layer-1, transparent)',
+      accent: C.brand,
+      neutral: C.idle,
+      success: C.success,
+      warning: C.warn,
+      danger: C.error,
+      info: C.brand,
+      none: 'none',
+    }
+    const DRAWING_TAGS = { rect: 'rect', circle: 'circle', line: 'line', path: 'path', label: 'text' }
+
+    function renderDrawing(item, key, resolve) {
+      const viewport = IUI_AST.drawingProps('drawing', item.props, resolve)
+      if (viewport === null) return h('div', { key, 'data-iui-drawing-invalid': '1', style: { color: C.muted } }, '示意图暂不可用')
+      const shapes = []
+      for (const [index, child] of item.children.entries()) {
+        if (!Object.hasOwn(DRAWING_TAGS, child.type) || !isItemVisible(child, resolve)) continue
+        const props = IUI_AST.drawingProps(child.type, child.props, resolve)
+        if (props === null) continue
+        const { fill, stroke, strokeWidth, text, size, align, ...geometry } = props
+        if (child.type === 'label') {
+          shapes.push(h('text', { key: index, ...geometry, fill: DRAWING_COLORS[fill ?? 'text'], fontSize: size ?? 13, fontFamily: SANS, textAnchor: align ?? 'start' }, text))
+        } else {
+          const outline = child.type === 'rect' || child.type === 'circle' ? 'border' : 'accent'
+          const strokeColor = stroke ?? (fill === undefined || fill === 'none' ? outline : 'none')
+          shapes.push(h(DRAWING_TAGS[child.type], {
+            key: index,
+            ...geometry,
+            fill: DRAWING_COLORS[fill ?? 'none'],
+            stroke: DRAWING_COLORS[strokeColor],
+            strokeWidth: strokeWidth ?? 1.5,
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+          }))
+        }
+      }
+      return h('div', { key, style: { minWidth: 0, maxWidth: '100%' } }, shapes.length === 0
+        ? h('div', { 'data-iui-drawing-invalid': '1', style: { color: C.muted } }, viewport.label)
+        : svgCanvas(viewport.width, viewport.height, shapes, viewport.label, true))
+    }
 
     /** 图表可访问摘要：读屏用户拿到的应是数据本身，而不只是"一张图"。 */
     function chartSummary(rows, kind) {
@@ -165,7 +211,7 @@
     }
 
     const DENSITY_CONTROLS = new Set(['segmented', 'toggle', 'slider', 'input'])
-    const DENSITY_STRUCTURES = new Set(['card', 'table', 'chart', 'steps', 'diagram'])
+    const DENSITY_STRUCTURES = new Set(['card', 'table', 'chart', 'steps', 'diagram', 'drawing'])
 
     /** Use the declared structure and ignore collapsed details so layout stays stable during interaction. */
     function inferDensity(root) {
@@ -680,6 +726,7 @@
           return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(resolveText(props.text)))
         }
         if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve, resolveText })
+        if (item.type === 'drawing') return renderDrawing(item, key, resolve)
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')
           const color = (TONE_COLORS[tone] ?? TONE_COLORS.neutral)[1]
@@ -885,7 +932,24 @@
             onToggle: () => toggleDetails(key),
           })
         }
-        if (item.type === 'button') return h(IuiCopyAction, { key, item, resolve, resolveText })
+        if (item.type === 'button') {
+          if (props.action === 'copy') return h(IuiCopyAction, { key, item, resolve, resolveText })
+          const binding = IUI_AST.readBinding(props.bind)
+          const value = resolve(props.value)
+          const disabled = IUI_AST.localActionValue(state, ast.state, props, value) === undefined
+          return h('button', {
+            key,
+            type: 'button',
+            className: 'miopiik-ctl',
+            'data-iui-action': props.action,
+            disabled,
+            onClick: () => setState((prev) => {
+              const next = IUI_AST.localActionValue(prev, ast.state, props, value)
+              return next === undefined ? prev : writeStatePath(prev, binding.key, next)
+            }),
+            style: { border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', color: disabled ? C.muted : C.text, padding: '3px 10px', fontSize: 12, lineHeight: '18px', alignSelf: 'start', cursor: disabled ? 'default' : 'pointer' },
+          }, textOf(resolveText(props.label)))
+        }
         return null
       }
       return h(

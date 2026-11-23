@@ -50,6 +50,12 @@ export const ML_TAGS = Object.freeze({
   progress: 'progress',
   empty: 'empty',
   chart: 'chart',
+  drawing: 'drawing',
+  rect: 'rect',
+  circle: 'circle',
+  line: 'line',
+  path: 'path',
+  label: 'label',
   segmented: 'segmented',
   divider: 'divider',
   toggle: 'toggle',
@@ -66,9 +72,9 @@ export const ML_TAGS = Object.freeze({
   button: 'button',
 })
 
-const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true })
+const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, drawing: true })
 // 交互控件和图形原语隐式闭合。step 也保留旧的无闭合写法。
-const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true })
+const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true, rect: true, circle: true, line: true, path: true, label: true })
 
 function decodeEntities(text) {
   return String(text)
@@ -222,6 +228,8 @@ function normalizeAttrs(element) {
     delete attrs.type
     delete attrs.data
   }
+  if (attrs.strokeWidth === undefined && attrs['stroke-width'] !== undefined) attrs.strokeWidth = attrs['stroke-width']
+  if (element.name === 'details' && attrs.label === undefined && attrs.summary !== undefined) attrs.label = attrs.summary
   if (typeof attrs.gap === 'string' && GAP_TOKENS[attrs.gap] !== undefined) attrs.gap = GAP_TOKENS[attrs.gap]
   return attrs
 }
@@ -272,6 +280,12 @@ const TEXT_PROPS = Object.freeze({
   divider: ['label'],
   metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
   chart: ['kind', 'type', 'series', 'source', 'title'],
+  drawing: ['width', 'height', 'label'],
+  rect: ['x', 'y', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],
+  circle: ['cx', 'cy', 'r', 'fill', 'stroke', 'strokeWidth', 'opacity'],
+  line: ['x1', 'y1', 'x2', 'y2', 'stroke', 'strokeWidth', 'opacity'],
+  path: ['d', 'fill', 'stroke', 'strokeWidth', 'opacity'],
+  label: ['x', 'y', 'text', 'fill', 'size', 'align', 'opacity'],
   segmented: ['label', 'bind', 'options'],
   table: ['columns', 'rows', 'caption', 'filter'],
   toggle: ['label', 'bind'],
@@ -289,11 +303,11 @@ const TEXT_PROPS = Object.freeze({
   column: ['gap', 'align'],
   derive: ['name', 'expr'],
   details: ['label', 'tone'],
-  button: ['label', 'action', 'value', 'done', 'unsupported'],
+  button: ['label', 'action', 'bind', 'value', 'min', 'max', 'done', 'unsupported'],
 })
 
 /** 必须保留源码字符串的属性（表达式等），不得被 JSON/数字归一吞掉。 */
-const RAW_PROPS = Object.freeze({ derive: ['expr'] })
+const RAW_PROPS = Object.freeze({ derive: ['expr'], drawing: ['label'], path: ['d'], label: ['text'] })
 
 /**
  * 解析 miopiik-ml 源码。
@@ -445,7 +459,7 @@ export function parseMiopiikMl(source) {
         node: {
           id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`,
           type,
-          props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? []) },
+          props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) },
           children,
         },
       }

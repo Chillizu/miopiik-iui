@@ -6,7 +6,7 @@
  *    不产生可执行代码，解析结果只是一棵受限 JSON AST；
  *  - 表达式只能读 `$state.*` / `$data.*` 的只读点号路径，不能调用对象方法、不能赋值、
  *    不能访问任意成员（`.constructor` 等一律拒绝）；
- *  - 函数只允许白名单内的纯函数（round/floor/ceil/abs/min/max/clamp）；
+ *  - 函数只允许白名单内的纯标量、序列与数值运算；
  *  - 预算（源码长度/token/嵌套深度/结果体量）统一拒绝；失败返回结构化错误，不抛异常；
  *  - 纯函数、确定性；compile 结果按源码做有界缓存（≤ 256 项）。
  */
@@ -18,11 +18,18 @@ export const EXPR_LIMITS = Object.freeze({
   items: 128,
   resultDepth: 8,
   stringLength: 2000,
+  resultChars: 16384,
+  matrixCells: 4096,
+  work: 32768,
+  decimalPlaces: 12,
   cache: 256,
 })
 
 const RESERVED = new Set(['__proto__', 'prototype', 'constructor'])
-const FUNCTIONS = Object.freeze({ round: 1, floor: 1, ceil: 1, abs: 1, min: -1, max: -1, clamp: 3 })
+const SEQUENCE_ARITY = Object.freeze({
+  len: 1, at: 2, gather: 2, dot: 2, matvec: 2, scale: 2, softmax: 1, roundEach: 2, zip: [2, 6], join: 2,
+})
+const FUNCTIONS = Object.freeze({ round: [1, 2], floor: 1, ceil: 1, abs: 1, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY })
 const SCOPES = new Set(['state', 'data'])
 const IDENT_START = /[A-Za-z_]/u
 const IDENT_PART = /[A-Za-z0-9_]/u
@@ -213,7 +220,10 @@ function createParser(tokens) {
     const close = expect(')')
     if (close !== null) return close
     const arity = FUNCTIONS[name]
-    if (arity === -1 ? args.length < 1 : args.length !== arity) return fail(`${name} 参数个数不合法`)
+    const validArity = Array.isArray(arity)
+      ? args.length >= arity[0] && args.length <= arity[1]
+      : arity === -1 ? args.length >= 1 : args.length === arity
+    if (!validArity) return fail(`${name} 参数个数不合法`)
     return { ok: true, node: { t: 'call', name, args } }
   }
 
@@ -380,18 +390,30 @@ function finite(value) {
   return numeric(value) ? { ok: true, value } : { ok: false, error: '运算结果必须是有限数字' }
 }
 
-function inspectResult(value, depth = 0) {
+function spend(budget, units) {
+  budget.remaining -= units
+  return budget.remaining >= 0
+}
+
+/** 在复制输出时计量 JSON 大小，连同重复引用展开后的内容一起限额。 */
+function inspectResult(value, work, depth = 0, space = { remaining: EXPR_LIMITS.resultChars }) {
+  if (!spend(work, 1)) return fail('表达式求值预算超限')
   if (depth > EXPR_LIMITS.resultDepth) return fail('表达式结果嵌套超限')
-  if (value === null || typeof value === 'boolean') return { ok: true, value }
+  const tooLarge = () => fail('表达式结果总量超限')
+  if (value === null || typeof value === 'boolean' || numeric(value)) {
+    return spend(space, String(value).length) ? { ok: true, value } : tooLarge()
+  }
   if (typeof value === 'number') return finite(value)
   if (typeof value === 'string') {
-    return value.length <= EXPR_LIMITS.stringLength ? { ok: true, value } : fail('表达式结果字符串超限')
+    if (value.length > EXPR_LIMITS.stringLength) return fail('表达式结果字符串超限')
+    return spend(space, JSON.stringify(value).length) ? { ok: true, value } : tooLarge()
   }
   if (Array.isArray(value)) {
     if (value.length > EXPR_LIMITS.items) return fail('表达式结果数组超限')
+    if (!spend(space, 2 + Math.max(0, value.length - 1))) return tooLarge()
     const out = []
     for (const item of value) {
-      const safe = inspectResult(item, depth + 1)
+      const safe = inspectResult(item, work, depth + 1, space)
       if (safe.ok === false) return safe
       out.push(safe.value)
     }
@@ -400,10 +422,12 @@ function inspectResult(value, depth = 0) {
   if (isRecord(value)) {
     const keys = Object.keys(value)
     if (keys.length > EXPR_LIMITS.items) return fail('表达式结果对象超限')
+    if (!spend(space, 2 + Math.max(0, keys.length - 1))) return tooLarge()
     const out = {}
     for (const key of keys) {
       if (key.length > 64 || RESERVED.has(key)) return fail(`表达式结果含不安全键：${key}`)
-      const safe = inspectResult(value[key], depth + 1)
+      if (!spend(space, JSON.stringify(key).length + 1)) return tooLarge()
+      const safe = inspectResult(value[key], work, depth + 1, space)
       if (safe.ok === false) return safe
       out[key] = safe.value
     }
@@ -412,21 +436,123 @@ function inspectResult(value, depth = 0) {
   return fail('表达式结果类型不合法')
 }
 
-function equality(a, b) {
-  if (a === b) return true
-  try {
-    return JSON.stringify(a) === JSON.stringify(b)
-  } catch {
-    return false
-  }
+function boundedArray(value) {
+  return Array.isArray(value) && value.length <= EXPR_LIMITS.items
 }
 
-function evaluate(node, scope, depth = 0) {
+function numericVector(array) {
+  if (!boundedArray(array)) return false
+  for (let index = 0; index < array.length; index += 1) {
+    if (!Object.hasOwn(array, index) || !numeric(array[index])) return false
+  }
+  return true
+}
+
+function arrayIndex(array, index) {
+  return Number.isSafeInteger(index) && index >= 0 && index < array.length && Object.hasOwn(array, index)
+}
+
+function dotProduct(left, right) {
+  let result = 0
+  for (let index = 0; index < left.length; index += 1) result += left[index] * right[index]
+  return result
+}
+
+function sequenceCall(name, args, work) {
+  const [array, argument] = args
+  if (!boundedArray(array)) return fail(`${name} 需要有界数组（最多 ${EXPR_LIMITS.items} 项）`)
+  if (name === 'len') return { ok: true, value: array.length }
+  if (name === 'at') {
+    return arrayIndex(array, argument)
+      ? inspectResult(array[argument], work)
+      : fail('at 需要未越界的整数索引')
+  }
+  if (name === 'gather') {
+    if (!boundedArray(argument)) return fail('gather 需要有界整数索引数组')
+    const values = []
+    for (const index of argument) {
+      if (!arrayIndex(array, index)) return fail('gather 需要未越界的整数索引')
+      values.push(array[index])
+    }
+    return inspectResult(values, work)
+  }
+  if (name === 'zip') {
+    if (!args.every((list) => boundedArray(list) && list.length === array.length)) return fail('zip 需要等长数组')
+    const rows = Array.from({ length: array.length }, (_, index) => args.map((list) => list[index]))
+    return inspectResult(rows, work)
+  }
+  if (name === 'join') {
+    if (typeof argument !== 'string' || argument.length > EXPR_LIMITS.stringLength) return fail('join 需要有界字符串分隔符')
+    if (!spend(work, array.length)) return fail('表达式求值预算超限')
+    let length = Math.max(0, array.length - 1) * argument.length
+    const parts = []
+    for (const item of array) {
+      if (item !== null && typeof item !== 'string' && !numeric(item) && typeof item !== 'boolean') return fail('join 只接受标量数组')
+      const text = String(item)
+      length += text.length
+      if (length > EXPR_LIMITS.stringLength) return fail('join 结果字符串超限')
+      parts.push(text)
+    }
+    return { ok: true, value: parts.join(argument) }
+  }
+  if (name === 'matvec') {
+    if (!numericVector(argument)) return fail('matvec 需要有限数字向量')
+    const cells = array.length * argument.length
+    if (cells > EXPR_LIMITS.matrixCells) return fail('matvec 矩阵单元数超限')
+    if (!spend(work, cells + array.length + argument.length)) return fail('表达式求值预算超限')
+    const values = []
+    for (const row of array) {
+      if (!numericVector(row) || row.length !== argument.length) return fail('matvec 需要与向量长度匹配的矩形数值矩阵')
+      const result = finite(dotProduct(row, argument))
+      if (!result.ok) return result
+      values.push(result.value)
+    }
+    return { ok: true, value: values }
+  }
+  if (!numericVector(array)) return fail(`${name} 需要有限数字向量`)
+  if (!spend(work, array.length)) return fail('表达式求值预算超限')
+  if (name === 'dot') {
+    if (!numericVector(argument) || argument.length !== array.length) return fail('dot 需要等长有限数字向量')
+    return finite(dotProduct(array, argument))
+  }
+  if (name === 'scale') {
+    if (!numeric(argument)) return fail('scale 需要有限数字系数')
+    const values = array.map((item) => item * argument)
+    return values.every(numeric) ? { ok: true, value: values } : fail('运算结果必须是有限数字')
+  }
+  if (name === 'roundEach') {
+    if (!Number.isInteger(argument) || argument < 0 || argument > EXPR_LIMITS.decimalPlaces) {
+      return fail(`roundEach 小数位需要 0–${EXPR_LIMITS.decimalPlaces} 之间的整数`)
+    }
+    return { ok: true, value: array.map((item) => Number(item.toFixed(argument))) }
+  }
+  if (name === 'softmax') {
+    if (array.length === 0) return fail('softmax 至少需要一个数值')
+    const max = Math.max(...array)
+    const weights = array.map((item) => Math.exp(item - max))
+    const total = weights.reduce((sum, weight) => sum + weight, 0)
+    return { ok: true, value: weights.map((weight) => weight / total) }
+  }
+  return fail('未知序列函数')
+}
+
+function equality(a, b, work) {
+  if (a === b) return { ok: true, value: true }
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return { ok: true, value: false }
+  const left = inspectResult(a, work)
+  if (!left.ok) return left
+  const right = inspectResult(b, work)
+  if (!right.ok) return right
+  return { ok: true, value: JSON.stringify(left.value) === JSON.stringify(right.value) }
+}
+
+function evaluate(node, scope, work, depth = 0) {
+  if (!spend(work, 1)) return fail('表达式求值预算超限')
   if (depth > EXPR_LIMITS.depth) return fail('表达式求值嵌套超限')
   if (node.t === 'num' || node.t === 'str' || node.t === 'lit') return { ok: true, value: node.v }
   if (node.t === 'ref') return readPath(scope, node.scope, node.key)
   if (node.t === 'unary') {
-    const operand = evaluate(node.x, scope, depth + 1)
+    const operand = evaluate(node.x, scope, work, depth + 1)
     if (operand.ok === false) return operand
     if (node.op === '!') {
       if (typeof operand.value !== 'boolean') return fail('! 只接受布尔值')
@@ -436,23 +562,23 @@ function evaluate(node, scope, depth = 0) {
     return { ok: true, value: node.op === '-' ? -operand.value : operand.value }
   }
   if (node.t === 'cond') {
-    const condition = evaluate(node.c, scope, depth + 1)
+    const condition = evaluate(node.c, scope, work, depth + 1)
     if (condition.ok === false) return condition
-    return evaluate(condition.value ? node.a : node.b, scope, depth + 1)
+    return evaluate(condition.value ? node.a : node.b, scope, work, depth + 1)
   }
   if (node.t === 'bin') {
-    const left = evaluate(node.l, scope, depth + 1)
+    const left = evaluate(node.l, scope, work, depth + 1)
     if (left.ok === false) return left
     if (node.op === '&&' || node.op === '||') {
       if (typeof left.value !== 'boolean') return fail(`${node.op} 只接受布尔值`)
       if (node.op === '&&' && left.value === false) return { ok: true, value: false }
       if (node.op === '||' && left.value === true) return { ok: true, value: true }
-      const right = evaluate(node.r, scope, depth + 1)
+      const right = evaluate(node.r, scope, work, depth + 1)
       if (right.ok === false) return right
       if (typeof right.value !== 'boolean') return fail(`${node.op} 只接受布尔值`)
       return { ok: true, value: right.value }
     }
-    const right = evaluate(node.r, scope, depth + 1)
+    const right = evaluate(node.r, scope, work, depth + 1)
     if (right.ok === false) return right
     const a = left.value
     const b = right.value
@@ -461,7 +587,10 @@ function evaluate(node, scope, depth = 0) {
       if (!okType(a) || !okType(b)) return fail('字符串拼接只接受 string/number/boolean')
       return { ok: true, value: String(a) + String(b) }
     }
-    if (node.op === '==' || node.op === '!=') return { ok: true, value: equality(a, b) === (node.op === '==') }
+    if (node.op === '==' || node.op === '!=') {
+      const equal = equality(a, b, work)
+      return equal.ok ? { ok: true, value: equal.value === (node.op === '==') } : equal
+    }
     const comparable = (numeric(a) && numeric(b)) || (typeof a === 'string' && typeof b === 'string')
     if (node.op === '<' || node.op === '<=' || node.op === '>' || node.op === '>=') {
       if (!comparable) return fail(`${node.op} 需要两个数字或两个字符串`)
@@ -480,7 +609,7 @@ function evaluate(node, scope, depth = 0) {
   if (node.t === 'arr') {
     const out = []
     for (const item of node.items) {
-      const value = evaluate(item, scope, depth + 1)
+      const value = evaluate(item, scope, work, depth + 1)
       if (value.ok === false) return value
       out.push(value.value)
     }
@@ -489,7 +618,7 @@ function evaluate(node, scope, depth = 0) {
   if (node.t === 'obj') {
     const out = {}
     for (const [key, valueNode] of node.entries) {
-      const value = evaluate(valueNode, scope, depth + 1)
+      const value = evaluate(valueNode, scope, work, depth + 1)
       if (value.ok === false) return value
       out[key] = value.value
     }
@@ -498,12 +627,19 @@ function evaluate(node, scope, depth = 0) {
   if (node.t === 'call') {
     const args = []
     for (const argNode of node.args) {
-      const value = evaluate(argNode, scope, depth + 1)
+      const value = evaluate(argNode, scope, work, depth + 1)
       if (value.ok === false) return value
       args.push(value.value)
     }
+    if (Object.hasOwn(SEQUENCE_ARITY, node.name)) return sequenceCall(node.name, args, work)
     if (!args.every(numeric)) return fail(`${node.name} 只接受有限数字`)
-    if (node.name === 'round') return finite(Math.round(args[0]))
+    if (node.name === 'round') {
+      const [value, places = 0] = args
+      if (!Number.isInteger(places) || places < 0 || places > EXPR_LIMITS.decimalPlaces) {
+        return fail(`round 小数位需要 0–${EXPR_LIMITS.decimalPlaces} 之间的整数`)
+      }
+      return finite(places === 0 ? Math.round(value) : Number(value.toFixed(places)))
+    }
     if (node.name === 'floor') return finite(Math.floor(args[0]))
     if (node.name === 'ceil') return finite(Math.ceil(args[0]))
     if (node.name === 'abs') return finite(Math.abs(args[0]))
@@ -543,9 +679,10 @@ export function evaluateExpr(compiled, scope) {
   if (fresh.ok === false) return fail(fresh.error)
   const program = fresh.program
   try {
-    const value = evaluate(program, scope ?? {}, 0)
+    const work = { remaining: EXPR_LIMITS.work }
+    const value = evaluate(program, scope ?? {}, work)
     if (value.ok === false) return value
-    return inspectResult(value.value)
+    return inspectResult(value.value, work)
   } catch {
     return fail('expr 求值失败')
   }
