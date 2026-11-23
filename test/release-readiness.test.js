@@ -36,16 +36,19 @@ test('发布检查：单包可独立打包，tarball 覆盖全部运行时依赖
   assert.equal(report.package.problems.length, 0)
 })
 
-test('版本策略：IUI 保持 rc 预发布，blocker 未解除前不升 stable', () => {
-  assert.match(manifest.version, /^0\.\d+\.\d+-rc\.\d+$/u, 'IUI 必须保持 rc 版本')
-  assert.match(manifest.version, /^0\.\d+\.\d+-rc\.\d+$/u, 'IUI 必须保持 rc 直到 blocker 解除')
+test('版本策略：版本号与发布说明互相自证（rc 与 stable 都要写明状态与限制）', () => {
+  assert.match(manifest.version, /^0\.\d+\.\d+(-rc\.\d+)?$/u, '版本号必须是 0.x.y 或 0.x.y-rc.N')
   assert.equal(manifest.private, undefined, 'IUI 不应标记 private')
 
   const notes = readFileSync(join(root, 'docs', 'RELEASE-NOTES.md'), 'utf8')
-  assert.match(notes, /miopiik-iui 0\.1\.0-rc\.4/u, '发布说明必须写明当前版本')
-  assert.match(notes, /blocker/iu, '发布说明必须列出 stable blocker')
-  assert.match(notes, /prerelease|预发布/iu, '发布说明必须明确这是预发布')
-  assert.match(notes, /stable/iu)
+  assert.match(notes, /miopiik-iui 0\.1\.0-rc\.4/u, '发布说明必须写明历史版本')
+  assert.match(notes, new RegExp('## miopiik-iui ' + manifest.version.replace(/\./gu, '\\.') + ' — '), '发布说明必须为当前版本（' + manifest.version + '）建节')
+  assert.match(notes, /已知限制|blocker/iu, '发布说明必须列出限制')
+  if (manifest.version.includes('-rc.')) {
+    assert.match(notes, /prerelease|预发布/iu, 'rc 版本必须在发布说明里明确写为预发布')
+  } else {
+    assert.match(notes, /stable|正式版/iu, 'stable 版本必须在发布说明里明确写为正式版')
+  }
 
   const matrix = readFileSync(join(root, 'docs', 'SUPPORT-MATRIX.md'), 'utf8')
   assert.match(matrix, /0\.2\.2-rc\.1/u, '支持矩阵需写明 DSH 测试基线')
@@ -106,9 +109,18 @@ test('安装脚本 tarball 模式 --execute 真的执行：用桩 dsh 验证实�
   assert.equal(calls.some((call) => call.includes('<') || call.includes('>')), false)
 })
 
-test('README 顶部版本与 package.json 一致，且明确标注 prerelease（防止文档漂移）', () => {
+test('README 顶部版本与 package.json 一致，且状态标注与版本号相符（防止文档漂移）', () => {
   const readme = readFileSync(join(root, 'README.md'), 'utf8')
-  assert.ok(readme.includes(`Version ${manifest.version}`), `README 顶部版本与 package.json（${manifest.version}）不一致`)
-  assert.match(readme, /prerelease|预发布/iu, 'rc 版本必须在 README 里明确写为预发布')
-  assert.equal(manifest.version.includes('-rc.'), true)
+  const zh = readFileSync(join(root, 'README.zh-CN.md'), 'utf8')
+  for (const [name, text] of [['README.md', readme], ['README.zh-CN.md', zh]]) {
+    assert.ok(text.includes(`Version ${manifest.version}`), `${name} 顶部版本与 package.json（${manifest.version}）不一致`)
+  }
+  if (manifest.version.includes('-rc.')) {
+    assert.match(readme, /prerelease/iu, 'rc 版本必须在 README 里明确写为预发布')
+    assert.match(zh, /预发布/iu, 'rc 版本必须在中文 README 里明确写为预发布')
+  } else {
+    assert.match(readme, /stable/iu, 'stable 版本必须在 README 里明确写为正式版')
+    assert.match(zh, /正式版|stable/iu, 'stable 版本必须在中文 README 里明确写为正式版')
+    assert.match(readme, /known limitations?|限制/iu, 'stable 版本必须同时写明已知限制')
+  }
 })

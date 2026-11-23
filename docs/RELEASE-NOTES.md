@@ -2,7 +2,18 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
-> **当前版本 `0.1.0-rc.15` 为 prerelease（预发布 / release candidate），属于独立实验性插件，而非 stable 版本或 DSH 上游内置功能。** 聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁；未加载该补丁时，聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用。
+> **当前版本 `0.1.0` 为正式版（stable），属于独立插件，而非 DSH 上游内置功能。** 发布时仍有两项已知限制：聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的非官方、版本耦合补丁（未加载时聊天中的 `iui` 围栏按普通代码块显示，仅插件页预览可用），以及尚无多版本兼容矩阵。二者不阻塞本版发布，但决定了安装步骤与兼容承诺。
+
+## miopiik-iui 0.1.0 — stable（2026-11-23）
+
+**状态**：**正式版（stable）**。代码与 `0.1.0-rc.15` 完全一致，本版只做版本定稿与文档收口——维护者决定在两项已知限制未消除的情况下发布。
+
+- **定稿内容**（自 rc.7 起累积）：受控 `iui` 围栏组件体系与本地 `$state` 交互；动效定妆；声明式泳道图（实测几何布线）；rc.12 的 DOM 级嫁接与围栏级流式增量；rc.13 的 `html` 无脚本沙箱文档通道 + 宿主主题预设（`mi-*` 组件词汇）；rc.14/rc.15 的沙箱帧自动高度（含测量修正）。
+- **发布时未消除的两项已知限制**：① 聊天内联渲染依赖非官方、版本耦合的 `@deepseek-ai/dsh-client-ui-chat` fork（DSH 升级后需重跑 `tools/fork-chat-embeds.mjs`）；② 尚无跨多个 DSH 版本的兼容矩阵与干净 profile 冷启动全链路验证。
+- **已解除并记录**：跨 token Markdown 有损（rc.12 DOM 级嫁接）、流式非增量（rc.12 围栏级增量）。
+- **安装**：从本仓库 Release 下载 `miopiik-iui-0.1.0.tgz` 安装并重启 DSH；宿主补丁经 profile 的 ui-chat 软链随重启生效。未发布到 npm registry。
+- **升级**：`0.1.0-rc.*` 用户直接替换包并重启即可，配置与设置页开关状态保留；无数据迁移。
+- **实机验收点**：`iui` 围栏组件、`html` 沙箱帧（自动高度、无拖拽角、JS 不执行）、行内 token 与宿主主题一致性。
 
 ## miopiik-iui 0.1.0-rc.15 — prerelease
 
