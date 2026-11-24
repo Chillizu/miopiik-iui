@@ -3,7 +3,7 @@
  * Scope: React h/React, IUI_AST, MIOPIIK_ML, C, SANS. No legacy Widget/Ink deps.
  * This source is bundled verbatim into client.js by tools/build.mjs.
  */
-    function svgCanvas(width, height, children, label, drawing = false) {
+    function svgCanvas(width, height, children, label, drawing = false, describedBy) {
       return h(
         'svg',
         {
@@ -13,6 +13,7 @@
           preserveAspectRatio: 'xMidYMid meet',
           role: 'img',
           'aria-label': label === undefined || label === '' ? undefined : label,
+          'aria-describedby': describedBy,
           'data-iui-drawing': drawing ? '1' : undefined,
           style: { display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto', overflow: drawing ? 'hidden' : 'visible' },
         },
@@ -37,34 +38,88 @@
     }
     const DRAWING_TAGS = { rect: 'rect', circle: 'circle', line: 'line', path: 'path', label: 'text' }
 
-    function renderDrawing(item, key, resolve) {
-      const viewport = IUI_AST.drawingProps('drawing', item.props, resolve)
-      if (viewport === null) return h('div', { key, 'data-iui-drawing-invalid': '1', style: { color: C.muted } }, '示意图暂不可用')
-      const shapes = []
-      for (const [index, child] of item.children.entries()) {
-        if (!Object.hasOwn(DRAWING_TAGS, child.type) || !isItemVisible(child, resolve)) continue
-        const props = IUI_AST.drawingProps(child.type, child.props, resolve)
-        if (props === null) continue
-        const { fill, stroke, strokeWidth, text, size, align, ...geometry } = props
-        if (child.type === 'label') {
-          shapes.push(h('text', { key: index, ...geometry, fill: DRAWING_COLORS[fill ?? 'text'], fontSize: size ?? 13, fontFamily: SANS, textAnchor: align ?? 'start' }, text))
-        } else {
-          const outline = child.type === 'rect' || child.type === 'circle' ? 'border' : 'accent'
-          const strokeColor = stroke ?? (fill === undefined || fill === 'none' ? outline : 'none')
-          shapes.push(h(DRAWING_TAGS[child.type], {
-            key: index,
-            ...geometry,
-            fill: DRAWING_COLORS[fill ?? 'none'],
-            stroke: DRAWING_COLORS[strokeColor],
-            strokeWidth: strokeWidth ?? 1.5,
-            strokeLinecap: 'round',
-            strokeLinejoin: 'round',
-          }))
-        }
+    function renderDrawingShape(child, key, resolve) {
+      if (!Object.hasOwn(DRAWING_TAGS, child.type) || !isItemVisible(child, resolve)) return null
+      const props = IUI_AST.drawingProps(child.type, child.props, resolve)
+      if (props === null) return null
+      const { fill, stroke, strokeWidth, text, size, align, ...geometry } = props
+      if (child.type === 'label') {
+        return h('text', { key, ...geometry, fill: DRAWING_COLORS[fill ?? 'text'], fontSize: size ?? 13, fontFamily: SANS, textAnchor: align ?? 'start' }, text)
       }
-      return h('div', { key, style: { minWidth: 0, maxWidth: '100%' } }, shapes.length === 0
-        ? h('div', { 'data-iui-drawing-invalid': '1', style: { color: C.muted } }, viewport.label)
-        : svgCanvas(viewport.width, viewport.height, shapes, viewport.label, true))
+      const outline = child.type === 'rect' || child.type === 'circle' ? 'border' : 'accent'
+      const strokeColor = stroke ?? (fill === undefined || fill === 'none' ? outline : 'none')
+      return h(DRAWING_TAGS[child.type], {
+        key,
+        ...geometry,
+        fill: DRAWING_COLORS[fill ?? 'none'],
+        stroke: DRAWING_COLORS[strokeColor],
+        strokeWidth: strokeWidth ?? 1.5,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      })
+    }
+
+    function IuiDrawing({ item, resolve, streaming, weight }) {
+      const [choice, choose] = React.useState(null)
+      const captionId = React.useId()
+      const weightStyle = weight === undefined ? {} : WEIGHT_STYLE[weight]
+      const viewport = IUI_AST.drawingProps('drawing', item.props, resolve)
+      if (viewport === null) return h('div', { 'data-iui-drawing-invalid': '1', 'data-iui-weight': weight, style: { color: C.muted, ...weightStyle } }, '示意图暂不可用')
+
+      const options = []
+      let hasViews = false
+      for (const [index, child] of item.children.entries()) {
+        if (child.type !== 'view') continue
+        hasViews = true
+        if (!isItemVisible(child, resolve)) continue
+        const props = IUI_AST.drawingProps('view', child.props, resolve)
+        if (props !== null) options.push({ index, ...props })
+      }
+      const selected = options.find(({ index }) => index === choice) ?? options[0]
+      const caption = selected?.caption
+      const shapes = item.children.flatMap((child, index) => {
+        if (child.type !== 'view') return renderDrawingShape(child, index, resolve)
+        if (selected?.index !== index) return []
+        return child.children.map((shape, order) => renderDrawingShape(shape, `${index}-${order}`, resolve))
+      }).filter(Boolean)
+
+      const graphLabel = selected === undefined ? viewport.label : `${viewport.label} · ${selected.label}`
+      const graph = shapes.length === 0
+        ? h('div', { 'data-iui-drawing-invalid': '1', style: { color: C.muted } }, graphLabel)
+        : svgCanvas(viewport.width, viewport.height, shapes, graphLabel, true, caption === undefined ? undefined : captionId)
+      const layout = { minWidth: 0, maxWidth: '100%', ...weightStyle }
+      if (!hasViews) return h('div', { 'data-iui-weight': weight, style: layout }, graph)
+      return h('figure', {
+        'data-iui-drawing-comparison': '1',
+        'data-iui-weight': weight,
+        style: { ...layout, width: viewport.width, display: 'flex', flexDirection: 'column', gap: 6, margin: '0 auto' },
+      },
+      options.length > 1 ? h('div', { role: 'group', 'aria-label': `对照视图：${viewport.label}`, style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+        ...options.map((option) => {
+          const active = option.index === selected?.index
+          return h('button', {
+            key: option.index,
+            type: 'button',
+            className: 'miopiik-ctl',
+            'data-iui-drawing-option': String(option.index),
+            'aria-pressed': active,
+            disabled: streaming === true,
+            onClick: () => choose(option.index),
+            style: {
+              border: `1px solid ${active ? C.brand : C.border}`, borderRadius: 999,
+              background: active ? `color-mix(in srgb, ${C.brand} 12%, transparent)` : 'transparent',
+              color: active ? C.text : C.muted, fontSize: 12, fontWeight: active ? 600 : 400,
+              lineHeight: '18px', padding: '2px 10px', cursor: streaming === true ? 'default' : 'pointer',
+            },
+          }, option.label)
+        })) : null,
+      graph,
+      options.some((option) => option.caption !== undefined) ? h('figcaption', {
+        id: captionId,
+        'data-iui-drawing-caption': '1',
+        'aria-live': 'polite',
+        style: { fontSize: 12, lineHeight: '18px', color: C.muted },
+      }, caption) : null)
     }
 
     /** 图表可访问摘要：读屏用户拿到的应是数据本身，而不只是"一张图"。 */
@@ -441,6 +496,32 @@
       return { state, errors }
     }
 
+    function renderIuiNotice(text, props = {}) {
+      const available = typeof text === 'string' && text.trim() !== ''
+      return h('div', {
+        role: 'status',
+        style: { color: available ? C.text : C.muted, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' },
+        ...props,
+      }, available ? text.slice(0, IUI_AST.LIMITS.text) : '这部分内容暂不可用。')
+    }
+
+    function diagnosticText(messages) {
+      return JSON.stringify(messages.slice(0, 8).map((message) => String(message).slice(0, 180)))
+    }
+
+    function renderIuiFallback({ fallback, format, errors, degraded, streaming }) {
+      const diagnostics = [...(errors ?? []), ...(degraded ?? [])]
+      const props = {
+        'data-iui-output': 'invalid',
+        'data-iui-format': format ?? 'ml',
+        'data-iui-degraded': String(diagnostics.length),
+        'data-iui-diagnostics': diagnosticText(diagnostics),
+        'data-iui-streaming': streaming ? '1' : undefined,
+      }
+      if (streaming && (typeof fallback !== 'string' || fallback.trim() === '')) return h('span', { ...props, hidden: true })
+      return renderIuiNotice(fallback, props)
+    }
+
     function IuiSheet({ sample, format, degraded, streaming }) {
       const checked = React.useMemo(() => IUI_AST.validateAst(sample), [sample])
       const adaptive = checked.ok && checked.ast.density === 'auto'
@@ -469,29 +550,33 @@
         () => checked.ok ? deriveState(checked.derivePlan, state) : { state, errors: 0 },
         [checked, state],
       )
-      const degradedCount = (Array.isArray(degraded) ? degraded.length : 0) + (checked.ok ? checked.degraded : 0)
-      if (!checked.ok) {
-        return h(
-          'div',
-          { 'data-iui-output': 'invalid', 'data-iui-format': format ?? 'json', style: { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, lineHeight: '18px' } },
-          h('div', { style: { color: C.muted } }, '这份 AST 不合法，已整段降级：'),
-          h('div', null, checked.fallback || checked.errors[0]),
-        )
-      }
+      const parserDiagnostics = Array.isArray(degraded) ? degraded : []
+      if (!checked.ok) return renderIuiFallback({ ...checked, format, degraded: parserDiagnostics, streaming })
+      const degradation = [...parserDiagnostics, ...checked.diagnostics]
+      const degradedCount = parserDiagnostics.length + checked.degraded
       const ast = checked.ast
       // All bindings read the same state, including computed values.
       const scopedState = derived.state
       const deriveErrors = derived.errors
       const scope = { state: scopedState, data: {} }
       const resolve = (value) => IUI_AST.resolveValue(value, scope)
-      const textOf = (value) => (value === undefined || value === null ? '' : String(value))
-      // 文本类属性：绑定解析为 undefined 且字面量形如 $state.*/$data.* 时按字面量显示（旧文档兼容）；
-      // 数值类属性（metric.value/progress.value 等）仍显示 —。
-      const literalText = (value) => (typeof value === 'string' && /^\$(?:state|data)\./u.test(value) ? value : undefined)
-      const resolveText = (value) => {
-        const resolved = resolve(value)
-        return resolved !== undefined ? resolved : literalText(value)
+      const resolveDataset = (item, value) => {
+        if (item.datasetExpression === undefined) return resolve(value)
+        const result = IUI_EXPR.evaluateExpr(item.datasetExpression, scope)
+        return result.ok ? result.value : undefined
       }
+      const isTextScalar = (value) => typeof value === 'string' || typeof value === 'boolean' || Number.isFinite(value)
+      const textOf = (value) => isTextScalar(value) ? String(value) : ''
+      const resolveText = (value) => {
+        // A whole-property reference is data; references quoted in prose remain authored text.
+        const binding = IUI_AST.readBinding(value)
+        if (binding.scope === undefined && typeof value === 'string' && /^\$(?:state|data)\.[A-Za-z0-9_.]+$/u.test(value)) return undefined
+        const resolved = resolve(value)
+        return isTextScalar(resolved) ? resolved : undefined
+      }
+      const fallbackNode = (text, key, tag) => typeof text === 'string' && text.trim() !== ''
+        ? h(tag, { key, 'data-iui-node-fallback': '1', style: { overflowWrap: 'anywhere' } }, text)
+        : null
       const toggleDetails = (detailsId) => {
         setOpenDetails((prev) => {
           const next = new Map(prev)
@@ -505,9 +590,12 @@
         const props = item.props ?? {}
         // when/is：本地显隐（可选 is 做等值切换）。只读 $state，不执行任何表达式。
         if (!isItemVisible(item, resolve)) return null
+        if (item.degraded === true) return fallbackNode(item.props.text, key, 'div')
         if (item.type === 'derive') return null
         if (item.type === 'text') {
-          return h('div', { key, style: { fontSize: 12, lineHeight: '18px', color: C.text } }, textOf(resolveText(props.text)))
+          const text = resolveText(props.text)
+          return text === undefined ? renderIuiNotice(item.fallback, { key, 'data-iui-binding-unavailable': '1' })
+            : h('div', { key, style: { fontSize: 12, lineHeight: '18px', color: C.text } }, textOf(text))
         }
         if (item.type === 'divider') {
           const label = resolveText(props.label)
@@ -522,16 +610,17 @@
         if (item.type === 'metric') {
           const tone = TONE_COLORS[props.tone] ?? [null, C.muted]
           const label = resolveText(props.label)
-          const value = resolve(props.value)
-          // unit 与 label 同为文本类：解析失败时回退字面量（0.1.1 回归测试按 resolve(props.unit) 片段核对绑定路径）
-          const unit = resolve(props.unit) ?? literalText(props.unit)
+          const value = resolveText(props.value)
+          const unit = resolveText(props.unit)
+          const unavailable = value === undefined || value === null
+          if (unavailable && item.fallback) return renderIuiNotice(item.fallback, { key, 'data-iui-binding-unavailable': '1' })
           const delta = resolveText(props.delta)
           const described = resolveText(props.caption ?? props.note)
           return h(
             'div',
             { key, 'data-iui-metric': textOf(label), style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 0' } },
             h('div', { style: { fontSize: 11, color: C.muted } }, textOf(label)),
-            h('div', { style: { fontSize: METRIC_FONT_SIZE[props.weight] ?? 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } }, `${value === undefined || value === null ? '—' : String(value)}${textOf(unit)}`),
+            h('div', { 'data-iui-binding-unavailable': unavailable ? '1' : undefined, 'aria-label': unavailable ? '结果暂不可用' : undefined, style: { fontSize: METRIC_FONT_SIZE[props.weight] ?? 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } }, unavailable ? '—' : `${String(value)}${textOf(unit)}`),
             delta !== undefined && delta !== null && String(delta) !== ''
               ? h('div', { 'data-iui-delta': String(delta), style: { fontSize: 11, color: String(delta).startsWith('-') ? '#d1242f' : '#2ea043' } }, String(delta))
               : null,
@@ -581,7 +670,7 @@
           const binding = IUI_AST.readBinding(props.bind)
           const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const on = current === true || current === 'true'
-          const ariaLabel = label ? textOf(label) : String(props.bind ?? '')
+          const ariaLabel = label ? textOf(label) : '开关'
           return h(
             'div',
             { key, 'data-iui-toggle': on ? 'on' : 'off', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
@@ -630,7 +719,7 @@
           const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const raw = Number(current)
           const value = Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : min
-          const ariaLabel = label ? textOf(label) : String(props.bind ?? '')
+          const ariaLabel = label ? textOf(label) : '数值'
           return h(
             'div',
             { key, 'data-iui-slider': String(value), style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
@@ -657,7 +746,7 @@
           const label = resolveText(props.label)
           const binding = IUI_AST.readBinding(props.bind)
           const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
-          const ariaLabel = label ? textOf(label) : String(props.bind ?? '')
+          const ariaLabel = label ? textOf(label) : '文本输入'
           return h(
             'div',
             { key, 'data-iui-input': '1', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
@@ -667,7 +756,7 @@
               type: 'text',
               value: current === undefined || current === null ? '' : String(current),
               maxLength: IUI_AST.LIMITS.text,
-              placeholder: String(props.placeholder ?? ''),
+              placeholder: textOf(resolveText(props.placeholder)),
               'aria-label': ariaLabel,
               onChange: (event) => {
                 if (binding.scope !== 'state') return
@@ -682,6 +771,7 @@
             'div',
             { key, className: 'miopiik-enter', 'data-iui-steps': String(item.children.length), style: { display: 'flex', flexDirection: 'column', minWidth: 0 } },
             ...item.children.map((child, index) => {
+              if (child.degraded === true) return fallbackNode(child.props.text, `${key}-${index}`, 'div')
               const cp = child.props ?? {}
               const title = resolveText(cp.title)
               const note = resolveText(cp.note)
@@ -721,13 +811,19 @@
           const inlineRaw = (child, index) => {
             const key2 = `${key}-${index}`
             if (!isItemVisible(child, resolve)) return null
-            if (child.type === 'text') return h('span', { key: key2 }, textOf(resolveText(child.props.text)))
+            if (child.degraded === true) return fallbackNode(child.props.text, key2, 'span')
+            if (child.type === 'text') {
+              const text = resolveText(child.props.text)
+              return h('span', { key: key2, 'data-iui-binding-unavailable': text === undefined ? '1' : undefined }, text === undefined ? (child.fallback || '—') : textOf(text))
+            }
             if (child.type === 'badge') {
+              const text = resolveText(child.props.text)
+              if (text === undefined) return fallbackNode(child.fallback, key2, 'span')
               const tone = TONE[child.props.tone] ?? TONE.neutral
-              return h('span', { key: key2, 'data-iui-badge': String(child.props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', margin: '0 2px', borderRadius: 999, fontSize: 11, lineHeight: '18px', background: tone.bg, color: tone.fg } }, textOf(resolveText(child.props.text)))
+              return h('span', { key: key2, 'data-iui-badge': String(child.props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', margin: '0 2px', borderRadius: 999, fontSize: 11, lineHeight: '18px', background: tone.bg, color: tone.fg } }, textOf(text))
             }
             if (child.type === 'emphasis') return h(child.props.strong === false ? 'em' : 'strong', { key: key2 }, textOf(resolveText(child.props.text)))
-            if (child.type === 'code') return h('code', { key: key2, style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, background: 'rgba(127,127,127,0.14)', borderRadius: 4, padding: '0 4px' } }, textOf(resolveText(child.props.text)))
+            if (child.type === 'code') return h('code', { key: key2, style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, background: 'rgba(127,127,127,0.14)', borderRadius: 4, padding: '0 4px' } }, textOf(resolve(child.props.text)))
             // href 不参与绑定解析：链接目标保持静态白名单，避免状态数据变成任意跳转目标。
             if (child.type === 'link') return h('a', { key: key2, href: String(child.props.href ?? ''), target: '_blank', rel: 'noreferrer noopener', style: { color: C.brand, textDecoration: 'underline' } }, textOf(resolveText(child.props.text)))
             if (child.type === 'icon') return h('span', { key: key2, 'data-iui-icon': String(child.props.name ?? ''), role: 'img', 'aria-label': textOf(resolveText(child.props.label ?? child.props.name)), style: { margin: '0 2px' } }, ICON_GLYPH[child.props.name] ?? '•')
@@ -740,17 +836,20 @@
           )
         }
         if (item.type === 'badge') {
+          const text = resolveText(props.text)
+          if (text === undefined) return renderIuiNotice(item.fallback, { key, 'data-iui-binding-unavailable': '1' })
           const tone = TONE_COLORS[props.tone] ?? TONE_COLORS.neutral
-          return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(resolveText(props.text)))
+          return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(text))
         }
         if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve, resolveText })
-        if (item.type === 'drawing') return renderDrawing(item, key, resolve)
+        if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, streaming })
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')
           const color = (TONE_COLORS[tone] ?? TONE_COLORS.neutral)[1]
           const title = resolveText(props.title)
           const text = resolveText(props.text)
-          const kids = item.children.map((child, index) => node(child, `${key}-${index}`))
+          const kids = item.children.map((child, index) => node(child, `${key}-${index}`)).filter(Boolean)
+          if (!title && !text && kids.length === 0) return renderIuiNotice(item.fallback, { key, 'data-iui-binding-unavailable': '1' })
           return h(
             'div',
             { key, 'data-iui-callout': tone, style: { display: 'flex', flexDirection: 'column', gap: 6, borderLeft: `3px solid ${color}`, background: 'rgba(127,127,127,0.07)', borderRadius: 6, padding: '8px 10px' } },
@@ -764,7 +863,10 @@
           const shown = resolve(props.value)
           const numeric = Number(shown)
           const max = Number(props.max ?? 1)
-          const ratio = Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric / (max === 0 ? 1 : max))) : 0
+          if (shown === undefined || shown === null || shown === '' || !Number.isFinite(numeric) || numeric < 0) {
+            return renderIuiNotice(item.fallback, { key, 'data-iui-progress-unavailable': '1' })
+          }
+          const ratio = Math.min(1, numeric / (max === 0 ? 1 : max))
           return h(
             'div',
             { key, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
@@ -834,7 +936,7 @@
           // columns/rows/caption 都允许绑定：先 resolve，再**重新执行**静态校验器同款预算。
           // 绑定值来自派生状态，不能因为绕过 validateAst 的静态检查就放宽 12 列 / 200 行 / 体积预算。
           const resolvedColumns = resolve(props.columns)
-          const resolvedRows = resolve(props.rows)
+          const resolvedRows = resolveDataset(item, props.rows)
           const columnsValid = Array.isArray(resolvedColumns)
             && resolvedColumns.length >= 1
             && resolvedColumns.length <= 12
@@ -853,7 +955,7 @@
             }
           }
           if (!columnsValid || !rowsValid || !withinBudget) {
-            return h('div', { key, 'data-iui-table-invalid': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '10px 0' } }, '表格数据超出预算或格式不合法')
+            return renderIuiNotice(item.fallback, { key, 'data-iui-table-invalid': '1' })
           }
           const normalized = IUI_AST.tableMatrix({ columns: resolvedColumns, rows: resolvedRows })
           const columns = normalized.columns
@@ -928,16 +1030,15 @@
           )
         }
         if (item.type === 'chart') {
-          const series = resolve(props.series)
+          const series = resolveDataset(item, props.series)
           const rows = IUI_AST.chartMatrix(series)
           const kind = String(props.kind ?? 'bar')
+          if (rows === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
           const source = resolveText(props.source)
           return h(
             'div',
             { key, className: 'miopiik-enter', 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-            rows === null
-              ? h('div', { 'data-iui-chart-empty': '1', role: 'status', style: { fontSize: 12, color: C.muted, padding: '18px 0' } }, '暂无有效图表数据')
-              : renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' || kind === 'donut' ? kind : 'bar', chartSummary(rows, kind === 'line' || kind === 'donut' ? kind : 'bar')),
+            renderChart([{ label: '项' }, { label: '值' }], rows, kind === 'line' || kind === 'donut' ? kind : 'bar', chartSummary(rows, kind === 'line' || kind === 'donut' ? kind : 'bar')),
             textOf(source) === '' ? null : h('div', { style: { fontSize: 10, color: C.muted } }, `来源：${textOf(source)}`),
           )
         }
@@ -973,6 +1074,16 @@
         return null
       }
       const frame = DENSITY_STYLE[adaptive ? 'inline' : density]
+      const hasOutput = (item) => {
+        if (!isItemVisible(item, resolve)) return false
+        if (item.degraded === true) return textOf(item.props.text).trim() !== ''
+        if (item.type === 'derive' || DENSITY_CONTROLS.has(item.type) || (item.type === 'button' && item.props.action !== 'copy')) return false
+        if (['column', 'row', 'grid', 'card', 'paragraph'].includes(item.type)) return item.children.some(hasOutput)
+        return true
+      }
+      if ((degradedCount > 0 || deriveErrors > 0) && !hasOutput(ast.root)) {
+        return renderIuiFallback({ fallback: ast.fallback, format, errors: degradation, degraded: deriveErrors > 0 ? [String(deriveErrors) + ' derive errors'] : [], streaming })
+      }
       return h(
         'div',
         // 流式分片期间不挂入场动画：逐分片重挂载会让淡入闪成频闪
@@ -981,6 +1092,7 @@
           'data-iui-output': 'ok',
           'data-iui-format': format ?? 'json',
           'data-iui-degraded': String(degradedCount),
+          'data-iui-diagnostics': degradation.length > 0 ? diagnosticText(degradation) : undefined,
           'data-iui-streaming': streaming === true ? '1' : undefined,
           'data-iui-density': density,
           'data-iui-surface': adaptive || density === 'inline' ? 'flow' : 'frame',
@@ -990,6 +1102,7 @@
         // inline 密度嵌在正文里：标题用小号弱化样式，避免抢正文层级
         ast.title ? h('div', { style: density === 'inline' ? { fontSize: 11, fontWeight: 600, color: C.muted, lineHeight: '16px' } : { fontSize: 13, fontWeight: 600 } }, ast.title) : null,
         node(ast.root, 'root'),
+        streaming !== true && (degradedCount > 0 || deriveErrors > 0) ? renderIuiNotice('部分内容暂不可用。', { 'data-iui-partial': '1', style: { color: C.muted, fontSize: '0.875em' } }) : null,
       )
     }
 
@@ -1287,7 +1400,7 @@
       return h('span', null, '')
     }
 
-    function readIuiFence(raw) {
+    function readIuiFence(raw, streaming) {
       const text = String(raw ?? '').trim()
       if (text === '') return { ok: false, errors: ['空内容'], format: 'ml' }
       if (text.startsWith('{')) {
@@ -1306,8 +1419,19 @@
         }
         return { ok: true, doc: parsed, format: 'json', degraded: [] }
       }
-      const parsed = MIOPIIK_ML.parseMiopiikMl(text)
+      const parsed = MIOPIIK_ML.parseMiopiikMl(text, { streaming })
       return parsed.ok
         ? { ok: true, doc: parsed.doc, format: 'ml', degraded: parsed.degraded }
-        : { ok: false, errors: parsed.errors, format: 'ml', degraded: parsed.degraded }
+        : { ...parsed, format: 'ml' }
+    }
+
+    function renderIuiFence(raw, streaming = false) {
+      try {
+        const parsed = readIuiFence(raw, streaming)
+        return parsed.ok
+          ? h(IuiSheet, { sample: parsed.doc, format: parsed.format, degraded: parsed.degraded, streaming })
+          : renderIuiFallback({ ...parsed, streaming })
+      } catch {
+        return renderIuiFallback({ errors: ['IUI parse failed'], streaming })
+      }
     }

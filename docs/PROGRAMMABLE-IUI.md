@@ -35,6 +35,10 @@ MiOpIIk IUI 0.2.0-rc.2 在 DSH 聊天中渲染声明式程序。控件触发局�
 
 `fill` 和 `stroke` 使用 `text`、`muted`、`border`、`surface`、`accent`、`neutral`、`success`、`warning`、`danger`、`info` 或 `none`。用 `stroke-width` 指定线宽，`opacity` 接收 0–1 的数字或绑定。
 
+从 `0.2.0-rc.4` 起，同一幅 `drawing` 可以包含 2–6 个 `<view label="条件" caption="图注">`。直接放在 `drawing` 下的形状始终共用，`view` 只容纳该条件的图形。宿主把选项、图和图注放在一起，默认显示第一个可用条件。绘制按声明顺序，共享和各条件合计最多 64 个图形。直线的 `stroke-dasharray` 可用有界的数字列表，例如 `"3 4"`。
+
+`chart.series` 与 `table.rows` 支持 `derive` 所用的纯表达式，例如 `series='[["当前",$state.cap],["参考",100]]'`。求值后仍按图表和表格预算进行校验。无法计算的节点可写 `fallback="一句话说明这部分"`，保留自然语言解释。
+
 [电容屏示例](../test/fixtures/natural/capacitive-screen.md)组合手机正视图、盖板与电极剖面。触摸前后的 pF 读数为教学示意。互电容与自电容测量方式各有不同的量和变化方向。[Infineon 电容触摸传感设计指南](https://www.infineon.com/dgdl/Infineon-AN234185_PSOC_4_CAPSENSE_touchpad_design_guide-ApplicationNotes-v03_00-EN.pdf?fileId=8ac78c8c8e7ead30018ee43d60a1036a)
 
 ## 候选验收

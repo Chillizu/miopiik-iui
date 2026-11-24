@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { chartMatrix, readBinding, tableMatrix, validateAst } from '../shared/iui-ast.js'
+import { evaluateExpr } from '../shared/iui-expr.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 import { IUI_CHARTER } from '../index.js'
 import { splitTrustedBlocks } from '../shared/markdown-segments.js'
@@ -53,6 +54,26 @@ test('数字数组、数组对、对象点列，都按同一种受限图表语�
   assert.equal(chartMatrix([false, 1]), null)
   assert.equal(chartMatrix([1, Number.POSITIVE_INFINITY]), null)
   assert.equal(chartMatrix([]), null)
+})
+
+test('图表和表格的数据可以直接用受限表达式并保留动态值', () => {
+  const { parsed, result } = compile(`<ui>
+    <state name="cap" value="10"/>
+    <chart kind="bar" series='[["当前",$state.cap],["满格",100]]'/>
+    <table columns='["项目","值"]' rows='zip(["当前"],[$state.cap])'/>
+    <chart kind="bar" series='fetch("https://example.test")'/>
+  </ui>`)
+  assert.deepEqual(parsed.degraded, [])
+  assert.equal(result.degraded, 1)
+  const [chart, table] = result.ast.root.children
+  for (const cap of [10, 83]) {
+    const scope = { state: { cap } }
+    const series = evaluateExpr(chart.datasetExpression, scope)
+    const rows = evaluateExpr(table.datasetExpression, scope)
+    assert.equal(series.ok && rows.ok, true)
+    assert.deepEqual(chartMatrix(series.value), [['当前', cap], ['满格', 100]])
+    assert.deepEqual(tableMatrix({ columns: table.props.columns, rows: rows.value }).rows, [['当前', cap]])
+  }
 })
 
 test('真实自然生成语法：state 嵌套绑定和图表 data 别名成功解析', () => {
@@ -149,7 +170,7 @@ test('fork 的 inline/block 混排保留全宽布局，避免图表变窄', {
 test('客户端块级渲染复用受控 AST 与状态绑定', () => {
   const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   assert.match(client, /IUI_AST.chartMatrix/u)
-  assert.match(client, /resolve\(props.unit\)/u)
+  assert.match(client, /resolveText\(props\.unit\)/u)
 })
 
 test('真实自然生成语法：donut、steps、toggle、input、filter、when 全部零降级', () => {

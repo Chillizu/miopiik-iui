@@ -180,6 +180,18 @@ const AUTO_LAYOUT_ML = `<ui density="auto" fallback="两种视图和当前值">
   <card title="独立说明"><p>这里需要独立分组。</p></card>
 </ui>`
 
+const DRAWING_COMPARISON_ML = `<ui density="auto" fallback="蓝色圆点仅出现在调整后。">
+  <state name="showLater" value="true"/>
+  <toggle label="提供调整后视图" bind="$state.showLater"/>
+  <drawing width="240" height="112" label="图层对照">
+    <rect x="4" y="4" width="232" height="104"/>
+    <view label="之前" caption="共同结构。"/>
+    <line x1="16" y1="20" x2="16" y2="48" stroke="muted" stroke-dasharray="3 4"/>
+    <view label="之后" caption="新增一个圆点。" when="$state.showLater"><circle cx="40" cy="40" r="9" fill="accent"/></view>
+    <label x="120" y="97" align="center" text="共用标注"/>
+  </drawing>
+</ui>`
+
 const R3_WEIGHT_AST = {
   title: '语义权重',
   root: {
@@ -508,10 +520,16 @@ const MAIN_RUN = `
       densityPanel:mountBlock(${JSON.stringify(JSON.stringify(R3_DENSITY_PANEL))}),
       autoLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML)}),
       legacyLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML.replace(' density="auto"', ''))}),
+      comparison:mountBlock(${JSON.stringify(DRAWING_COMPARISON_ML)}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
       copy:mountBlock(${JSON.stringify(JSON.stringify(R3_COPY_AST))}),
       literal:mountBlock(${JSON.stringify(JSON.stringify(R3_LITERAL_AST))}),
+      badMl:mountBlock('<ui fallback="这张图展示流程关系"></ui>'),
+      badJson:mountBlock('{"fallback":"未写完的声明"'),
+      badRoot:mountBlock('{"fallback":"替代结论","root":{"type":"unknown-root"}}'),
+      recoverMl:mountBlock('<ui><column><text>前一段</text><not-a-component/><slider label="无效控件" fallback="参数当前不可调整"/><text>后一段</text></column></ui>'),
+      noOutput:mountBlock('<ui fallback="结果需要完整数据"><state name="x" value="1"/><derive name="y" expr="unknown($state.x)"/><slider label="失去结果的控件" bind="$state.x"/></ui>'),
       deriveFwd:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_FWD_AST))}),
       deriveFail:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_FAIL_AST))}),
       deriveCycle:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_CYCLE_AST))}),
@@ -532,6 +550,11 @@ const MAIN_RUN = `
     mountElement(embeds.renderBlockStreaming('<ui title="流式" fallback="F"><row><metric label="A" value="1"/>'), live);
     const streamRoot=document.querySelector('[data-iui-streaming="1"]');
     document.body.dataset.streamingOk = (streamRoot !== null && String(streamRoot.className) === '' && streamRoot.getAttribute('data-iui-output') === 'ok') ? 'ok' : 'failed';
+    const liveComparison=document.createElement('div');
+    document.getElementById('root').appendChild(liveComparison);
+    mountElement(embeds.renderBlockStreaming(${JSON.stringify(DRAWING_COMPARISON_ML)}), liveComparison);
+    const liveDrawingOptions=[...liveComparison.querySelectorAll('button[data-iui-drawing-option]')];
+    document.body.dataset.comparisonLive = liveDrawingOptions.length === 2 && liveDrawingOptions.every(button => button.disabled) ? 'ok' : 'failed';
     // F-42：html 围栏沙箱文档——无脚本 iframe + CSP 注入 + 脚本剔除 + 超预算降级
     const htmlDoc = '<!doctype html><html><head><title>沙箱演示</title><script>alert(1)</'+'script><style>.chip{border:1px solid red}</style></head><body><span class="chip">A</span><code>&lt;diagram&gt;</code></body></html>';
     const htmlHost = document.createElement('div');
@@ -783,7 +806,7 @@ const MAIN_RUN = `
           const invalid = [...mot.querySelectorAll('[data-iui-table-invalid="1"]')];
           if (invalid.length !== 2) return '降级表数量=' + invalid.length;
           if (!invalid.every((el) => el.getAttribute('role') === 'status')) return 'role 不是 status';
-          if (!invalid.every((el) => el.textContent.includes('表格数据超出预算或格式不合法'))) return invalid.map((el) => el.textContent).join('|');
+          if (!invalid.every((el) => el.textContent === '这部分内容暂不可用。')) return invalid.map((el) => el.textContent).join('|');
           if (mot.querySelectorAll('table').length !== 1) return '非法绑定不应渲染 table: ' + mot.querySelectorAll('table').length;
           return true;
         });
@@ -846,6 +869,32 @@ const MAIN_RUN = `
           }
           return true;
         });
+        const compare = r3.comparison;
+        const compareFigure = () => compare.querySelector('figure[data-iui-drawing-comparison]');
+        const compareButtons = () => [...compareFigure().querySelectorAll('button[data-iui-drawing-option]')];
+        const compareGraph = () => compareFigure().querySelector('svg[data-iui-drawing]');
+        const compareCaption = () => compareFigure().querySelector('figcaption[data-iui-drawing-caption]');
+        const shapeOrder = () => [...compareGraph().children].map((shape) => shape.localName).join(',');
+        check('comparisonInitial', () => {
+          const buttons = compareButtons();
+          const named = compareGraph().getAttribute('aria-describedby') === compareCaption().id;
+          const graphicLeft = compareGraph().getBoundingClientRect().left;
+          const aligned = Math.abs(buttons[0].getBoundingClientRect().left - graphicLeft) < 1
+            && Math.abs(compareCaption().getBoundingClientRect().left - graphicLeft) < 1;
+          return (buttons.length === 2 && buttons[0].type === 'button' && buttons[0].getAttribute('aria-pressed') === 'true'
+            && compareCaption().textContent === '共同结构。' && named && aligned && shapeOrder() === 'rect,line,text') ? true : '初值、对齐或图层顺序错误';
+        });
+        compareButtons()[1].click();
+        await wait(25);
+        const laterActive = () => compareButtons()[1]?.getAttribute('aria-pressed') === 'true'
+          && compareCaption().textContent === '新增一个圆点。' && shapeOrder() === 'rect,line,circle,text';
+        check('comparisonChoice', () => laterActive() ? true : '切换未更新图层和图注');
+        compare.querySelector('button[role="switch"]').click();
+        await wait(25);
+        check('comparisonFallback', () => (compareButtons().length === 0 && compareCaption().textContent === '共同结构。' && shapeOrder() === 'rect,line,text') ? true : '无后项时没有回到首个图层');
+        compare.querySelector('button[role="switch"]').click();
+        await wait(25);
+        check('comparisonRestored', () => laterActive() ? true : '重新显示后项时没有保留选择');
         check('r3Weight', () => {
           const host = r3.weight;
           const primary = host.querySelector('[data-iui-weight="primary"]');
@@ -928,17 +977,23 @@ const MAIN_RUN = `
         });
         check('r3LiteralFallback', () => {
           const host = r3.literal;
-          const texts = [...host.querySelectorAll('div')].map((el) => el.textContent);
-          if (!texts.includes('$state.missing')) return 'text 未按字面量显示';
-          const badge = host.querySelector('[data-iui-badge="info"]');
-          if (badge === null || badge.textContent !== '$data.missing') return 'badge=' + (badge === null ? '缺失' : badge.textContent);
+          if (host.textContent.includes('$state.') || host.textContent.includes('$data.')) return '读者看到声明语法';
+          if (host.querySelectorAll('[data-iui-binding-unavailable="1"]').length < 3) return '无法确认显示值已降级';
           const metric = host.querySelector('[data-iui-metric]');
-          if (metric === null) return 'metric 缺失';
-          if (metric.getAttribute('data-iui-metric') !== '$state.missingLabel') return 'metric label=' + metric.getAttribute('data-iui-metric');
-          if (metric.children[1] === undefined || metric.children[1].textContent !== '—') return 'metric value 应为 —';
-          const callout = host.querySelector('[data-iui-callout]');
-          if (callout === null || !callout.textContent.includes('$state.missingTitle')) return 'callout title 未回退';
-          if (!callout.textContent.includes('$state.missingInner')) return 'callout 子 text 未回退';
+          if (metric === null || metric.children[1].textContent !== '—') return 'metric value 应为 —';
+          return true;
+        });
+        check('readerFallback', () => {
+          if (r3.badMl.textContent !== '这张图展示流程关系' || r3.badJson.textContent !== '这部分内容暂不可用。' || r3.badRoot.textContent !== '替代结论') return '整块兜底没有呈现';
+          for (const host of [r3.badMl, r3.badJson, r3.badRoot]) {
+            const output = host.querySelector('[data-iui-output="invalid"]');
+            if (!output || JSON.parse(output.getAttribute('data-iui-diagnostics')).length === 0) return '诊断未留在数据属性';
+          }
+          const local = r3.recoverMl.textContent;
+          for (const text of ['前一段', '参数当前不可调整', '后一段']) if (!local.includes(text)) return '局部兜底丢失 ' + text;
+          if (local.includes('未知标签') || local.includes('$state.') || r3.recoverMl.querySelector('input')) return '无效控件或内部错误呈现给读者';
+          if (r3.noOutput.textContent !== '结果需要完整数据' || r3.noOutput.querySelector('input')) return '失败的计算暴露了无结果控件';
+          if (!live.textContent.includes('A') || live.textContent.includes('没有闭合') || live.textContent.includes('<ui')) return '流式阶段未保留完成的兄弟节点';
           return true;
         });
         check('r3DeriveForward', () => {
@@ -1184,6 +1239,11 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   // Round3 自然表达：密度三态 / 语义权重 / details 受控与重挂载 / copy 摘要 / 字面量回退 / 派生拓扑
   assert.match(html,/data-r3-density="ok"/u,'根密度三态应各有真实样式（inline 无框、compact 8px、panel 12px）且输出 data-iui-density')
   assert.match(html,/data-auto-layout="ok"/u,'自动布局应使用正文外观，保留显式分组，按组件最小宽度并排或堆叠')
+  assert.match(html,/data-comparison-initial="ok"/u,'对照图应默认第一个可用条件，并在图内声明顺序中保留共享图元')
+  assert.match(html,/data-comparison-choice="ok"/u,'对照切换应同步图元、按钮和可访问图注')
+  assert.match(html,/data-comparison-fallback="ok"/u,'选中条件隐藏时应回退到第一个可用条件')
+  assert.match(html,/data-comparison-restored="ok"/u,'普通重渲染应保留显式选择')
+  assert.match(html,/data-comparison-live="ok"/u,'尚未定稿的流式对照选项应禁用')
   assert.match(html,/data-r3-weight="ok"/u,'weight 三态应输出 data-iui-weight 并给出强弱视觉（primary 加粗 / secondary·optional 弱化）')
   assert.match(html,/data-r3-details-closed="ok"/u,'details 初始应收起并带 aria-expanded=false')
   assert.match(html,/data-r3-details-open="ok"/u,'details 由 IuiSheet 受控展开（aria-controls 指向内容）')
@@ -1192,7 +1252,8 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-r3-copy-summary="ok"/u,'copy 按钮应显示真实待复制摘要「待复制：JSON · N 字符」/「—」并带 data-iui-copy-bytes')
   assert.match(html,/data-r3-copy-success="ok"/u,'copy 成功后 done 文案应追加 · N 字符，且剪贴板内容与摘要一致')
   assert.match(html,/data-r3-copy-invalid="ok"/u,'待复制值无法解析时点击必须 unsupported，不假报成功')
-  assert.match(html,/data-r3-literal-fallback="ok"/u,'文本类属性解析失败应显示 $state.*/$data.* 字面量，数值类属性仍显示 —')
+  assert.match(html,/data-r3-literal-fallback="ok"/u,'未解析绑定使用简洁兜底，声明语法不进入正文')
+  assert.match(html,/data-reader-fallback="ok"/u,'整块和局部异常保留作者兜底，不破坏健康相邻内容或流式阶段')
   assert.match(html,/data-r3-derive-forward="ok"/u,'derive 应按依赖拓扑求值，支持文档顺序之前的前向引用')
   assert.match(html,/data-r3-derive-failures="ok"/u,'derive 求值失败/合并 scope 超预算应传递 undefined 并在根节点计 data-iui-derive-errors')
   assert.match(html,/data-r3-derive-cycle="ok"/u,'derive 环应在校验期降级并在指标处显示兜底')

@@ -87,3 +87,57 @@ test('bound drawing fields are validated again and paths stay literal', () => {
   assert.deepEqual(drawingProps('circle', { cx: 10, cy: 20, r: 8, opacity: '$state.alpha' }, () => 0.4), { cx: 10, cy: 20, r: 8, opacity: 0.4 })
   assert.equal(drawingProps('circle', { cx: 10, cy: 20, r: 8, opacity: 1.1 }), null)
 })
+
+test('drawing view declarations preserve source order and revalidate label and caption bindings', () => {
+  const checked = check(`<ui fallback="对照图">
+    <state name="later" value='{"label":"改变后","caption":"出现新的圆形。","visible":true}'/>
+    <drawing width="240" height="120" label="对照说明">
+      <rect x="4" y="4" width="232" height="112"/>
+      <view label="改变前" caption="共用外框。"/>
+      <view label="$state.later.label" caption="$state.later.caption" when="$state.later.visible">
+        <circle cx="40" cy="40" r="9"/>
+      </view>
+      <label x="120" y="105" align="center" text="共用标注"/>
+    </drawing>
+  </ui>`)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 0)
+  const { root, state } = checked.ast
+  const [rect, before, after, label] = root.children
+  assert.deepEqual([rect.type, before.type, after.type, label.type], ['rect', 'view', 'view', 'label'])
+  assert.deepEqual(before.children, [])
+  assert.deepEqual(drawingProps('view', after.props, (value) => resolveValue(value, { state })), { label: '改变后', caption: '出现新的圆形。' })
+  assert.deepEqual(drawingProps('view', after.props, (value) => resolveValue(value, { state: { later: { label: '改变后' } } })), { label: '改变后' })
+  assert.equal(drawingProps('label', label.props).align, 'middle')
+})
+
+test('view counts and all declared shapes share the drawing budget', () => {
+  const place = (content) => `<ui fallback="无图对照"><drawing width="240" height="120" label="对照">${content}</drawing></ui>`
+  const shape = '<circle cx="10" cy="20" r="2"/>'
+  const view = (index, content = shape) => `<view label="选项 ${index}">${content}</view>`
+  assert.equal(check(place(view(1))).ok, false)
+  assert.equal(check(place(Array.from({ length: 7 }, (_, index) => view(index)).join(''))).ok, false)
+  assert.equal(check(place('<view label="甲"/><view label="乙"/>')).ok, false)
+  assert.equal(check(place('<view label="甲"><script>alert(1)</script></view><view label="乙"/>')).ok, false)
+  assert.equal(check(place(shape + view(1, shape.repeat(32)) + view(2, shape.repeat(31)))).ok, true)
+  assert.equal(check(place(shape + view(1, shape.repeat(32)) + view(2, shape.repeat(32)))).ok, false)
+  assert.equal(check('<ui><view label="脱离图形">' + shape + '</view></ui>').ok, false)
+  const checked = check(place(view(1, shape + '<button label="意外操作" action="copy" value="示例"/>' + view(3)) + view(2)))
+  assert.equal(checked.degraded, 2)
+  assert.deepEqual(checked.ast.root.children[0].children.map((child) => child.type), ['circle', 'text', 'text'])
+  assert.equal(drawingProps('view', { label: '过长'.repeat(25) }), null)
+  assert.equal(drawingProps('view', { label: '正常', caption: '过长'.repeat(141) }), null)
+  assert.deepEqual(drawingProps('view', { label: '单独标注', caption: '  ' }), { label: '单独标注' })
+})
+
+test('line dash syntax is bounded and maps the declared widths onto the safe SVG attribute', () => {
+  const checked = check(`<ui><drawing width="240" height="120" label="对照">
+    <line x1="20" y1="20" x2="180" y2="20" stroke="muted" stroke-dasharray="3,4 .5"/>
+  </drawing></ui>`)
+  assert.equal(checked.degraded, 0)
+  const props = checked.ast.root.children[0].props
+  assert.equal(drawingProps('line', props).strokeDasharray, '3 4 0.5')
+  for (const strokeDasharray of ['129', '1 -3', '1 '.repeat(9), 'url(https://example.com)', '$state.dash', [3, 4]]) {
+    assert.equal(drawingProps('line', { ...props, strokeDasharray }), null)
+  }
+})

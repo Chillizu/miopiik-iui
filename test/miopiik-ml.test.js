@@ -75,6 +75,27 @@ test('miopiik-ml：没有 <ui> 根 / 空内容时明确拒绝，让调用方降�
   assert.equal(parseMiopiikMl('<ui fallback="f"></ui>').ok, false)
 })
 
+test('miopiik-ml：声明降级保留作者兜底，语法诊断单独返回', () => {
+  const parsed = parseMiopiikMl('<ui><column><text>前</text><unknown fallback="自定义说明"/><slider fallback="参数当前不可调整"/><text>后</text></column></ui>')
+  assert.equal(parsed.ok, true)
+  assert.deepEqual(parsed.degraded, ['<unknown> 未知标签'])
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 1)
+  assert.match(checked.diagnostics[0], /bind/u)
+  assert.deepEqual(checked.ast.root.children.map((node) => node.props.text), ['前', '自定义说明', '参数当前不可调整', '后'])
+  assert.equal(parseMiopiikMl('<ui fallback="替代结论"/>').fallback, '替代结论')
+})
+
+test('miopiik-ml：流式保留闭合子组件，未闭合标签不渲染或回显', () => {
+  const parsed = parseMiopiikMl('<ui><column><metric label="可用" value="1"/><slider label="尚未结束', { streaming: true })
+  assert.equal(parsed.ok, true)
+  assert.equal(parsed.doc.root.children[0].type, 'metric')
+  assert.equal(parsed.doc.root.children[1].type, 'text')
+  assert.equal(parsed.doc.root.children[1].props.text, '')
+  assert.match(parsed.degraded.join(' '), /没有闭合/u)
+})
+
 test('miopiik-ml：id 稳定唯一，重复解析结果一致（回放/状态不漂移）', () => {
   const a = parseMiopiikMl(ML)
   const b = parseMiopiikMl(ML)

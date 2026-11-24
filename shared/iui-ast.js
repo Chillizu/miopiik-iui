@@ -35,9 +35,10 @@ export const REGISTRY = Object.freeze({
   empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
   chart: { props: { kind: 'string', series: 'value', source: 'string?' }, children: false },
   drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
+  view: { props: { label: 'string', caption: 'string?' }, children: true },
   rect: { props: { x: 'number', y: 'number', width: 'number', height: 'number', rx: 'number?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
   circle: { props: { cx: 'number', cy: 'number', r: 'number', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
-  line: { props: { x1: 'number', y1: 'number', x2: 'number', y2: 'number', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
+  line: { props: { x1: 'number', y1: 'number', x2: 'number', y2: 'number', stroke: 'string?', strokeWidth: 'number?', strokeDasharray: 'string?', opacity: 'number?' }, children: false },
   path: { props: { d: 'string', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
   label: { props: { x: 'number', y: 'number', text: 'value', fill: 'string?', size: 'number?', align: 'string?', opacity: 'number?' }, children: false },
   segmented: { props: { label: 'string?', options: 'value', bind: 'string' }, children: false },
@@ -125,6 +126,13 @@ export function chartMatrix(series) {
   return rows
 }
 
+/** Inline datasets use the same bounded expression grammar as derive. */
+function compileDataset(value) {
+  if (typeof value !== 'string' || readBinding(value).scope !== undefined) return null
+  const compiled = compileExpr(value)
+  return compiled.ok ? compiled : null
+}
+
 /** 本地状态也是来自模型的 JSON；避免超大对象和原型属性污染。 */
 function stateSafe(value, depth = 0, budget = { remaining: LIMITS.stateBytes }) {
   // 每个值和键至少占一个字符，先限制遍历，再对有限结果计算序列化体积。
@@ -184,9 +192,10 @@ const MAX_COPY_BUTTONS = 4
 
 const DRAWING_SHAPES = new Set(['rect', 'circle', 'line', 'path', 'label'])
 const DRAWING_MAX_SHAPES = 64
+const DRAWING_MAX_VIEWS = 6
 const DRAWING_COLOR = new Set(['text', 'muted', 'border', 'surface', 'accent', 'neutral', 'success', 'warning', 'danger', 'info', 'none'])
 const DRAWING_ALIGN = new Set(['start', 'middle', 'end'])
-const DRAWING_STATIC = new Set(['d', 'align'])
+const DRAWING_STATIC = new Set(['d', 'align', 'strokeDasharray'])
 const DRAWING_AXIS = [-2048, 2048]
 const DRAWING_VIEWPORT = [24, 1024]
 const DRAWING_LENGTH = [0.1, 2048]
@@ -240,10 +249,17 @@ function normalizeDrawingPath(value) {
 function drawingAttribute(type, key, value) {
   if (key === 'd') return normalizeDrawingPath(value)
   if (key === 'fill' || key === 'stroke') return DRAWING_COLOR.has(value) ? value : null
-  if (key === 'align') return DRAWING_ALIGN.has(value) ? value : null
-  if (key === 'label' || key === 'text') {
+  if (key === 'align') return value === 'center' ? 'middle' : DRAWING_ALIGN.has(value) ? value : null
+  if (key === 'strokeDasharray') {
+    if (typeof value !== 'string' || value.length > 80) return null
+    const lengths = value.trim().split(/[\s,]+/u)
+    if (lengths.length > 8 || lengths.some((part) => !/^(?:\d+(?:\.\d*)?|\.\d+)$/u.test(part) || !boundedDrawingNumber(Number(part), 0, 128))) return null
+    return lengths.map(Number).join(' ')
+  }
+  if (key === 'label' || key === 'text' || key === 'caption') {
     if (key === 'text' && typeof value === 'number' && Number.isFinite(value)) return String(value)
-    return typeof value === 'string' && value.trim() !== '' && value.length <= 180 ? value : null
+    const maxLength = key === 'caption' ? 280 : type === 'view' ? 48 : 180
+    return typeof value === 'string' && value.trim() !== '' && value.length <= maxLength ? value : null
   }
   const limits = type === 'drawing' ? DRAWING_VIEWPORT : DRAWING_NUMERIC_LIMITS[key] ?? DRAWING_AXIS
   return boundedDrawingNumber(value, ...limits) ? value : null
@@ -251,13 +267,14 @@ function drawingAttribute(type, key, value) {
 
 /** SVG props are allowlisted and revalidated after resolving the permitted bindings. */
 export function drawingProps(type, props, resolve = null) {
-  if (type !== 'drawing' && !DRAWING_SHAPES.has(type)) return null
+  if (type !== 'drawing' && type !== 'view' && !DRAWING_SHAPES.has(type)) return null
   const safe = {}
   for (const [key, rule] of Object.entries(REGISTRY[type].props)) {
     let value = props?.[key]
     if (value === undefined && rule.endsWith('?')) continue
     const canBind = !DRAWING_STATIC.has(key) && (type !== 'drawing' || key === 'label')
-    if (canBind && readBinding(value).scope !== undefined) {
+    const bound = canBind && readBinding(value).scope !== undefined
+    if (bound) {
       if (resolve === null) {
         safe[key] = value
         continue
@@ -265,6 +282,7 @@ export function drawingProps(type, props, resolve = null) {
       value = resolve(value)
     }
     const normalized = drawingAttribute(type, key, value)
+    if (normalized === null && type === 'view' && key === 'caption' && (bound || typeof value === 'string' && value.trim() === '')) continue
     if (normalized === null) return null
     safe[key] = normalized
   }
@@ -389,6 +407,7 @@ function planDerives(defs, bindPaths, state) {
  */
 export function validateAst(input) {
   const fatal = []
+  const diagnostics = []
   let nodes = 0
   let degraded = 0
   let copyButtons = 0
@@ -407,7 +426,8 @@ export function validateAst(input) {
 
   const failNode = (node, path, reason) => {
     degraded += 1
-    const text = typeof node?.fallback === 'string' && node.fallback.trim() !== '' ? node.fallback : `（此段组件无法渲染：${reason}）`
+    diagnostics.push(`${path}: ${reason}`)
+    const text = typeof node?.fallback === 'string' ? node.fallback.slice(0, LIMITS.text) : ''
     return { id: `${path}-degraded`, type: 'text', props: { text }, children: [], degraded: true }
   }
 
@@ -422,10 +442,17 @@ export function validateAst(input) {
       return null
     }
     if (!isRecord(node)) return failNode(node, path, '不是对象')
+    if (node.type === 'text' && node.degraded === true) {
+      const text = typeof node.props?.text === 'string' ? node.props.text.slice(0, LIMITS.text) : ''
+      return { id: typeof node.id === 'string' ? node.id : path, type: 'text', props: { text }, children: [], degraded: true }
+    }
     if (typeof node.type !== 'string') return failNode(node, path, '组件类型需要字符串')
     if (!Object.hasOwn(REGISTRY, node.type)) return failNode(node, path, `未知组件类型 ${node.type}`)
-    if (parentType === 'drawing' && !DRAWING_SHAPES.has(node.type)) return failNode(node, path, 'drawing 只接受图形原语')
-    if (parentType !== 'drawing' && DRAWING_SHAPES.has(node.type)) return failNode(node, path, '图形原语需要放在 drawing 里')
+    const shape = DRAWING_SHAPES.has(node.type)
+    if (parentType === 'drawing' && !shape && node.type !== 'view') return failNode(node, path, 'drawing 只接受图形原语与 view')
+    if (node.type === 'view' && parentType !== 'drawing') return failNode(node, path, 'view 需要直接放在 drawing 里')
+    if (parentType === 'view' && !shape) return failNode(node, path, 'view 只接受图形原语')
+    if (shape && parentType !== 'drawing' && parentType !== 'view') return failNode(node, path, '图形原语需要放在 drawing 或 view 里')
     const spec = REGISTRY[node.type]
     if (spec.children && Array.isArray(node.children) && node.children.length > LIMITS.nodes - nodes) {
       fatal.push(`节点数超过 ${LIMITS.nodes}`)
@@ -575,16 +602,25 @@ export function validateAst(input) {
     if (props.when !== undefined && typeof props.when !== 'boolean' && readBinding(props.when).scope !== 'state') {
       return failNode(node, path, 'when 需要布尔值或 $state.* 绑定')
     }
+    let datasetExpression = null
     if (node.type === 'chart') {
       if (!['bar', 'line', 'donut'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut')
       const binding = readBinding(props.series)
-      if (binding.scope === undefined && chartMatrix(binding.literal) === null) return failNode(node, path, 'chart.series 需要有效点列或状态绑定')
+      if (binding.scope === undefined && chartMatrix(binding.literal) === null) {
+        datasetExpression = compileDataset(binding.literal)
+        if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')
+      }
     }
+    let comparison = false
     if (node.type === 'drawing') {
-      const count = Array.isArray(node.children) ? node.children.length : 0
+      const children = Array.isArray(node.children) ? node.children : []
+      const views = children.filter((child) => child?.type === 'view')
+      comparison = views.length > 0
+      const count = children.length - views.length + views.reduce((sum, child) => sum + (Array.isArray(child.children) ? child.children.length : 0), 0)
+      if (views.length === 1 || views.length > DRAWING_MAX_VIEWS) return failNode(node, path, `drawing 需要 2–${DRAWING_MAX_VIEWS} 个 view 来展示对照`)
       if (count === 0 || count > DRAWING_MAX_SHAPES) return failNode(node, path, `drawing 需要 1–${DRAWING_MAX_SHAPES} 个图形原语`)
     }
-    if ((node.type === 'drawing' || DRAWING_SHAPES.has(node.type)) && drawingProps(node.type, props) === null) {
+    if ((node.type === 'drawing' || node.type === 'view' || shape) && drawingProps(node.type, props) === null) {
       return failNode(node, path, `${node.type} 的图形属性无效或超出预算`)
     }
     if (node.type === 'text' && typeof props.text === 'string' && props.text.length > LIMITS.text) {
@@ -593,7 +629,9 @@ export function validateAst(input) {
     if (node.type === 'table') {
       // columns/rows 可为字面量，也可绑定到 $state.*（派生状态）；绑定形态在渲染期解析后再归一。
       const columnsBound = readBinding(props.columns).scope !== undefined
-      const rowsBound = readBinding(props.rows).scope !== undefined
+      const rowsBinding = readBinding(props.rows)
+      datasetExpression = compileDataset(rowsBinding.literal)
+      const rowsBound = rowsBinding.scope !== undefined || datasetExpression !== null
       if (!columnsBound && (!Array.isArray(props.columns) || props.columns.length === 0 || props.columns.length > 12)) return failNode(node, path, 'table 需要 1–12 列')
       if (!rowsBound && !Array.isArray(props.rows)) return failNode(node, path, 'table 需要 rows 数组或 $state 绑定')
       if (!rowsBound && Array.isArray(props.rows) && props.rows.length > 200) return failNode(node, path, 'table 最多 200 行')
@@ -661,6 +699,9 @@ export function validateAst(input) {
         children.push(walked)
       }
     }
+    if (comparison && !children.some((child) => DRAWING_SHAPES.has(child.type) || child.type === 'view' && child.children.some((part) => DRAWING_SHAPES.has(part.type)))) {
+      return failNode(node, path, 'drawing 对照需要至少一个可验证的图形原语')
+    }
     // 属性白名单：只保留组件 REGISTRY 声明的 props + 通用属性，未知属性（onClick/style/…）一律剥离
     const allowed = new Set([...Object.keys(spec.props), ...UNIVERSAL_PROPS])
     const safeProps = {}
@@ -668,6 +709,8 @@ export function validateAst(input) {
       if (allowed.has(key)) safeProps[key] = props[key]
     }
     const normalized = { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props: safeProps, children }
+    if (typeof node.fallback === 'string' && node.fallback.trim() !== '') normalized.fallback = node.fallback.slice(0, LIMITS.text)
+    if (datasetExpression !== null) normalized.datasetExpression = datasetExpression
     if (node.type === 'derive') derives.push({ node: normalized, source: node, path })
     if (binding !== null) bindPaths.push(binding.key)
     return normalized
@@ -681,11 +724,14 @@ export function validateAst(input) {
     Object.assign(derive.node, failNode(derive.source, derive.path, reason))
   }
   // 根节点若只能降级，等于整份文档没有可信结构 → 整段拒绝（不做半残渲染）
-  if (root.degraded === true) return { ok: false, errors: ['根节点不合法'], fallback }
+  if (root.degraded === true) {
+    return { ok: false, errors: diagnostics.length === 0 ? ['根节点不合法'] : diagnostics, fallback: fallback || root.props.text }
+  }
   return {
     ok: true,
     errors: [],
     degraded,
+    diagnostics,
     derivePlan,
     ast: { version: IUI_VERSION, state, root, density, fallback, title: typeof input?.title === 'string' ? input.title : '' },
   }

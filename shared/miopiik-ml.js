@@ -51,6 +51,7 @@ export const ML_TAGS = Object.freeze({
   empty: 'empty',
   chart: 'chart',
   drawing: 'drawing',
+  view: 'view',
   rect: 'rect',
   circle: 'circle',
   line: 'line',
@@ -72,7 +73,7 @@ export const ML_TAGS = Object.freeze({
   button: 'button',
 })
 
-const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, drawing: true })
+const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, drawing: true, view: true })
 // 交互控件和图形原语隐式闭合。step 也保留旧的无闭合写法。
 const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true, rect: true, circle: true, line: true, path: true, label: true })
 
@@ -184,13 +185,14 @@ function parseDocument(source) {
       // 容错：向上找到最近同名开放元素；找不到就忽略这个闭合标签
       for (let depth = stack.length - 1; depth >= 1; depth -= 1) {
         if (stack[depth].name === tag.name) {
+          for (let pending = depth + 1; pending < stack.length; pending += 1) stack[pending].unclosed = true
           stack.length = depth
           break
         }
       }
       continue
     }
-    const element = { name: tag.name, attrs: tag.attrs, children: [], unclosed: false }
+    const element = { name: tag.name, attrs: tag.attrs, children: [], unclosed: !tag.closed }
     stack[stack.length - 1].children.push(element)
     if (tag.selfClosing) continue
     if (VOID_TAGS[tag.name] === true) {
@@ -209,6 +211,7 @@ function parseDocument(source) {
 /** 元素内的纯文本（用于半截/降级时保留已写出的内容）。 */
 function textOf(element) {
   if (element.name === '#text') return String(element.text ?? '')
+  if (!Object.hasOwn(ML_TAGS, element.name)) return ''
   return element.children.map(textOf).join(' ').replace(/\s+/gu, ' ').trim()
 }
 
@@ -229,6 +232,7 @@ function normalizeAttrs(element) {
     delete attrs.data
   }
   if (attrs.strokeWidth === undefined && attrs['stroke-width'] !== undefined) attrs.strokeWidth = attrs['stroke-width']
+  if (attrs.strokeDasharray === undefined && attrs['stroke-dasharray'] !== undefined) attrs.strokeDasharray = attrs['stroke-dasharray']
   if (element.name === 'details' && attrs.label === undefined && attrs.summary !== undefined) attrs.label = attrs.summary
   if (typeof attrs.gap === 'string' && GAP_TOKENS[attrs.gap] !== undefined) attrs.gap = GAP_TOKENS[attrs.gap]
   return attrs
@@ -281,9 +285,10 @@ const TEXT_PROPS = Object.freeze({
   metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
   chart: ['kind', 'type', 'series', 'source', 'title'],
   drawing: ['width', 'height', 'label'],
+  view: ['label', 'caption'],
   rect: ['x', 'y', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],
   circle: ['cx', 'cy', 'r', 'fill', 'stroke', 'strokeWidth', 'opacity'],
-  line: ['x1', 'y1', 'x2', 'y2', 'stroke', 'strokeWidth', 'opacity'],
+  line: ['x1', 'y1', 'x2', 'y2', 'stroke', 'strokeWidth', 'strokeDasharray', 'opacity'],
   path: ['d', 'fill', 'stroke', 'strokeWidth', 'opacity'],
   label: ['x', 'y', 'text', 'fill', 'size', 'align', 'opacity'],
   segmented: ['label', 'bind', 'options'],
@@ -307,19 +312,20 @@ const TEXT_PROPS = Object.freeze({
 })
 
 /** 必须保留源码字符串的属性（表达式等），不得被 JSON/数字归一吞掉。 */
-const RAW_PROPS = Object.freeze({ derive: ['expr'], drawing: ['label'], path: ['d'], label: ['text'] })
+const RAW_PROPS = Object.freeze({ derive: ['expr'], drawing: ['label'], view: ['label', 'caption'], line: ['strokeDasharray'], path: ['d'], label: ['text'] })
 
 /**
  * 解析 miopiik-ml 源码。
- * @returns {{ok:true, doc, degraded:string[]} | {ok:false, errors:string[], degraded:string[]}}
+ * @returns {{ok:true, doc, degraded:string[]} | {ok:false, errors:string[], degraded:string[], fallback?:string}}
  */
-export function parseMiopiikMl(source) {
+export function parseMiopiikMl(source, { streaming = false } = {}) {
   const root = parseDocument(source)
   const degraded = []
   const ui = root.children.find((node) => node.name === 'ui')
   if (ui === undefined) {
     return { ok: false, errors: ['缺少 <ui> 根标签'], degraded }
   }
+  const fallback = typeof ui.attrs.fallback === 'string' ? ui.attrs.fallback : ''
   if (ui.unclosed) degraded.push('<ui> 没有闭合')
 
   let state = {}
@@ -364,22 +370,34 @@ export function parseMiopiikMl(source) {
     children.push(child)
   }
 
+  const textNode = (item, id) => ({
+    id, type: 'text', props: { text: item.text }, children: [],
+    ...(item.kind === 'degraded' ? { degraded: true } : {}),
+  })
   const compile = (element) => {
-    if (element.name === '#text') return { kind: 'degraded', text: decodeEntities(String(element.text ?? '')) }
-    const type = ML_TAGS[element.name]
+    if (element.name === '#text') return { kind: 'text', text: String(element.text ?? '') }
+    const type = Object.hasOwn(ML_TAGS, element.name) ? ML_TAGS[element.name] : undefined
     const attrs = normalizeAttrs(element)
-    // when/is 是通用显隐通道：任何组件都可携带；值交给校验器把关（只允许 $state 绑定）
     const control = readProps(attrs, ['when', 'is', 'weight'])
     const fallbackText = typeof attrs.fallback === 'string' ? attrs.fallback : ''
     const innerText = textOf(element)
+    const compiled = (props, children = [], tag = element.name) => ({
+      kind: 'node',
+      node: {
+        id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${tag}`,
+        type, props, children,
+        ...(fallbackText.trim() === '' ? {} : { fallback: fallbackText }),
+      },
+    })
     const degrade = (reason) => {
       degraded.push(`<${element.name}> ${reason}`)
-      // 未闭合：保留已写出的文本；未知/非法标签：只给提示，绝不回显内容（避免把脚本源码摆到界面上）
-      const text = fallbackText !== '' ? fallbackText : element.unclosed && innerText !== '' ? innerText : `（此段无法渲染：${reason}）`
-      return { kind: 'degraded', text }
+      const recoverText = element.unclosed && type !== undefined && type !== 'root' && type !== 'state'
+      return { kind: 'degraded', text: fallbackText || (recoverText ? innerText : '') }
     }
     if (type === undefined || type === 'root' || type === 'state') return degrade('未知标签')
-    if (element.unclosed) return degrade('没有闭合')
+    // A streamed container can show its already closed children while later content arrives.
+    const canStreamChildren = CONTAINERS[element.name] === true || ['diagram', 'p', 'paragraph', 'callout'].includes(element.name)
+    if (element.unclosed && !(streaming && canStreamChildren)) return degrade('没有闭合')
     if (element.name === 'callout' && element.children.some((child) => child.name !== '#text')) {
       const children = element.children
         .map((child) => {
@@ -388,11 +406,11 @@ export function parseMiopiikMl(source) {
             return text === '' ? null : { id: 'ml-callout-text', type: 'text', props: { text }, children: [] }
           }
           const item = compile(child)
-          return item.kind === 'node' ? item.node : { id: 'ml-callout-degraded', type: 'text', props: { text: item.text }, children: [] }
+          return item.kind === 'node' ? item.node : textNode(item, 'ml-callout-degraded')
         })
         .filter(Boolean)
       const props = { ...control, ...readProps(attrs, TEXT_PROPS.callout) }
-      return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-callout', type: 'callout', props, children } }
+      return compiled(props, children)
     }
     const INLINE_LEAVES = { badge: 'text', emphasis: 'text', b: 'text', code: 'text', a: 'text', link: 'text', callout: 'text', progress: 'label', empty: 'text' }
     if (INLINE_LEAVES[element.name] !== undefined) {
@@ -406,11 +424,11 @@ export function parseMiopiikMl(source) {
         else return degrade('没有内容')
       }
       if (props[key] === undefined || props[key] === '') return degrade('没有内容')
-      return { kind: 'node', node: { id: typeof element.attrs.id === 'string' && element.attrs.id !== '' ? element.attrs.id : `ml-${element.name}`, type, props, children: [] } }
+      return compiled(props)
     }
     if (element.name === 'text') {
       const text = typeof element.attrs.text === 'string' ? element.attrs.text : innerText
-      return text === '' ? degrade('没有内容') : { kind: 'node', node: { id: typeof element.attrs.id === 'string' && element.attrs.id !== '' ? element.attrs.id : 'ml-text', type: 'text', props: { ...control, text }, children: [] } }
+      return text === '' ? degrade('没有内容') : compiled({ ...control, text })
     }
     if (element.name === 'diagram') {
       // 结构图形：lane 是显式列；散落的 node 按出现顺序汇成最前一列；
@@ -428,12 +446,12 @@ export function parseMiopiikMl(source) {
         if (item.kind === 'node' && item.node.type === 'lane') lanes.push(item.node)
         else if (item.kind === 'node' && item.node.type === 'node') implicit.push(item.node)
         else if (item.kind === 'node') rest.push(item.node)
-        else rest.push({ id: 'ml-diagram-degraded', type: 'text', props: { text: item.text }, children: [] })
+        else rest.push(textNode(item, 'ml-diagram-degraded'))
       }
       if (implicit.length > 0) lanes.unshift({ id: 'ml-lane-auto', type: 'lane', props: {}, children: implicit })
       const children = [...lanes, ...rest]
       if (children.length === 0) return degrade('diagram 内没有可渲染内容')
-      return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-diagram', type: 'diagram', props: { ...control, ...readProps(attrs, TEXT_PROPS.diagram) }, children } }
+      return compiled({ ...control, ...readProps(attrs, TEXT_PROPS.diagram) }, children)
     }
     if (element.name === 'p' || element.name === 'paragraph') {
       const children = element.children.map((child) => {
@@ -442,27 +460,19 @@ export function parseMiopiikMl(source) {
           return text.trim() === '' ? null : { id: 'ml-inline-text', type: 'text', props: { text }, children: [] }
         }
         const item = compile(child)
-        return item.kind === 'node' ? item.node : { id: 'ml-inline-degraded', type: 'text', props: { text: item.text }, children: [] }
+        return item.kind === 'node' ? item.node : textNode(item, 'ml-inline-degraded')
       }).filter(Boolean)
       if (children.length === 0) return degrade('段落为空')
-      return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : 'ml-p', type: 'paragraph', props: { ...control, ...readProps(attrs, ['gap']) }, children } }
+      return compiled({ ...control, ...readProps(attrs, ['gap']) }, children, 'p')
     }
     if (CONTAINERS[element.name] === true) {
       const nodes = element.children.map((child) => compile(child))
       // 降级片段作为 text 节点保留在父布局里（局部降级，不整段丢弃）
       const children = nodes.map((item, index) =>
-        item.kind === 'node' ? item.node : { id: `ml-degraded-${index}`, type: 'text', props: { text: item.text }, children: [] },
+        item.kind === 'node' ? item.node : textNode(item, `ml-fallback-${index}`),
       )
-      if (children.length === 0) return degrade('容器内没有可渲染内容')
-      return {
-        kind: 'node',
-        node: {
-          id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`,
-          type,
-          props: { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) },
-          children,
-        },
-      }
+      if (children.length === 0 && type !== 'view') return degrade('容器内没有可渲染内容')
+      return compiled({ ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }, children)
     }
     const props = { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }
     if (type === 'step' && element.children.every((child) => child.name === '#text')) {
@@ -472,17 +482,17 @@ export function parseMiopiikMl(source) {
     } else if (element.children.length > 0) {
       return degrade('该标签不接受子内容')
     }
-    return { kind: 'node', node: { id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${element.name}`, type, props, children: [] } }
+    return compiled(props)
   }
 
   const compiled = children.map((child) => compile(child))
   const mapped = compiled.map((item, index) =>
-    item.kind === 'node' ? item.node : { id: `ml-top-${index}`, type: 'text', props: { text: item.text }, children: [] },
+    item.kind === 'node' ? item.node : textNode(item, `ml-top-${index}`),
   )
   let rootNode = null
   if (mapped.length === 1) rootNode = mapped[0]
   else if (mapped.length > 1) rootNode = { id: 'ml-root', type: 'column', props: {}, children: mapped }
-  if (rootNode === null) return { ok: false, errors: ['<ui> 里没有可渲染内容'], degraded }
+  if (rootNode === null) return { ok: false, errors: ['<ui> 里没有可渲染内容'], degraded, fallback }
 
   // 稳定 key：同类型节点按出现顺序编号，回放与状态不漂移
   let counter = 0
@@ -498,7 +508,7 @@ export function parseMiopiikMl(source) {
     degraded,
     doc: {
       title: typeof ui.attrs.title === 'string' ? ui.attrs.title : '',
-      fallback: typeof ui.attrs.fallback === 'string' ? ui.attrs.fallback : '',
+      fallback,
       density: typeof ui.attrs.density === 'string' ? ui.attrs.density : undefined,
       state,
       root: withIds,

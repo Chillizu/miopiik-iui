@@ -135,6 +135,29 @@ test('客户端在没有 Mind/Ink/Operator 时可加载、渲染并注销', () =
   assert.equal(sandbox.__miopiikMarkdownEmbeds, undefined)
 })
 
+test('局部、整块和流式兜底保留读者文本并分离诊断', () => {
+  const { registry } = loadStandalonePlugin()
+  const renderText = (node) => render(node).flatMap((element) => element.children ?? [])
+    .flat(Infinity).filter((child) => typeof child === 'string').join(' ')
+
+  const invalid = registry.renderBlock('<ui fallback="读者说明"></ui>')
+  assert.equal(invalid.props['data-iui-output'], 'invalid')
+  assert.match(invalid.props['data-iui-diagnostics'], /没有可渲染内容/u)
+  assert.equal(renderText(invalid), '读者说明')
+  assert.equal(renderText(registry.renderBlock('{"root":')), '这部分内容暂不可用。')
+
+  const partial = registry.renderBlock('<ui><text>解说里的 $state.x 是一个符号</text><unknown fallback="原节点说明"/><slider label="坏控件"/><text text="$state.missing"/></ui>')
+  assert.match(renderText(partial), /解说里的 \$state\.x 是一个符号 原节点说明/u)
+  assert.doesNotMatch(renderText(partial), /未知标签|bind=|\$state\.missing/u)
+  assert.ok(!render(partial).some((node) => node.type === 'input'))
+  assert.ok(render(partial).some((node) => node.props['data-iui-partial'] === '1'))
+
+  const live = registry.renderBlockStreaming('<ui><column><metric label="已经完成" value="1"/><slider label="还没写完')
+  assert.match(renderText(live), /已经完成 1/u)
+  assert.doesNotMatch(renderText(live), /还没写完|没有闭合|暂不可用/u)
+  assert.equal(registry.renderBlockStreaming('<ui').props.hidden, true)
+})
+
 test('插件页承载全部设置：一个开关 + 实时预览 + 状态行 + 可复制示例，不再注册设置页页签', async () => {
   const { slots, storage, getReloads, getCopied } = loadStandalonePlugin()
   assert.equal(slots.length, 1, '只应注册 plugins.bundle.config 一个插槽')

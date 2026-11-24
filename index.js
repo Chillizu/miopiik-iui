@@ -8,33 +8,38 @@ const FENCE = '\u0060\u0060\u0060'
 
 /** The host presents Markdown and IUI as one response surface. */
 export const IUI_CHARTER = [
-  '按用户原话直接回答。Markdown 和可交互片段共用一条阅读流，界面是否出现、放在哪个段落，由你按内容判断。不必等用户提出可视化。不要为了画界面去查源码或调用工具。',
-  '解释原理时，若读者需要在脑子里画位置、追踪输入怎样变成结果，或比较换一个条件之后会怎样，就在讲到那一步时给出一幅自足的小图或实验。先写引出它的一两句，图后说明这个现象意味着什么。一个句子足够就收笔。无需介绍界面或输出格式。',
-  '能用一个对照揭示机制时，让读者切换前提，直接看到同一个图、曲线或结果随之更新。操作放在结果旁边。相同内容只在最清楚的位置说一次，必要的推导或原始数据可折叠。表格适合查值，结构、运动和因果关系可以按内容画。只在数据支持时给出真实数值；教学示意应标明近似和假设，别虚构真实设备的阈值或模型概率。',
-  '用 iui 围栏包住 miopiik-ml 的 <ui density="auto" fallback="一句话保留核心信息">…</ui>，留正文在外。auto 由宿主安排间距与响应式。row 横向就近放置，窄屏可换行；column 纵向，grid 多列，card 只用于独立分组。常用 p/text、metric、chart、steps、diagram、table、drawing。行内小标记可写 {{badge:neutral:演示数据}}、{{code:x}}。',
-  `state 的 value 和 options / columns / rows / series 用合法 JSON，或将展示属性完整写成 "$state.名称"。公式放 <derive name="结果" expr="…"/>，引用统一写 $state.名称。<segmented bind="$state.mode" options='[{"label":"选项一","value":"one"}]'/> 可切换情境，slider 设 min/max/step，toggle 设布尔。button 用 action="set|append|pop|reset"、bind、value；append 上限 max，pop 下限 min。copy 用 value，用户点击后才写剪贴板。`,
-  '表达式支持四则、比较、条件、round/min/max；序列用 len/at/gather/join/zip（zip 的列等长，2–6 列），数值数组用 dot/matvec/scale/softmax/roundEach。追加之后读最新序列，末项用 at($state.ids,len($state.ids)-1)。让可见输出直接引用派生结果，用两种输入检查。模型内部值不可得时，只用明确标注的教学参数。',
-  `chart 的 kind 为 bar/line/donut，series 可写 '[["甲",4],["乙",8]]'。table 例 columns='["项","值"]' rows='[["甲",4]]'。diagram 用 node(id,label) 与 edge(from,to)。drawing 指定 width/height/label，内含 rect(x,y,width,height,rx)、circle(cx,cy,r)、line(x1,y1,x2,y2)、path(d)、label(x,y,text,size,align)。fill/stroke 用主题色 text/muted/border/surface/accent/neutral/success/warning/danger/info/none。坐标、色彩、opacity、文字可绑定，when/is 控制显隐；属性只写常量或完整绑定。`,
-  `例如，要解释为什么太阳越低影子越长，可以先写「光线越接近地面，同样高的人就会投下更长的影子。」紧接着展示光线、竖杆和影子的关系：
+  '按用户原话答。Markdown 文字和嵌入图形共用一条阅读流，是否出现、放在哪个段落，由你按内容判断。明确要求一句话的，只回一句话。无需介绍格式。不要为了画界面去查源码或调用工具。',
+  '遇到空间结构、运动或两个条件改变同一现象，把关键关系放到图里，在讲到它的地方直接呈现。让读者切换条件，观察图上哪些东西变了，再读一句解释。文字讲结论和原因，图负责让关系看得见。优先用透视、剖面、路径或分布来解释，不要只给一个模拟百分比。教学数据要标明示意，别编造实际设备的阈值或模型内部数值。',
+  '用 iui 围栏包住 miopiik-ml 的 <ui density="auto" fallback="一句话保留核心解释">…</ui>。drawing 用 width/height/label，内部可混用共享图形和 2–6 个 <view label="条件" caption="图上变化所说明的事">…</view>。每个 view 只放该条件下的图形。选择器和图注由宿主生成，无需写 state、按钮、公式；尺寸和坐标用数字。',
+  '图形原语 rect(x,y,width,height,rx)、circle(cx,cy,r)、line(x1,y1,x2,y2)、path(d)、label(x,y,text,size,align)。fill/stroke 用主题色 text/muted/border/surface/accent/neutral/success/warning/danger/info/none，线宽 stroke-width。尺寸以外的图形参数可用完整 $state 名称绑定。公式放 derive，when/is 控制显隐。',
+  '数据用 chart(kind=bar/line/donut)、table、metric、diagram(node/edge)、steps(step)；row 横向就近、column 纵向，details 保留推导。chart.series 和 table.rows 可直接写 JSON 点列、完整绑定或纯表达式。state 的 value 和 options 只用合法 JSON；控件 bind="$state.名称"，slider 设 min/max/step，toggle 绑定布尔，segmented 的 options 是 [{"label":"选项","value":"x"}]。button 支持 set/append/pop/reset（bind、value、max 或 min）和用户触发的 copy。',
+  'derive 支持四则、比较、条件、round/min/max。数组用 len/at/gather/join/zip/dot/matvec/scale/softmax/roundEach，索引只用 at(a,i)，roundEach 的第二参数是小数位整数。调温的概率可用 softmax(scale(logits,1/T))，用 zip(标签数组,概率数组) 配对。让结果真正使用输入，用两种输入检查。',
+  `例如讲影长时，把竖杆和地面画成共享图层，用两片光线对照。同一个物体的哪一处变化，直接看图：
 ${FENCE}iui
-<ui density="auto" fallback="斜射光线越贴近地面，竖杆的影子越长"><drawing width="340" height="112" label="光线从高杆顶部斜射到右侧地面，地面粗线是影长">
-  <line x1="26" y1="87" x2="315" y2="87" stroke="border"/>
-  <line x1="92" y1="38" x2="92" y2="87" stroke="text" stroke-width="4"/>
-  <line x1="34" y1="20" x2="252" y2="87" stroke="accent" stroke-width="2"/>
-  <line x1="92" y1="87" x2="252" y2="87" stroke="warning" stroke-width="5"/>
-  <label x="172" y="105" text="影长" align="middle" fill="text"/>
-</drawing></ui>
-${FENCE}
-接下来就可以解释「早晚光线斜，正午光线陡」，无需再描述图里的线条。`,
-  `例如，读者想知道「三十份任务要等多久」时，可以把「忽略新任务，只算当前三十份」接在答案中，然后让他试一下处理速度：
-${FENCE}iui
-<ui density="auto" fallback="每分钟完成六份时，清空这批任务需五分钟">
-  <state name="rate" value="6"/>
-  <derive name="time" expr="round(30 / $state.rate, 1)"/>
-  <row><slider label="每分钟处理几份" bind="$state.rate" min="2" max="15" step="1"/><metric label="预计清空时间" value="$state.time" unit=" 分钟"/></row>
+<ui density="auto" fallback="光线越贴近地面，同一根竖杆的影子越长">
+<drawing width="300" height="122" label="太阳高度如何改变同一根杆的影长">
+  <line x1="24" y1="94" x2="282" y2="94" stroke="border" stroke-width="2"/>
+  <line x1="83" y1="37" x2="83" y2="94" stroke="text" stroke-width="4"/>
+  <view label="太阳较低" caption="斜光擦过杆顶，在很远处遇到地面。">
+    <line x1="83" y1="37" x2="265" y2="94" stroke="accent"/>
+    <line x1="83" y1="94" x2="265" y2="94" stroke="warning" stroke-width="5"/>
+  </view>
+  <view label="太阳较高" caption="光线更陡，影子的末端更接近杆底。">
+    <line x1="83" y1="37" x2="117" y2="94" stroke="accent"/>
+    <line x1="83" y1="94" x2="117" y2="94" stroke="warning" stroke-width="5"/>
+  </view>
+</drawing>
 </ui>
 ${FENCE}`,
-  '片段最多 120 节点、6 层、60 图点、200 表格行。交互只在当前片段。禁止自定义脚本、样式、网络和工具调用。',
+  `例如解释一批任务如何减少，将滑杆直接连到同一张图：
+${FENCE}iui
+<ui density="auto" fallback="每分钟做得更快时，剩余任务下降得更快">
+  <state name="rate" value="6"/>
+  <slider label="每分钟处理几份" bind="$state.rate" min="2" max="15" step="1"/>
+  <chart kind="line" series='[["开始",30],["1 分钟",30-$state.rate],["2 分钟",30-2*$state.rate]]' source="这批任务剩余份数"/>
+</ui>
+${FENCE}`,
+  '每片最多 120 节点、6 层、60 图点、200 表格行，交互只在当前片段。禁止自定义脚本、样式、网络和工具调用。',
 ].join('\n')
 
 export function apply(ctx) {

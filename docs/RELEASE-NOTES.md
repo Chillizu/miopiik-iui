@@ -2,6 +2,15 @@
 
 `miopiik-iui` 是 DeepSeek Harness（DSH）Web 的**纯表现层**插件：模型在普通 Markdown 中输出受信行内 token 与受控 `iui` 围栏，浏览器侧将其渲染为声明式组件。本包独立于 MiOpIIk Agent，可单独安装。
 
+## miopiik-iui 0.2.0-rc.4 — 图内条件对照候选
+
+本地预发布（prerelease），用于独立 DSH Web profile 验收。
+
+- `drawing` 可声明多种 `view`。切换条件时共享底图保留，对应图层和图注随即更新。
+- `chart.series` 和 `table.rows` 可直接使用受限纯表达式，与 `derive` 共用同一求值器和数据校验。
+- 失败的片段使用可读回退。技术诊断留在 DOM 元数据里，其他有效内容继续显示。
+- 已知限制包括版本耦合的宿主补丁和模型生成图形的内容准确性。见[普通问题验收](NATURAL-EXPRESSION.md#rc4-普通问题验收)。
+
 ## miopiik-iui 0.2.0-rc.3 — 正文流布局候选
 
 本地预发布（prerelease），用于独立 DSH Web profile 验收。
