@@ -163,6 +163,23 @@ const R3_DENSITY_INLINE = { title: '行内密度', density: 'inline', root: { ty
 const R3_DENSITY_COMPACT = { title: '紧凑密度', density: 'compact', root: { type: 'text', props: { text: '紧凑卡' } } }
 const R3_DENSITY_PANEL = { title: '面板密度', root: { type: 'text', props: { text: '完整面板（缺省 density）' } } }
 
+const AUTO_LAYOUT_ML = `<ui density="auto" fallback="两种视图和当前值">
+  <state name="selected" value="true"/>
+  <row>
+    <drawing width="360" height="96" label="图形示意"><rect x="4" y="4" width="352" height="88" stroke="accent"/></drawing>
+    <chart kind="bar" series='[["A",3],["B",9]]'/>
+  </row>
+  <row>
+    <button label="关闭" action="set" bind="$state.selected" value="false"/>
+    <button label="重置" action="reset" bind="$state.selected"/>
+  </row>
+  <row>
+    <metric label="当前值" value="3"/>
+    <table columns='["场景","数值"]' rows='[["A",3],["B",9]]'/>
+  </row>
+  <card title="独立说明"><p>这里需要独立分组。</p></card>
+</ui>`
+
 const R3_WEIGHT_AST = {
   title: '语义权重',
   root: {
@@ -489,6 +506,8 @@ const MAIN_RUN = `
       densityInline:mountBlock(${JSON.stringify(JSON.stringify(R3_DENSITY_INLINE))}),
       densityCompact:mountBlock(${JSON.stringify(JSON.stringify(R3_DENSITY_COMPACT))}),
       densityPanel:mountBlock(${JSON.stringify(JSON.stringify(R3_DENSITY_PANEL))}),
+      autoLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML)}),
+      legacyLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML.replace(' density="auto"', ''))}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
       copy:mountBlock(${JSON.stringify(JSON.stringify(R3_COPY_AST))}),
@@ -796,6 +815,35 @@ const MAIN_RUN = `
           if (!styleOf(panel).includes('padding: 12px')) return 'panel 内边距应为 12px: ' + styleOf(panel);
           const inlineTitle = inline.firstElementChild === null ? '' : String(inline.firstElementChild.getAttribute('style') ?? '');
           if (!inlineTitle.includes('font-size: 11px')) return 'inline 标题应为小号样式: ' + inlineTitle;
+          return true;
+        });
+        check('autoLayout', () => {
+          const host = r3.autoLayout;
+          const root = host.querySelector('[data-iui-output="ok"]');
+          const rows = [...host.querySelectorAll('[data-iui-container="row"]')];
+          if (root === null || rows.length !== 3) return '缺少自适应布局';
+          if (root.dataset.iuiDensity !== 'panel' || root.dataset.iuiSurface !== 'flow') return '自动布局仍用外框';
+          const rootStyle = getComputedStyle(root);
+          if (rootStyle.paddingTop !== '0px' || rootStyle.borderTopWidth !== '0px') return '自动外层有内边距或边框';
+          const card = host.querySelector('[data-iui-container="card"]');
+          if (card === null || getComputedStyle(card).borderTopWidth !== '1px') return '应保留显式卡片边界';
+          const legacy = r3.legacyLayout.querySelector('[data-iui-output="ok"]');
+          const legacyRow = r3.legacyLayout.querySelector('[data-iui-container="row"]');
+          if (legacy?.dataset.iuiSurface !== 'frame' || getComputedStyle(legacy).paddingTop !== '12px' || getComputedStyle(legacyRow).display !== 'grid') return '历史布局发生变化';
+          const layout = (row) => [...row.children].map((child) => child.getBoundingClientRect());
+          const [drawings, actions, table] = rows;
+          if (!drawings.firstElementChild.querySelector('[data-iui-drawing]') || !drawings.lastElementChild.querySelector('[data-iui-chart]')) return '图形顺序发生变化';
+          const [drawing, chart] = layout(drawings);
+          if (drawing.width < 232 || chart.width < 232 || drawing.top !== chart.top || drawing.right > chart.left) return '宽屏图形应并排';
+          const [firstAction, secondAction] = layout(actions);
+          if (firstAction.top !== secondAction.top || secondAction.right - firstAction.left > actions.clientWidth / 2) return '短操作不应按等宽列伸展';
+          const [metric, data] = layout(table);
+          if (data.top < metric.bottom || data.width < table.clientWidth - 1) return '数据表应独占一行';
+          for (const width of [420, 360]) {
+            host.style.width = width + 'px';
+            const [first, second] = layout(drawings);
+            if (second.top < first.bottom || first.width < width - 1 || second.width < width - 1 || root.scrollWidth > width + 1) return width + 'px 下图形未顺序堆叠或溢出';
+          }
           return true;
         });
         check('r3Weight', () => {
@@ -1135,6 +1183,7 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.doesNotMatch(html,/data-mot-fatal=/u,'M·O·T 机制交互不应抛异常')
   // Round3 自然表达：密度三态 / 语义权重 / details 受控与重挂载 / copy 摘要 / 字面量回退 / 派生拓扑
   assert.match(html,/data-r3-density="ok"/u,'根密度三态应各有真实样式（inline 无框、compact 8px、panel 12px）且输出 data-iui-density')
+  assert.match(html,/data-auto-layout="ok"/u,'自动布局应使用正文外观，保留显式分组，按组件最小宽度并排或堆叠')
   assert.match(html,/data-r3-weight="ok"/u,'weight 三态应输出 data-iui-weight 并给出强弱视觉（primary 加粗 / secondary·optional 弱化）')
   assert.match(html,/data-r3-details-closed="ok"/u,'details 初始应收起并带 aria-expanded=false')
   assert.match(html,/data-r3-details-open="ok"/u,'details 由 IuiSheet 受控展开（aria-controls 指向内容）')

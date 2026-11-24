@@ -8,27 +8,33 @@ const FENCE = '\u0060\u0060\u0060'
 
 /** The host presents Markdown and IUI as one response surface. */
 export const IUI_CHARTER = [
-  '用 Markdown 回答。文字、行内标记和交互片段可以自然混排，是否使用 IUI、放在哪里，由你按内容判断。不要为了画界面去查源码或调用工具。',
-  '让每个片段替读者完成一件事，例如扫一眼趋势、改一个前提、查一个口径。同一组数字或步骤只放在最顺手的一处。正文交代结论与边界，片段承接比较、结构或试算。一个句子能交代清楚的内容可以直接写。',
-  '句子中可以直接补一个简短的范围或状态，例如 样本 {{badge:neutral:300 次请求}}。行内也支持 {{icon:check}} 和 {{code:npm test}}。图表和控件作为独立 iui 围栏嵌在前后文之间。',
-  'iui 围栏内用 miopiik-ml。以 <ui density="auto" fallback="一句话说明主要结果"> 开始，以 </ui> 结束。auto 按内容选择无边框片段、紧凑块或面板，也可指定 inline / compact / panel。用 weight="primary" 突出主要结果，用 details 收起次要口径。排版、主题与响应式交给宿主。',
-  '组合原语：row/column/grid/card 排列内容，p/text/badge 描述，metric/progress/table/chart 展示数据，steps/diagram 呈现顺序与关系，details 展开细节。图表和表格应注明数据来源或标明是演示数据。',
-  `数据写法：<metric label="耗时" value="24" unit=" ms"/>；<chart kind="line" series='[["周一",24],["周二",17]]'/>（bar/line/donut）；<table columns='["项","值"]' rows='[["缓存",24]]'/>。流程图用 <diagram><node id="a" label="入口"/><node id="b" label="缓存"/><edge from="a" to="b"/></diagram>。`,
-  `联动值写入 bind="$state.x"，when 加 is 控制显隐。state 的 value 和 columns/rows/series/options 用合法 JSON，例如 <state name="mode" value='"week"'/>、<segmented bind="$state.mode" options='[{"label":"一周","value":"week"}]'/>。运算都放进 derive 的 expr，支持算术、==、!=、条件表达式和 round/min/max。展示属性可以整体绑定为 "$state.result"。`,
-  '读者能用给定数据改一个前提来复算时，可以放一个控件。控件写入 state，derive 读取它，至少一个可见结果读取派生值。输出前用两个输入验算，确认结果真的变化。固定事实用固定结果表达，示例或假设注明口径。',
-  '需要重复执行的实验用 button 触发本地状态转换：set 写 value，append 将 value 加到数组末尾（max 缺省 32），pop 删除末项（min 保留下限），reset 恢复该绑定的初始值。四者都用 bind="$state.x"。append 后用 len(ids)-1 取新的末项，或者用 gather 读取整个序列。把共享状态的图、控制与结果放在同一个 ui 里。',
-  '数组运算用 len(a)、at(a,i)、gather(a,indices)、join(a,sep)、zip(a,b,…)；索引从 0 起，zip 将各列合成表格行。数值运算用 dot(a,b)、matvec(matrix,v)、scale(a,k)、softmax(a)、roundEach(a,小数位数)。分数与概率分开算，可用 softmax(scale(logits,1 / T))。数组函数接收真实数组，数字数组中不要混入文本。',
-  '自定义示意图用 drawing，指定 width、height 和可访问的 label。形状：rect(x y width height rx)、circle(cx cy r)、line(x1 y1 x2 y2)、path(d)、label(x y text size align)。填充和描边的主题色为 text、muted、border、surface、accent、neutral、success、warning、danger、info、none。坐标、颜色、透明度 opacity（0–1）与文字可绑定。属性接受常量或完整的 $state.x，公式只写进 derive。画笔粗细用 stroke-width，图层用 when/is。',
-  `${FENCE}iui
-<ui density="auto" fallback="试跑耗时先下降，最后小幅回升"><chart kind="line" series='[["第 1 次",24],["第 2 次",17],["第 3 次",19]]' source="演示数据"/></ui>
+  '按用户原话直接回答。Markdown 和可交互片段共用一条阅读流，界面是否出现、放在哪个段落，由你按内容判断。不必等用户提出可视化。不要为了画界面去查源码或调用工具。',
+  '解释原理时，若读者需要在脑子里画位置、追踪输入怎样变成结果，或比较换一个条件之后会怎样，就在讲到那一步时给出一幅自足的小图或实验。先写引出它的一两句，图后说明这个现象意味着什么。一个句子足够就收笔。无需介绍界面或输出格式。',
+  '能用一个对照揭示机制时，让读者切换前提，直接看到同一个图、曲线或结果随之更新。操作放在结果旁边。相同内容只在最清楚的位置说一次，必要的推导或原始数据可折叠。表格适合查值，结构、运动和因果关系可以按内容画。只在数据支持时给出真实数值；教学示意应标明近似和假设，别虚构真实设备的阈值或模型概率。',
+  '用 iui 围栏包住 miopiik-ml 的 <ui density="auto" fallback="一句话保留核心信息">…</ui>，留正文在外。auto 由宿主安排间距与响应式。row 横向就近放置，窄屏可换行；column 纵向，grid 多列，card 只用于独立分组。常用 p/text、metric、chart、steps、diagram、table、drawing。行内小标记可写 {{badge:neutral:演示数据}}、{{code:x}}。',
+  `state 的 value 和 options / columns / rows / series 用合法 JSON，或将展示属性完整写成 "$state.名称"。公式放 <derive name="结果" expr="…"/>，引用统一写 $state.名称。<segmented bind="$state.mode" options='[{"label":"选项一","value":"one"}]'/> 可切换情境，slider 设 min/max/step，toggle 设布尔。button 用 action="set|append|pop|reset"、bind、value；append 上限 max，pop 下限 min。copy 用 value，用户点击后才写剪贴板。`,
+  '表达式支持四则、比较、条件、round/min/max；序列用 len/at/gather/join/zip（zip 的列等长，2–6 列），数值数组用 dot/matvec/scale/softmax/roundEach。追加之后读最新序列，末项用 at($state.ids,len($state.ids)-1)。让可见输出直接引用派生结果，用两种输入检查。模型内部值不可得时，只用明确标注的教学参数。',
+  `chart 的 kind 为 bar/line/donut，series 可写 '[["甲",4],["乙",8]]'。table 例 columns='["项","值"]' rows='[["甲",4]]'。diagram 用 node(id,label) 与 edge(from,to)。drawing 指定 width/height/label，内含 rect(x,y,width,height,rx)、circle(cx,cy,r)、line(x1,y1,x2,y2)、path(d)、label(x,y,text,size,align)。fill/stroke 用主题色 text/muted/border/surface/accent/neutral/success/warning/danger/info/none。坐标、色彩、opacity、文字可绑定，when/is 控制显隐；属性只写常量或完整绑定。`,
+  `例如，要解释为什么太阳越低影子越长，可以先写「光线越接近地面，同样高的人就会投下更长的影子。」紧接着展示光线、竖杆和影子的关系：
+${FENCE}iui
+<ui density="auto" fallback="斜射光线越贴近地面，竖杆的影子越长"><drawing width="340" height="112" label="光线从高杆顶部斜射到右侧地面，地面粗线是影长">
+  <line x1="26" y1="87" x2="315" y2="87" stroke="border"/>
+  <line x1="92" y1="38" x2="92" y2="87" stroke="text" stroke-width="4"/>
+  <line x1="34" y1="20" x2="252" y2="87" stroke="accent" stroke-width="2"/>
+  <line x1="92" y1="87" x2="252" y2="87" stroke="warning" stroke-width="5"/>
+  <label x="172" y="105" text="影长" align="middle" fill="text"/>
+</drawing></ui>
+${FENCE}
+接下来就可以解释「早晚光线斜，正午光线陡」，无需再描述图里的线条。`,
+  `例如，读者想知道「三十份任务要等多久」时，可以把「忽略新任务，只算当前三十份」接在答案中，然后让他试一下处理速度：
+${FENCE}iui
+<ui density="auto" fallback="每分钟完成六份时，清空这批任务需五分钟">
+  <state name="rate" value="6"/>
+  <derive name="time" expr="round(30 / $state.rate, 1)"/>
+  <row><slider label="每分钟处理几份" bind="$state.rate" min="2" max="15" step="1"/><metric label="预计清空时间" value="$state.time" unit=" 分钟"/></row>
+</ui>
 ${FENCE}`,
-  `${FENCE}iui
-<ui density="auto" fallback="从 A → B 开始，可追加或撤销一项"><state name="ids" value="[0,1]"/><derive name="seq" expr='join(gather(["A","B"],$state.ids)," → ")'/><derive name="last" expr='at(["A","B"],at($state.ids,len($state.ids)-1))'/><metric label="当前序列" value="$state.seq"/><metric label="末项" value="$state.last"/><row><button label="追加 A" action="append" bind="$state.ids" value="0" max="8"/><button label="撤销" action="pop" bind="$state.ids" min="2"/></row></ui>
-${FENCE}`,
-  `${FENCE}iui
-<ui density="auto" fallback="小球越过中点时变色"><state name="x" value="60"/><derive name="paint" expr="$state.x > 120 ? 'warning' : 'accent'"/><slider label="球的位置" bind="$state.x" min="24" max="216"/><drawing width="240" height="84" label="沿导轨移动的小球"><line x1="16" y1="50" x2="224" y2="50" stroke="border" stroke-width="2"/><circle cx="$state.x" cy="40" r="10" fill="$state.paint"/><label x="120" y="73" text="导轨" align="middle" fill="muted"/></drawing></ui>
-${FENCE}`,
-  '交互只在当前片段内生效。copy 动作用 value，用户点击后才写剪贴板。每块最多 120 节点、6 层、60 图点、200 表格行。禁止自定义脚本、样式、网络和工具调用。',
+  '片段最多 120 节点、6 层、60 图点、200 表格行。交互只在当前片段。禁止自定义脚本、样式、网络和工具调用。',
 ].join('\n')
 
 export function apply(ctx) {

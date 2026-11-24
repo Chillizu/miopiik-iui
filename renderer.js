@@ -203,7 +203,7 @@
       return itemProps.is === undefined ? Boolean(actual) : sameValue(actual, resolve(itemProps.is))
     }
 
-    /** 根密度：模型只表达「嵌在正文里 / 紧凑卡 / 完整面板」，真实间距与边框由渲染器决定。 */
+    /** 手动密度保留原有边框。自动密度用于间距，外层沿正文流排版。 */
     const DENSITY_STYLE = {
       inline: { gap: 6, border: 'none', borderRadius: 0, padding: 0 },
       compact: { gap: 8, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 },
@@ -226,6 +226,23 @@
       visit(root)
       if (controls >= 2 || structures >= 2) return 'panel'
       return structures === 1 ? 'compact' : 'inline'
+    }
+
+    const ROW_INTRINSIC = new Set(['badge', 'icon', 'button', 'toggle', 'segmented', 'details'])
+    const ROW_MINIMUM = { drawing: 232, chart: 232, diagram: 232, slider: 180, input: 180, card: 160 }
+
+    function rowBasis(item) {
+      if (item.type === 'table') return Infinity
+      if (ROW_INTRINSIC.has(item.type)) return 0
+      const minimum = ROW_MINIMUM[item.type] ?? 112
+      const childBasis = Math.max(0, ...item.children.map(rowBasis))
+      return Math.max(minimum, childBasis + (item.type === 'card' ? 24 : 0))
+    }
+
+    function flowItemStyle(item) {
+      const basis = rowBasis(item)
+      const flex = basis === 0 ? '0 1 auto' : `1 1 ${Number.isFinite(basis) ? `${basis}px` : '100%'}`
+      return { flex, minWidth: 0, maxWidth: '100%' }
     }
 
     const WEIGHT_STYLE = {
@@ -426,10 +443,11 @@
 
     function IuiSheet({ sample, format, degraded, streaming }) {
       const checked = React.useMemo(() => IUI_AST.validateAst(sample), [sample])
+      const adaptive = checked.ok && checked.ast.density === 'auto'
       const density = React.useMemo(() => {
         if (!checked.ok) return 'panel'
-        return checked.ast.density === 'auto' ? inferDensity(checked.ast.root) : checked.ast.density
-      }, [checked])
+        return adaptive ? inferDensity(checked.ast.root) : checked.ast.density
+      }, [checked, adaptive])
       // 依赖必须是**内容**而不是对象引用：正文每次渲染都会产生新对象，用引用会导致状态被重置。
       const sampleKey = React.useMemo(() => {
         try {
@@ -894,17 +912,19 @@
         }
         if (item.type === 'row' || item.type === 'column') {
           const isRow = item.type === 'row'
-          const columns = ast.density === 'auto'
-            ? 'repeat(auto-fit, minmax(min(100%, 108px), 1fr))'
-            : `repeat(${Math.max(1, item.children.length)}, minmax(0, 1fr))`
+          const isFlowRow = isRow && adaptive
+          const style = { gap: Number(props.gap ?? DENSITY_STYLE[density].gap) }
+          if (isFlowRow) Object.assign(style, { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', minWidth: 0 })
+          else if (isRow) Object.assign(style, { display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, item.children.length)}, minmax(0, 1fr))` })
+          else Object.assign(style, { display: 'flex', flexDirection: 'column' })
           return h(
             'div',
-            {
-              key,
-              'data-iui-container': item.type,
-              style: { display: isRow ? 'grid' : 'flex', gridTemplateColumns: isRow ? columns : undefined, flexDirection: isRow ? undefined : 'column', gap: Number(props.gap ?? DENSITY_STYLE[density].gap) },
-            },
-            ...item.children.map((child, index) => node(child, `${key}-${index}`)),
+            { key, 'data-iui-container': item.type, style },
+            ...item.children.map((child, index) => {
+              const childKey = `${key}-${index}`
+              const content = node(child, childKey)
+              return isFlowRow && content !== null ? h('div', { key: childKey, style: flowItemStyle(child) }, content) : content
+            }),
           )
         }
         if (item.type === 'chart') {
@@ -952,6 +972,7 @@
         }
         return null
       }
+      const frame = DENSITY_STYLE[adaptive ? 'inline' : density]
       return h(
         'div',
         // 流式分片期间不挂入场动画：逐分片重挂载会让淡入闪成频闪
@@ -962,8 +983,9 @@
           'data-iui-degraded': String(degradedCount),
           'data-iui-streaming': streaming === true ? '1' : undefined,
           'data-iui-density': density,
+          'data-iui-surface': adaptive || density === 'inline' ? 'flow' : 'frame',
           'data-iui-derive-errors': String(deriveErrors),
-          style: { display: 'flex', flexDirection: 'column', minWidth: 0, overflowWrap: 'anywhere', ...DENSITY_STYLE[density] },
+          style: { display: 'flex', flexDirection: 'column', minWidth: 0, overflowWrap: 'anywhere', ...frame, gap: DENSITY_STYLE[density].gap },
         },
         // inline 密度嵌在正文里：标题用小号弱化样式，避免抢正文层级
         ast.title ? h('div', { style: density === 'inline' ? { fontSize: 11, fontWeight: 600, color: C.muted, lineHeight: '16px' } : { fontSize: 13, fontWeight: 600 } }, ast.title) : null,
