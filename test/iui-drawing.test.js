@@ -55,17 +55,19 @@ test('drawings keep safe siblings and discard unsupported graphics attributes', 
 test('numeric drawing expressions use local state and retain SVG field bounds', () => {
   const checked = check(`<ui><drawing width="300" height="120" label="负载示意">
     <rect x="20" y="20" width="$state.load * 10" height="30" opacity="$state.load / 10"/>
+    <label x="20" y="100" text="$state.load + ' 项'"/>
     <rect x="20" y="40" width="40" height="30" fill="$state.load + 1"/>
   </drawing></ui>`)
   assert.equal(checked.degraded, 1)
-  const shape = checked.ast.root.children[0]
-  const render = (load) => {
+  const [shape, label] = checked.ast.root.children
+  const render = (load, item = shape) => {
     const scope = { state: { load } }
-    return drawingProps('rect', shape.props, (value) => resolveValue(value, scope),
-      (key) => evaluateExpr(shape.geometryExpressions[key], scope).value)
+    return drawingProps(item.type, item.props, (value) => resolveValue(value, scope),
+      (key) => evaluateExpr(item.geometryExpressions[key], scope).value)
   }
   assert.equal(render(4).width, 40)
   assert.equal(render(7).opacity, 0.7)
+  assert.equal(render(6, label).text, '6 项')
   assert.equal(render(11), null)
 })
 
@@ -82,7 +84,8 @@ test('drawing geometry, path operations and viewport have bounded safe ranges', 
     'm .5 -.5 1 0 h 4 v 2 c 1 1 3 3 5 5 s 6 6 8 8 q 1 1 2 2 t 3 4 a 5 5 0 0 1 6 7 z')
   assert.equal(drawingProps('drawing', { width: '$state.w', height: 32, label: '边界' }), null)
   assert.equal(drawingProps('drawing', { width: 32, height: 1025, label: '边界' }), null)
-  assert.equal(drawingProps('rect', { x: 1, y: 1, width: 0, height: 40 }), null)
+  assert.equal(drawingProps('rect', { x: 1, y: 1, width: 0, height: 40 }).width, 0)
+  assert.equal(drawingProps('rect', { x: 1, y: 1, width: -1, height: 40 }), null)
   assert.equal(drawingProps('label', { x: 1, y: 1, text: '大字'.repeat(120) }), null)
   assert.equal(check('<ui><path d="M 0 0 h 4"/></ui>').ok, false)
   const many = '<circle cx="0" cy="0" r="1"/>'.repeat(65)

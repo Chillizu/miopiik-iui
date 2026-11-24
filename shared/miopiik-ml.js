@@ -50,6 +50,7 @@ export const ML_TAGS = Object.freeze({
   progress: 'progress',
   empty: 'empty',
   chart: 'chart',
+  views: 'views',
   drawing: 'drawing',
   view: 'view',
   rect: 'rect',
@@ -73,7 +74,9 @@ export const ML_TAGS = Object.freeze({
   button: 'button',
 })
 
-const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, drawing: true, view: true })
+const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, views: true, drawing: true, view: true })
+const VIEW_LAYOUTS = new Set(['row', 'column', 'grid', 'card', 'details'])
+const DRAWING_CONTENT = new Set(['rect', 'circle', 'line', 'path', 'label', 'view'])
 // 交互控件和图形原语隐式闭合。step 也保留旧的无闭合写法。
 const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true, rect: true, circle: true, line: true, path: true, label: true })
 
@@ -88,6 +91,15 @@ function decodeEntities(text) {
 
 function isSpace(ch) {
   return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r'
+}
+
+/** Models sometimes close a single-quoted JSON state string with a curly quote. */
+function closesStateString(source, start, end) {
+  if (source[start] !== '"' || source[end - 1] !== '"' || (source[end] !== '‘' && source[end] !== '’')) return false
+  let next = end + 1
+  while (isSpace(source[next])) next += 1
+  if (!source.startsWith('/>', next)) return false
+  try { return typeof JSON.parse(decodeEntities(source.slice(start, end))) === 'string' } catch { return false }
 }
 
 /** 从 index 处的 '<' 解析一个标签；失败返回 null。 */
@@ -141,7 +153,8 @@ function readTag(source, index) {
     if (quote === '"' || quote === "'") {
       const valueStart = j + 1
       let k = valueStart
-      while (k < source.length && source[k] !== quote) k += 1
+      const recoverStateString = name === 'state' && key === 'value' && quote === "'"
+      while (k < source.length && source[k] !== quote && !(recoverStateString && closesStateString(source, valueStart, k))) k += 1
       attrs[key] = decodeEntities(source.slice(valueStart, k))
       i = k + 1
     } else {
@@ -228,6 +241,8 @@ function normalizeAttrs(element) {
   if (element.name === 'chart') {
     if (attrs.type !== undefined && attrs.kind === undefined) attrs.kind = attrs.type
     if (attrs.data !== undefined && attrs.series === undefined) attrs.series = attrs.data
+    if (attrs.xScale === undefined) attrs.xScale = attrs['x-scale']
+    if (attrs.xUnit === undefined) attrs.xUnit = attrs['x-unit']
     delete attrs.type
     delete attrs.data
   }
@@ -267,6 +282,36 @@ function readProps(attrs, keys, rawKeys = null) {
   return props
 }
 
+function readPaneValue(raw) {
+  if (typeof raw === 'string' && raw.trim().startsWith('"')) {
+    try { return JSON.parse(raw) } catch { /* Preserve unknown values for validation. */ }
+  }
+  return readValue(raw)
+}
+
+/** Recover consecutive content panes without inventing bindings or moving surrounding content. */
+function groupPeerViews(nodes) {
+  const grouped = []
+  let panes = []
+  const flush = () => {
+    if (panes.length >= 2) grouped.push({ id: 'ml-views', type: 'views', props: {}, children: panes })
+    else grouped.push(...panes)
+    panes = []
+  }
+  for (const node of nodes) {
+    const contentPane = node.type === 'view'
+      && node.children.every((child) => !DRAWING_CONTENT.has(child.type))
+      && (typeof node.props.caption === 'string' || node.children.some((child) => child.degraded !== true))
+    if (contentPane) panes.push(node)
+    else {
+      flush()
+      grouped.push(node)
+    }
+  }
+  flush()
+  return grouped
+}
+
 const TEXT_PROPS = Object.freeze({
   text: ['text'],
   p: ['gap'],
@@ -283,7 +328,8 @@ const TEXT_PROPS = Object.freeze({
   empty: ['text', 'title', 'description', 'icon'],
   divider: ['label'],
   metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
-  chart: ['kind', 'type', 'series', 'source', 'title'],
+  chart: ['kind', 'type', 'series', 'source', 'title', 'xScale', 'xUnit', 'cursor'],
+  views: ['label', 'bind'],
   drawing: ['width', 'height', 'label'],
   view: ['label', 'caption'],
   rect: ['x', 'y', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],
@@ -312,7 +358,7 @@ const TEXT_PROPS = Object.freeze({
 })
 
 /** 必须保留源码字符串的属性（表达式等），不得被 JSON/数字归一吞掉。 */
-const RAW_PROPS = Object.freeze({ derive: ['expr'], drawing: ['label'], view: ['label', 'caption'], line: ['strokeDasharray'], path: ['d'], label: ['text'] })
+const RAW_PROPS = Object.freeze({ derive: ['expr'], views: ['label'], drawing: ['label'], view: ['label', 'caption'], line: ['strokeDasharray'], path: ['d'], label: ['text'] })
 
 /**
  * 解析 miopiik-ml 源码。
@@ -472,7 +518,9 @@ export function parseMiopiikMl(source, { streaming = false } = {}) {
         item.kind === 'node' ? item.node : textNode(item, `ml-fallback-${index}`),
       )
       if (children.length === 0 && type !== 'view') return degrade('容器内没有可渲染内容')
-      return compiled({ ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }, children)
+      const props = { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }
+      if (type === 'view' && attrs.value !== undefined) props.value = readPaneValue(attrs.value)
+      return compiled(props, VIEW_LAYOUTS.has(type) ? groupPeerViews(children) : children)
     }
     const props = { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }
     if (type === 'step' && element.children.every((child) => child.name === '#text')) {
@@ -486,9 +534,9 @@ export function parseMiopiikMl(source, { streaming = false } = {}) {
   }
 
   const compiled = children.map((child) => compile(child))
-  const mapped = compiled.map((item, index) =>
+  const mapped = groupPeerViews(compiled.map((item, index) =>
     item.kind === 'node' ? item.node : textNode(item, `ml-top-${index}`),
-  )
+  ))
   let rootNode = null
   if (mapped.length === 1) rootNode = mapped[0]
   else if (mapped.length > 1) rootNode = { id: 'ml-root', type: 'column', props: {}, children: mapped }

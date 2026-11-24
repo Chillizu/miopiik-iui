@@ -33,9 +33,10 @@ export const REGISTRY = Object.freeze({
   callout: { props: { tone: 'string?', title: 'string?', text: 'string?' }, children: true },
   progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
   empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
-  chart: { props: { kind: 'string', series: 'value', source: 'string?' }, children: false },
+  chart: { props: { kind: 'string', series: 'value', source: 'string?', xScale: 'string?', xUnit: 'string?', cursor: 'value?' }, children: false },
+  views: { props: { label: 'string?', bind: 'string?' }, children: true },
   drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
-  view: { props: { label: 'string', caption: 'string?' }, children: true },
+  view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
   rect: { props: { x: 'number', y: 'number', width: 'number', height: 'number', rx: 'number?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
   circle: { props: { cx: 'number', cy: 'number', r: 'number', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
   line: { props: { x1: 'number', y1: 'number', x2: 'number', y2: 'number', stroke: 'string?', strokeWidth: 'number?', strokeDasharray: 'string?', opacity: 'number?' }, children: false },
@@ -102,11 +103,18 @@ export function resolveValue(value, scope) {
  * 把受信图表输入统一变成 [标签, 数值] 点列。
  * 模型常给数字数组、[label,value] 数组或 {label,value}；三种都受限解析，不用表达式。
  */
-export function chartMatrix(series) {
+export function chartMatrix(series, xScale) {
   if (!Array.isArray(series) || series.length === 0 || series.length > LIMITS.series) return null
   const rows = []
   for (let i = 0; i < series.length; i += 1) {
     const item = series[i]
+    if (xScale === 'linear') {
+      if (!Array.isArray(item)) return null
+      const [x, y] = item
+      if (!Number.isFinite(x) || !Number.isFinite(y) || (i > 0 && x < rows[i - 1][0])) return null
+      rows.push([x, y])
+      continue
+    }
     let label = String(i + 1)
     let raw
     if (typeof item === 'number') raw = item
@@ -199,7 +207,7 @@ const DRAWING_STATIC = new Set(['d', 'align', 'strokeDasharray'])
 const DRAWING_AXIS = [-2048, 2048]
 const DRAWING_VIEWPORT = [24, 1024]
 const DRAWING_LENGTH = [0.1, 2048]
-const DRAWING_NUMERIC_LIMITS = { width: DRAWING_LENGTH, height: DRAWING_LENGTH, r: DRAWING_LENGTH, rx: [0, 1024], size: [8, 64], strokeWidth: [0, 24], opacity: [0, 1] }
+const DRAWING_NUMERIC_LIMITS = { width: [0, 2048], height: [0, 2048], r: DRAWING_LENGTH, rx: [0, 1024], size: [8, 64], strokeWidth: [0, 24], opacity: [0, 1] }
 const DRAWING_PATH_ARITY = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0 }
 const DRAWING_PATH_TOKEN = /[MmLlHhVvCcSsQqTtAaZz]|[+-]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[Ee][+-]?[0-9]+)?|[ ,\t\r\n]+/gu
 
@@ -266,10 +274,11 @@ function drawingAttribute(type, key, value) {
 }
 
 /** SVG props are allowlisted and revalidated after resolving local values. */
-export function drawingProps(type, props, resolve = null, inlineNumber = null) {
+export function drawingProps(type, props, resolve = null, inlineValue = null) {
   if (type !== 'drawing' && type !== 'view' && !DRAWING_SHAPES.has(type)) return null
   const safe = {}
   for (const [key, rule] of Object.entries(REGISTRY[type].props)) {
+    if (type === 'view' && key === 'value') continue
     let value = props?.[key]
     if (value === undefined && rule.endsWith('?')) continue
     const canBind = !DRAWING_STATIC.has(key) && (type !== 'drawing' || key === 'label')
@@ -281,10 +290,13 @@ export function drawingProps(type, props, resolve = null, inlineNumber = null) {
       }
       value = resolve(value)
     }
-    const calculated = !bound && DRAWING_SHAPES.has(type) && rule.startsWith('number') && typeof value === 'string'
-      ? inlineNumber?.(key, value)
+    const canCalculate = DRAWING_SHAPES.has(type) && (rule.startsWith('number') || (type === 'label' && key === 'text'))
+    const calculated = !bound && canCalculate && typeof value === 'string'
+      ? inlineValue?.(key, value)
       : undefined
-    const normalized = calculated !== undefined && resolve === null ? value : drawingAttribute(type, key, calculated ?? value)
+    const normalized = calculated !== undefined && resolve === null
+      ? value
+      : drawingAttribute(type, key, calculated === undefined ? value : calculated)
     if (normalized === null && type === 'view' && key === 'caption' && (bound || typeof value === 'string' && value.trim() === '')) continue
     if (normalized === null) return null
     safe[key] = normalized
@@ -453,9 +465,9 @@ export function validateAst(input) {
     if (!Object.hasOwn(REGISTRY, node.type)) return failNode(node, path, `未知组件类型 ${node.type}`)
     const shape = DRAWING_SHAPES.has(node.type)
     if (parentType === 'drawing' && !shape && node.type !== 'view') return failNode(node, path, 'drawing 只接受图形原语与 view')
-    if (node.type === 'view' && parentType !== 'drawing') return failNode(node, path, 'view 需要直接放在 drawing 里')
-    if (parentType === 'view' && !shape) return failNode(node, path, 'view 只接受图形原语')
-    if (shape && parentType !== 'drawing' && parentType !== 'view') return failNode(node, path, '图形原语需要放在 drawing 或 view 里')
+    if (node.type === 'view' && parentType !== 'drawing' && parentType !== 'views') return failNode(node, path, 'view 需要直接放在 drawing 或 views 里')
+    if (parentType === 'drawing-view' && !shape) return failNode(node, path, 'drawing 的 view 只接受图形原语')
+    if (shape && parentType !== 'drawing' && parentType !== 'drawing-view') return failNode(node, path, '图形原语需要放在 drawing 或其 view 里')
     const spec = REGISTRY[node.type]
     if (spec.children && Array.isArray(node.children) && node.children.length > LIMITS.nodes - nodes) {
       fatal.push(`节点数超过 ${LIMITS.nodes}`)
@@ -465,9 +477,35 @@ export function validateAst(input) {
     if (props.weight !== undefined && !WEIGHTS.includes(props.weight)) {
       return failNode(node, path, 'weight 只能是 primary/secondary/optional')
     }
-    const writesState = node.type === 'button' ? LOCAL_BUTTON_ACTIONS.includes(props.action) : Object.hasOwn(spec.props, 'bind')
+    let writesState = Object.hasOwn(spec.props, 'bind')
+    if (node.type === 'button') writesState = LOCAL_BUTTON_ACTIONS.includes(props.action)
+    if (node.type === 'views') writesState = props.bind !== undefined
     const binding = writesState ? readBinding(props.bind) : null
     if (binding !== null && binding.scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
+    if (node.type === 'views') {
+      const panes = node.children
+      if (!Array.isArray(panes) || panes.length < 2 || panes.length > LIMITS.options || panes.some((pane) => pane?.type !== 'view')) {
+        return failNode(node, path, `views 需要 2–${LIMITS.options} 个 view`)
+      }
+      if (props.label !== undefined && readBinding(props.label).scope === undefined && drawingAttribute('views', 'label', props.label) === null) {
+        return failNode(node, path, 'views.label 需要简短文本或状态绑定')
+      }
+      if (binding !== null) {
+        const values = panes.map((pane) => pane.props?.value)
+        if (values.some((value) => value === undefined) || new Set(values).size !== values.length) {
+          return failNode(node, path, '绑定状态的 views 需要为每个 view 指定不同的 value')
+        }
+      }
+    }
+    if (node.type === 'view' && parentType === 'views') {
+      const { value } = props
+      if (value !== undefined && (!fitsStateBudget(value) || (value !== null && typeof value === 'object'))) {
+        return failNode(node, path, 'view.value 需要安全的 JSON 标量')
+      }
+      if ((!Array.isArray(node.children) || node.children.length === 0) && (typeof props.caption !== 'string' || props.caption.trim() === '')) {
+        return failNode(node, path, 'views 的 view 需要正文或图注')
+      }
+    }
     if (node.type === 'segmented') {
       const options = props.options
       if (!Array.isArray(options) || options.length === 0 || options.length > LIMITS.options) {
@@ -610,8 +648,13 @@ export function validateAst(input) {
     let datasetExpression = null
     if (node.type === 'chart') {
       if (!['bar', 'line', 'donut'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut')
+      if (props.xScale !== undefined && (props.kind !== 'line' || props.xScale !== 'linear')) return failNode(node, path, '数值横轴只用于折线图')
+      if (props.cursor !== undefined && (props.xScale !== 'linear'
+        || (!Number.isFinite(props.cursor) && readBinding(props.cursor).scope !== 'state'))) {
+        return failNode(node, path, 'chart.cursor 需要数值横轴，以及数值或 $state.* 绑定')
+      }
       const binding = readBinding(props.series)
-      if (binding.scope === undefined && chartMatrix(binding.literal) === null) {
+      if (binding.scope === undefined && chartMatrix(binding.literal, props.xScale) === null) {
         datasetExpression = compileDataset(binding.literal)
         if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')
       }
@@ -708,12 +751,15 @@ export function validateAst(input) {
     }
     const children = []
     if (spec.children && Array.isArray(node.children)) {
+      const childParent = node.type === 'view' && parentType === 'drawing' ? 'drawing-view' : node.type
       for (const [index, child] of node.children.entries()) {
-        const walked = walk(child, depth + 1, `${path}.children[${index}]`, node.type)
+        const walked = walk(child, depth + 1, `${path}.children[${index}]`, childParent)
         if (walked === null) return null
+        if (node.type === 'views' && walked.type !== 'view') continue
         children.push(walked)
       }
     }
+    if (node.type === 'views' && children.length === 0) return failNode(node, path, 'views 没有可用视图')
     if (comparison && !children.some((child) => DRAWING_SHAPES.has(child.type) || child.type === 'view' && child.children.some((part) => DRAWING_SHAPES.has(part.type)))) {
       return failNode(node, path, 'drawing 对照需要至少一个可验证的图形原语')
     }
@@ -721,6 +767,7 @@ export function validateAst(input) {
     const allowed = new Set([...Object.keys(spec.props), ...UNIVERSAL_PROPS])
     const safeProps = {}
     for (const key of Object.keys(props)) {
+      if (node.type === 'view' && parentType === 'drawing' && key === 'value') continue
       if (allowed.has(key)) safeProps[key] = props[key]
     }
     const normalized = { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props: safeProps, children }

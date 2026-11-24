@@ -192,6 +192,22 @@ const DRAWING_COMPARISON_ML = `<ui density="auto" fallback="蓝色圆点仅出�
   </drawing>
 </ui>`
 
+const BOUND_VIEWS_ML = `<ui density="auto">
+  <state name="phase" value='"before"'/>
+  <views label="变化过程" bind="$state.phase">
+    <view label="切换前" value="before"><text>初始状态</text></view>
+    <view label="切换后" value="after" caption="附属解释"><metric label="结果" value="37"/></view>
+  </views>
+  <metric label="共享相位" value="$state.phase"/>
+  <button label="返回初始" action="set" bind="$state.phase" value="before"/>
+</ui>`
+
+const NUMERIC_AXIS_ML = `<ui density="auto">
+  <state name="t" value="0"/>
+  <slider label="观察时刻" bind="$state.t" min="0" max="20" step="1" unit="秒"/>
+  <chart kind="line" x-scale="linear" x-unit="秒" cursor="$state.t" series='[[0,0],[4,60],[8,120],[14,0],[20,0]]'/>
+</ui>`
+
 const R3_WEIGHT_AST = {
   title: '语义权重',
   root: {
@@ -505,6 +521,7 @@ const MAIN_RUN = `
     const pageHost=document.createElement('div');
     document.getElementById('root').appendChild(pageHost);
     mountElement(page.render({view:'page'}), pageHost);
+    pageHost.setAttribute('data-plugin-settings-tabs', String(pageHost.querySelectorAll('[role=tablist]').length));
     const embeds=globalThis.__miopiikMarkdownEmbeds;
     const mountBlock=(raw)=>{const host=document.createElement('div');document.getElementById('root').appendChild(host);mountElement(embeds.renderBlock(raw),host);return host};
     const demo=document.createElement('div');
@@ -521,6 +538,8 @@ const MAIN_RUN = `
       autoLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML)}),
       legacyLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML.replace(' density="auto"', ''))}),
       comparison:mountBlock(${JSON.stringify(DRAWING_COMPARISON_ML)}),
+      boundViews:mountBlock(${JSON.stringify(BOUND_VIEWS_ML)}),
+      numericAxis:mountBlock(${JSON.stringify(NUMERIC_AXIS_ML)}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
       copy:mountBlock(${JSON.stringify(JSON.stringify(R3_COPY_AST))}),
@@ -895,6 +914,28 @@ const MAIN_RUN = `
         compare.querySelector('button[role="switch"]').click();
         await wait(25);
         check('comparisonRestored', () => laterActive() ? true : '重新显示后项时没有保留选择');
+        const boundViews = r3.boundViews;
+        const tabs = () => [...boundViews.querySelectorAll('[role=tab]')];
+        tabs()[1]?.click();
+        await wait(25);
+        const switchedPanel = () => boundViews.querySelector('[role=tabpanel]:not([hidden])');
+        check('boundViews', () => tabs()[1]?.getAttribute('aria-selected') === 'true'
+          && switchedPanel()?.id === tabs()[1]?.getAttribute('aria-controls')
+          && switchedPanel()?.textContent.includes('附属解释')
+          && boundViews.querySelector('[data-iui-metric="共享相位"]')?.textContent.includes('after')
+          ? true : '切换关联合成视图后未同步外部读数');
+        boundViews.querySelector('button[data-iui-action]')?.click();
+        await wait(25);
+        check('boundViewsReset', () => tabs()[0]?.getAttribute('aria-selected') === 'true'
+          && switchedPanel()?.textContent === '初始状态' ? true : '外部动作未同步视图');
+        check('numericAxis', () => {
+          const plot = r3.numericAxis.querySelector('[data-iui-chart-scale="linear"]');
+          const xs = plot?.querySelector('polyline')?.getAttribute('points')?.split(' ').map(point => Number(point.split(',')[0]));
+          const cursor = plot?.querySelector('[data-iui-chart-cursor="0"]');
+          return xs?.length === 5 && cursor !== null && cursor !== undefined
+            && Math.abs((xs[3] - xs[2]) / (xs[2] - xs[1]) - 1.5) < 0.00001
+            ? true : '时间间距未按实际比例绘制';
+        });
         check('r3Weight', () => {
           const host = r3.weight;
           const primary = host.querySelector('[data-iui-weight="primary"]');
@@ -1175,7 +1216,7 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-integration="ok"/u,'插件页插槽必须注册成功（且只注册一个）')
   assert.match(html,/data-errors=""/u,'浏览器不应有运行时错误')
   assert.match(html,/data-iui-plugin-settings="1"/u)
-  assert.doesNotMatch(html,/role="tablist"/u,'页面里不该有二级页签')
+  assert.match(html,/data-plugin-settings-tabs="0"/u,'插件设置页里不该有二级页签')
   assert.match(html,/role="switch"/u)
   assert.match(html,/data-iui-settings-preview="live"/u,'预览必须连接真实 IUI 注册表')
   assert.match(html,/data-iui-output="ok"/u,'预览应通过真正的 AST 渲染器')
@@ -1244,6 +1285,9 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-comparison-fallback="ok"/u,'选中条件隐藏时应回退到第一个可用条件')
   assert.match(html,/data-comparison-restored="ok"/u,'普通重渲染应保留显式选择')
   assert.match(html,/data-comparison-live="ok"/u,'尚未定稿的流式对照选项应禁用')
+  assert.match(html,/data-bound-views="ok"/u,'切换完整视图应更新共享状态')
+  assert.match(html,/data-bound-views-reset="ok"/u,'外部动作应切换完整视图')
+  assert.match(html,/data-numeric-axis="ok"/u,'时间轴应保留数值间距和当前时刻标记')
   assert.match(html,/data-r3-weight="ok"/u,'weight 三态应输出 data-iui-weight 并给出强弱视觉（primary 加粗 / secondary·optional 弱化）')
   assert.match(html,/data-r3-details-closed="ok"/u,'details 初始应收起并带 aria-expanded=false')
   assert.match(html,/data-r3-details-open="ok"/u,'details 由 IuiSheet 受控展开（aria-controls 指向内容）')

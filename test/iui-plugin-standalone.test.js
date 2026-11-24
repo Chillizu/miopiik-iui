@@ -2,14 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { Script, createContext } from 'node:vm'
-import { apply as hostApply, IUI_CHARTER } from '../index.js'
+import { apply as hostApply, Config, IUI_CHARTER, IUI_VISUAL_GUIDANCE } from '../index.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 import { validateAst } from '../shared/iui-ast.js'
 
 const path = new URL('../', import.meta.url)
 const text = (file) => readFileSync(new URL(file, path), 'utf8')
 
-function loadStandalonePlugin({ preference = null } = {}) {
+function loadStandalonePlugin({ preference = null, configForm } = {}) {
   let loaded
   let copied = ''
   const React = {
@@ -20,13 +20,14 @@ function loadStandalonePlugin({ preference = null } = {}) {
     useLayoutEffect() {},
     useRef() { return { current: null } },
     useCallback(value) { return value },
+    useSyncExternalStore(_subscribe, getSnapshot) { return getSnapshot() },
   }
   // The page prefers the official primitives; the stub keeps the same contract.
   const primitives = {
-    Switch({ checked, onChange, label }) {
+    Switch({ checked, onChange, label, disabled }) {
       return React.createElement('button', {
-        role: 'switch', 'aria-checked': checked, 'aria-label': label,
-        onClick: () => onChange(!checked),
+        role: 'switch', 'aria-checked': checked, 'aria-label': label, disabled,
+        onClick: () => !disabled && onChange(!checked),
       })
     },
     Button({ onClick, children }) { return React.createElement('button', { onClick }, children) },
@@ -54,6 +55,12 @@ function loadStandalonePlugin({ preference = null } = {}) {
   const slots = []
   plugin.apply({
     effect(callback) { dispose = callback() },
+    ...(configForm === undefined ? {} : {
+      inject(names, callback) {
+        assert.equal(Array.from(names).join(','), 'configForms')
+        callback({ configForms: { get(id) { assert.equal(id, 'miopiik-iui'); return configForm } } })
+      },
+    }),
     slots: {
       inject(name, register) {
         assert.ok(['plugins.bundle.config', 'settings.plugins.tab'].includes(name), 'unexpected slot: ' + name)
@@ -107,11 +114,40 @@ test('Host 输出约定独立注入，不占用工具面', () => {
       callback({ systemPrompt: { section(value) { sections.push(value) } } })
     },
   })
-  assert.equal(sections.length, 1)
+  assert.equal(sections.length, 2)
   assert.equal(sections[0].name, 'miopiik-iui:render-contract')
   assert.match(sections[0].text, /miopiik-ml/u)
+  assert.equal(sections[1].text(), '')
   assert.match(IUI_CHARTER, /由你按内容判断/u)
   assert.doesNotMatch(IUI_CHARTER, /优先普通 Markdown/u)
+})
+
+test('视觉构思默认关闭，profile 的 volatile 更新只改变额外提示段', () => {
+  const write = Symbol.for('cosmokit.volatile.write')
+  const config = Config()
+  const other = Config()
+  assert.equal(other.enhancedVisuals.get(), false)
+  assert.throws(() => Config({ enhancedVisuals: 'false' }), /Expected a boolean/u)
+  const schema = Config.toJSON()
+  const field = schema.refs[schema.refs[schema.uid].dict.enhancedVisuals]
+  assert.deepEqual(field, { type: 'boolean', meta: { default: false, volatile: true } })
+  const childSchema = Config.dict.enhancedVisuals.toJSON()
+  delete childSchema.refs[childSchema.uid].meta.volatile
+  assert.equal(Config.dict.enhancedVisuals.meta.volatile, true, '宿主移除表单的 volatile 标记时不应改写源 schema')
+
+  const sections = []
+  hostApply({ inject(_names, callback) {
+    callback({ systemPrompt: { section(value) { sections.push(value) } } })
+  } }, config)
+  assert.equal(sections[1].name, 'miopiik-iui:visual-guidance')
+  assert.equal(sections[1].interpolate, false)
+  assert.equal(sections[1].text(), '')
+  config.enhancedVisuals[write](true)
+  assert.equal(sections[1].text(), IUI_VISUAL_GUIDANCE)
+  assert.equal(sections[0].text, IUI_CHARTER)
+  assert.equal(other.enhancedVisuals.get(), false)
+  config.enhancedVisuals[write](false)
+  assert.equal(sections[1].text(), '')
 })
 
 test('客户端在没有 Mind/Ink/Operator 时可加载、渲染并注销', () => {
@@ -206,4 +242,34 @@ test('无受信标记的 Markdown 不切分，行内标记无执行能力', () =
   const badge = registry.renderInline({ type: 'badge', props: { tone: 'success', text: '好了' } })
   assert.equal(badge.type, 'span')
   assert.equal(badge.props['data-iui-badge'], 'success')
+})
+
+test('增强生成读取 profile 的确认状态，并通过 Host 持久化，不写浏览器偏好', async () => {
+  let snapshot = { status: 'ready', value: { enhancedVisuals: false }, writable: true }
+  let accepted = false
+  const writes = []
+  const page = loadStandalonePlugin({ configForm: {
+    subscribe() { return () => {} },
+    getSnapshot() { return snapshot },
+    async set(key, value) {
+      writes.push([key, value])
+      if (accepted) snapshot = { ...snapshot, value: { enhancedVisuals: value } }
+      return accepted
+    },
+  } })
+  const toggle = () => renderPage(page.slots).find((node) => node.props?.['aria-label'] === '增强视觉构思')
+  assert.equal(toggle().props['aria-checked'], false)
+  await toggle().props.onClick()
+  assert.equal(toggle().props['aria-checked'], false)
+  accepted = true
+  await toggle().props.onClick()
+  assert.equal(toggle().props['aria-checked'], true)
+  snapshot = { ...snapshot, writable: false }
+  assert.equal(toggle().props.disabled, true)
+  await toggle().props.onClick()
+  assert.deepEqual(writes, [['enhancedVisuals', true], ['enhancedVisuals', true]])
+  assert.equal(page.storage.size, 0)
+  assert.equal(page.getReloads(), 0)
+  snapshot = { status: 'unavailable' }
+  assert.equal(toggle(), undefined)
 })

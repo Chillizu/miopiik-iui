@@ -77,7 +77,7 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 
 | 文件 | 作用 |
 |---|---|
-| [index.js](index.js) | host 入口。注入一节 system prompt（`miopiik-iui:render-contract`，order 670，关闭变量插值），定义精简输出约定；不注册工具。 |
+| [index.js](index.js) | host 入口。注册 IUI 输出约定和可选的视觉构思指引，不注册工具。 |
 | [shared/markdown-segments.js](shared/markdown-segments.js) | 无状态切分器：切分围栏块与行内 token；模型漏写围栏时兼容识别行首顶层 `<ui>...</ui>`。 |
 | [shared/miopiik-ml.js](shared/miopiik-ml.js) | `miopiik-ml` 标签语法解析器，产出待校验的 AST 文档。 |
 | [shared/iui-ast.js](shared/iui-ast.js) | `iui/1` 校验器：`REGISTRY` 白名单、`LIMITS` 预算、绑定路径解析、表格/图表归一与局部降级。 |
@@ -174,12 +174,14 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 | 泳道列 | `lane` | 一列；仅接受 `node` 子节点（1-8 个）。 |
 | 图节点 | `node` | `id`（必填、图内唯一、安全标识符）、`label`（必填）、`tone`、`note`；也可直接写在 `diagram` 里（汇成首列）。 |
 | 图连线 | `edge` | `from`/`to`（节点 id）、`label`、`kind`（默认 `solid` / `dashed`）。未知引用只降级该边；纯文本行按注释渲染。 |
+| 视图切换 | `views` | 包含 2–6 个 `view`，可在其中组合正文、图形和指标。每项有 `label` 和可选 `caption`。可通过 `bind="$state.*"` 联动其它控件，绑定时各项需有不同的标量 `value`。 |
+| 数值折线横轴 | `chart kind="line" x-scale="linear"` | `series` 为按横坐标排序的 `[x,y]` 数值点列。`x-unit` 标注横轴单位，`cursor="$state.time"` 可随状态标记当前横坐标。 |
 
 任何组件都可写 `when="$state.*"`（可配 `is="值"` 做等值切换），按本地状态控制自身显隐。组件白名单由 [shared/iui-ast.js](shared/iui-ast.js) 的 `REGISTRY` 强制执行，未知标签会局部降级。
 
 ### 本地状态与绑定
 
-绑定仅支持点号路径读取：`$state.a.b` 与 `$data.a.b`，不支持表达式求值、函数调用或 `eval`。交互只有一个模型：**控件写 `$state`，其余读 `$state`**——`segmented`（单选）、`toggle`（布尔）、`slider`（数值）、`input`（文本）把控件值写入 `$state.*` 路径；任意属性可读 `$state.*`；`when`/`is` 控制节点显隐；`table filter` 在浏览器内过滤行。所有交互只更新当前消息内的本地 React 状态并重算关联节点，不发送消息、不调用工具、不触发模型回合。当前客户端未接入外部数据通道，`data` 作用域为空（`$data.*` 解析为缺失值），预留给后续只读数据注入。
+控件写入本地 `$state`，组件通过 `$state.a.b` 等点号路径读取。受限表达式用于 `derive`、图表和表格数据、显隐，以及绘图坐标和标签。支持四则、比较与固定的函数集合，其中 `sin`、`cos` 使用弧度，也可使用 `exp`。交互在浏览器内重算当前消息，无需发起模型请求。`$data` 保留给未来的只读输入，目前解析为空缺。
 
 ### 旧 `ink-view` 协议回放
 
@@ -189,7 +191,8 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 插件只注册一个 DSH 界面入口：**插件 → 已安装 → MiOpIIk IUI**（`plugins.bundle.config`）。用户能调整和想看的都在这一页——不注册设置页页签，不写小作文：
 
-- **渲染开关**：浏览器本地「在聊天中显示 IUI」偏好（单开关，存 `localStorage`，切换后刷新页面让历史消息重渲）。
+- **渲染开关**：浏览器本地「在聊天中显示 IUI」偏好（存 `localStorage`，切换后刷新页面让历史消息重渲）。
+- **增强视觉构思**：默认关闭。开启后为当前 profile 增加一段提示，帮助模型选择构图、组织视图，并检查控件、图形和读数的联动。
 - **实时预览**：真实渲染器 + 演示数据；切换只改本地状态。
 - **状态行**：插件版本、宿主补丁状态（已加载 / 未检测到）、渲染器连接。
 - **可复制示例**：可直接粘贴测试的 Markdown 片段。
@@ -369,11 +372,20 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 |---|---|---|
 | 浏览器偏好 `miopiik.markdownEmbeds` | 浏览器 `localStorage` | `"0"` 关闭当前浏览器的聊天内 IUI 渲染；其他值或未设置时开启。切换后自动刷新页面。 |
 | 渲染开关（UI） | **插件 → 已安装 → MiOpIIk IUI** | `miopiik.markdownEmbeds` 的界面开关，仅作用于当前浏览器。 |
+| `enhancedVisuals` | DSH profile 的 `miopiik-iui` 配置 | 布尔值，默认 `false`。「增强视觉构思」修改此项，下次模型请求装配提示词时生效。 |
 | 宿主补丁标记 `globalThis.__miopiikMarkdownEmbedsHost` | 浏览器 `globalThis` | `ui-chat` 挂钩加载时置为 `true`，供设置页诊断读取。 |
 | 嵌入注册表 `globalThis.__miopiikMarkdownEmbeds` | 浏览器 `globalThis` | 由 `client.js` 注册（含 `segments`、`renderInline`、`renderBlock`）。 |
 | bundle patch `cordis.patch.yml` | 包根目录（`dsh.bundle.patch`） | 向 DSH 声明 host 与 client 入口。 |
 
 浏览器渲染开关仅控制前端呈现；插件在 profile 中启用期间，`index.js` 的系统提示词片段保持注入。
+
+也可在目标 profile 的 `cordis.patch.yml` 中开启增强模式。需要对比开关效果时，两种模式各开一个新会话，避免历史提示和回复影响对照。
+
+```yaml
+- id: miopiik-iui
+  config:
+    enhancedVisuals: true
+```
 
 ## 安全与权限
 

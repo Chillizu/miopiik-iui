@@ -75,7 +75,7 @@ Files and responsibilities:
 
 | File | Role |
 |---|---|
-| [index.js](index.js) | Host entry. Injects one system-prompt section (`miopiik-iui:render-contract`, order 670, interpolation disabled) with the output convention. Registers no tools. |
+| [index.js](index.js) | Host entry. Registers the IUI output convention and optional visual composition guidance. Registers no tools. |
 | [shared/markdown-segments.js](shared/markdown-segments.js) | Stateless splitter for fenced blocks and inline tokens. Recognizes a line-start top-level `<ui>...</ui>` block when a fence is omitted. |
 | [shared/miopiik-ml.js](shared/miopiik-ml.js) | Parser for the `miopiik-ml` tag grammar; produces an unvalidated AST document. |
 | [shared/iui-ast.js](shared/iui-ast.js) | Validator for `iui/1`: `REGISTRY` whitelist, `LIMITS`, binding parser, table/chart normalization, and local degradation. |
@@ -172,12 +172,14 @@ Grammar rules:
 | Lane | `lane` | One column; accepts `node` children only (1-8). |
 | Diagram node | `node` | `id` (required, unique per diagram, safe identifier), `label` (required), `tone`, `note`. May also sit directly in `diagram` (collected into the first lane). |
 | Diagram edge | `edge` | `from`/`to` (node ids), `label`, `kind` (`solid` default / `dashed`). Unknown ids degrade that edge only; plain text lines render as annotations. |
+| View switcher | `views` | Two to six `view` children with a `label`, optional `caption`, and display content. Optional `bind="$state.*"` shares the selection with other controls. Each bound view needs a distinct scalar `value`. |
+| Numeric line axis | `chart kind="line" x-scale="linear"` | `series` takes `[x,y]` numeric pairs ordered by x. Optional `x-unit` labels the axis and `cursor="$state.time"` marks the current x value. |
 
 Any component may carry `when="$state.*"` (optionally with `is="value"` for equality switching) to gate its own visibility against local state. The component whitelist is defined by `REGISTRY` in [shared/iui-ast.js](shared/iui-ast.js). Unlisted tag names degrade locally.
 
 ### Local state and bindings
 
-Bindings support dot-path reads only: `$state.a.b` and `$data.a.b`. Expression evaluation, function calls, and `eval` are absent. Interaction follows one model: **controls write `$state`, everything else reads it**. `segmented` (single choice), `toggle` (boolean), `slider` (number), and `input` (text) write their value to a `$state.*` path; any attribute may read `$state.*`; `when`/`is` gates node visibility; `table filter` filters rows locally. Every interaction updates local React state within the current message and re-renders bound nodes without sending network requests, invoking tools, or starting a model turn. The `data` scope is currently empty (`$data.*` resolves to `undefined`) and is reserved for future read-only data injection.
+Controls write local `$state`, and other components read dot paths such as `$state.a.b`. The bounded expression interpreter powers `derive`, chart and table datasets, visibility, and drawing coordinates and labels. It supports arithmetic, comparisons, and a fixed function set, including `sin` and `cos` in radians and `exp`. Controls update the current message in the browser without sending a model request. `$data` is reserved for read-only input and currently resolves to `undefined`.
 
 ### Legacy `ink-view` replay
 
@@ -187,7 +189,8 @@ The legacy `ink-view` seven-widget protocol (`dataset`, `graph`, `timeline`, `te
 
 The plugin registers a single DSH UI surface: **Plugins → Installed → MiOpIIk IUI** (`plugins.bundle.config`). Everything the user can adjust or wants to see lives on this one page — no settings tab, no essays:
 
-- **Render switch**: the browser-local "show IUI in chat" preference (one switch, saved to `localStorage`, reloads the page so historical messages re-render).
+- **Render switch**: the browser-local "show IUI in chat" preference, saved to `localStorage`. The page reloads to render historical messages with the new preference.
+- **Enhanced visual guidance** is off by default. It adds a prompt section for choosing visual structures and coordinating views, controls, and readouts.
 - **Live preview**: rendered with the real renderer and sample data; switching only changes local state.
 - **Status line**: plugin version, host patch state (loaded / not detected), renderer connection.
 - **Copyable sample**: a ready-to-paste Markdown snippet.
@@ -367,11 +370,20 @@ When `miopiik-iui` is installed without the `ui-chat` fork:
 |---|---|---|
 | `miopiik.markdownEmbeds` | Browser `localStorage` | `"0"` disables in-chat IUI rendering in the current browser; any other value (or unset) enables it. Toggling reloads the page. |
 | Render switch (UI) | **Plugins → Installed → MiOpIIk IUI** | Browser-local toggle for `miopiik.markdownEmbeds`. |
+| `enhancedVisuals` | DSH profile config for `miopiik-iui` | Boolean, defaults to `false`. The plugin page saves this setting for the next prompt assembly. |
 | `globalThis.__miopiikMarkdownEmbedsHost` | Browser `globalThis` | Set to `true` by the patched `ui-chat` hook; read by settings diagnostics. |
 | `globalThis.__miopiikMarkdownEmbeds` | Browser `globalThis` | Registered by `client.js` (`segments`, `renderInline`, `renderBlock`). |
 | `cordis.patch.yml` | Package root (`dsh.bundle.patch`) | Declares the host and client entry points to DSH. |
 
 Disabling the browser render switch affects display only; the host prompt convention in `index.js` continues to load while the plugin is enabled in the profile.
+
+You can also enable enhanced guidance in the target profile's `cordis.patch.yml`. Compare settings in fresh chats to avoid influence from previous prompts and replies.
+
+```yaml
+- id: miopiik-iui
+  config:
+    enhancedVisuals: true
+```
 
 ## Security and permissions
 

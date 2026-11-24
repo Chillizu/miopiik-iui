@@ -45,9 +45,9 @@ window.__ModuleLoader__.load({
 
       const RESERVED = new Set(['__proto__', 'prototype', 'constructor'])
       const SEQUENCE_ARITY = Object.freeze({
-        len: 1, at: 2, gather: 2, dot: 2, matvec: 2, scale: 2, softmax: 1, roundEach: 2, zip: [2, 6], join: 2,
+        len: 1, at: 2, gather: 2, dot: 2, matvec: 2, scale: 2, softmax: 1, roundEach: 2, zip: [2, 6], join: 2, sample: 2,
       })
-      const FUNCTIONS = Object.freeze({ round: [1, 2], floor: 1, ceil: 1, abs: 1, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY })
+      const FUNCTIONS = Object.freeze({ round: [1, 2], floor: 1, ceil: 1, abs: 1, sin: 1, cos: 1, exp: 1, when: 3, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY })
       const SCOPES = new Set(['state', 'data'])
       const IDENT_START = /[A-Za-z_]/u
       const IDENT_PART = /[A-Za-z0-9_]/u
@@ -242,6 +242,7 @@ window.__ModuleLoader__.load({
             ? args.length >= arity[0] && args.length <= arity[1]
             : arity === -1 ? args.length >= 1 : args.length === arity
           if (!validArity) return fail(`${name} 参数个数不合法`)
+          if (name === 'when') return { ok: true, node: { t: 'cond', c: args[0], a: args[1], b: args[2] } }
           return { ok: true, node: { t: 'call', name, args } }
         }
 
@@ -476,9 +477,36 @@ window.__ModuleLoader__.load({
         return result
       }
 
+      /** Interpolate an ordered numeric series. Equal x values use the last value at that x. */
+      function sampleLine(points, x, work) {
+        if (points.length === 0 || !numeric(x)) return fail('sample 需要非空数值点列和有限横坐标')
+        if (!spend(work, points.length)) return fail('表达式求值预算超限')
+        let previousX = -Infinity
+        let next = points.length
+        for (let index = 0; index < points.length; index += 1) {
+          const point = points[index]
+          if (!Array.isArray(point) || !numeric(point[0]) || !numeric(point[1]) || point[0] < previousX) {
+            return fail('sample 需要按横坐标排序的 [x,y] 数值点')
+          }
+          if (point[0] > x && next === points.length) next = index
+          previousX = point[0]
+        }
+        if (next === 0) return finite(points[0][1])
+        const [leftX, leftY] = points[next - 1]
+        if (next === points.length || x === leftX) return finite(leftY)
+        const [rightX, rightY] = points[next]
+        const distance = rightX - leftX
+        const magnitude = Math.max(Math.abs(leftX), Math.abs(rightX)) || 1
+        const left = leftX / magnitude
+        const fraction = Number.isFinite(distance) ? (x - leftX) / distance
+          : (x / magnitude - left) / (rightX / magnitude - left)
+        return finite(leftY * (1 - fraction) + rightY * fraction)
+      }
+
       function sequenceCall(name, args, work) {
         const [array, argument] = args
         if (!boundedArray(array)) return fail(`${name} 需要有界数组（最多 ${EXPR_LIMITS.items} 项）`)
+        if (name === 'sample') return sampleLine(array, argument, work)
         if (name === 'len') return { ok: true, value: array.length }
         if (name === 'at') {
           return arrayIndex(array, argument)
@@ -661,6 +689,9 @@ window.__ModuleLoader__.load({
           if (node.name === 'floor') return finite(Math.floor(args[0]))
           if (node.name === 'ceil') return finite(Math.ceil(args[0]))
           if (node.name === 'abs') return finite(Math.abs(args[0]))
+          if (node.name === 'sin') return finite(Math.sin(args[0]))
+          if (node.name === 'cos') return finite(Math.cos(args[0]))
+          if (node.name === 'exp') return finite(Math.exp(args[0]))
           if (node.name === 'min') return finite(Math.min(...args))
           if (node.name === 'max') return finite(Math.max(...args))
           if (args[1] > args[2]) return fail('clamp 需要 lo <= hi')
@@ -743,9 +774,10 @@ window.__ModuleLoader__.load({
         callout: { props: { tone: 'string?', title: 'string?', text: 'string?' }, children: true },
         progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
         empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
-        chart: { props: { kind: 'string', series: 'value', source: 'string?' }, children: false },
+        chart: { props: { kind: 'string', series: 'value', source: 'string?', xScale: 'string?', xUnit: 'string?', cursor: 'value?' }, children: false },
+        views: { props: { label: 'string?', bind: 'string?' }, children: true },
         drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
-        view: { props: { label: 'string', caption: 'string?' }, children: true },
+        view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
         rect: { props: { x: 'number', y: 'number', width: 'number', height: 'number', rx: 'number?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
         circle: { props: { cx: 'number', cy: 'number', r: 'number', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
         line: { props: { x1: 'number', y1: 'number', x2: 'number', y2: 'number', stroke: 'string?', strokeWidth: 'number?', strokeDasharray: 'string?', opacity: 'number?' }, children: false },
@@ -812,11 +844,18 @@ window.__ModuleLoader__.load({
        * 把受信图表输入统一变成 [标签, 数值] 点列。
        * 模型常给数字数组、[label,value] 数组或 {label,value}；三种都受限解析，不用表达式。
        */
-      function chartMatrix(series) {
+      function chartMatrix(series, xScale) {
         if (!Array.isArray(series) || series.length === 0 || series.length > LIMITS.series) return null
         const rows = []
         for (let i = 0; i < series.length; i += 1) {
           const item = series[i]
+          if (xScale === 'linear') {
+            if (!Array.isArray(item)) return null
+            const [x, y] = item
+            if (!Number.isFinite(x) || !Number.isFinite(y) || (i > 0 && x < rows[i - 1][0])) return null
+            rows.push([x, y])
+            continue
+          }
           let label = String(i + 1)
           let raw
           if (typeof item === 'number') raw = item
@@ -909,7 +948,7 @@ window.__ModuleLoader__.load({
       const DRAWING_AXIS = [-2048, 2048]
       const DRAWING_VIEWPORT = [24, 1024]
       const DRAWING_LENGTH = [0.1, 2048]
-      const DRAWING_NUMERIC_LIMITS = { width: DRAWING_LENGTH, height: DRAWING_LENGTH, r: DRAWING_LENGTH, rx: [0, 1024], size: [8, 64], strokeWidth: [0, 24], opacity: [0, 1] }
+      const DRAWING_NUMERIC_LIMITS = { width: [0, 2048], height: [0, 2048], r: DRAWING_LENGTH, rx: [0, 1024], size: [8, 64], strokeWidth: [0, 24], opacity: [0, 1] }
       const DRAWING_PATH_ARITY = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0 }
       const DRAWING_PATH_TOKEN = /[MmLlHhVvCcSsQqTtAaZz]|[+-]?(?:[0-9]*\.[0-9]+|[0-9]+\.?)(?:[Ee][+-]?[0-9]+)?|[ ,\t\r\n]+/gu
 
@@ -976,10 +1015,11 @@ window.__ModuleLoader__.load({
       }
 
       /** SVG props are allowlisted and revalidated after resolving local values. */
-      function drawingProps(type, props, resolve = null, inlineNumber = null) {
+      function drawingProps(type, props, resolve = null, inlineValue = null) {
         if (type !== 'drawing' && type !== 'view' && !DRAWING_SHAPES.has(type)) return null
         const safe = {}
         for (const [key, rule] of Object.entries(REGISTRY[type].props)) {
+          if (type === 'view' && key === 'value') continue
           let value = props?.[key]
           if (value === undefined && rule.endsWith('?')) continue
           const canBind = !DRAWING_STATIC.has(key) && (type !== 'drawing' || key === 'label')
@@ -991,10 +1031,13 @@ window.__ModuleLoader__.load({
             }
             value = resolve(value)
           }
-          const calculated = !bound && DRAWING_SHAPES.has(type) && rule.startsWith('number') && typeof value === 'string'
-            ? inlineNumber?.(key, value)
+          const canCalculate = DRAWING_SHAPES.has(type) && (rule.startsWith('number') || (type === 'label' && key === 'text'))
+          const calculated = !bound && canCalculate && typeof value === 'string'
+            ? inlineValue?.(key, value)
             : undefined
-          const normalized = calculated !== undefined && resolve === null ? value : drawingAttribute(type, key, calculated ?? value)
+          const normalized = calculated !== undefined && resolve === null
+            ? value
+            : drawingAttribute(type, key, calculated === undefined ? value : calculated)
           if (normalized === null && type === 'view' && key === 'caption' && (bound || typeof value === 'string' && value.trim() === '')) continue
           if (normalized === null) return null
           safe[key] = normalized
@@ -1163,9 +1206,9 @@ window.__ModuleLoader__.load({
           if (!Object.hasOwn(REGISTRY, node.type)) return failNode(node, path, `未知组件类型 ${node.type}`)
           const shape = DRAWING_SHAPES.has(node.type)
           if (parentType === 'drawing' && !shape && node.type !== 'view') return failNode(node, path, 'drawing 只接受图形原语与 view')
-          if (node.type === 'view' && parentType !== 'drawing') return failNode(node, path, 'view 需要直接放在 drawing 里')
-          if (parentType === 'view' && !shape) return failNode(node, path, 'view 只接受图形原语')
-          if (shape && parentType !== 'drawing' && parentType !== 'view') return failNode(node, path, '图形原语需要放在 drawing 或 view 里')
+          if (node.type === 'view' && parentType !== 'drawing' && parentType !== 'views') return failNode(node, path, 'view 需要直接放在 drawing 或 views 里')
+          if (parentType === 'drawing-view' && !shape) return failNode(node, path, 'drawing 的 view 只接受图形原语')
+          if (shape && parentType !== 'drawing' && parentType !== 'drawing-view') return failNode(node, path, '图形原语需要放在 drawing 或其 view 里')
           const spec = REGISTRY[node.type]
           if (spec.children && Array.isArray(node.children) && node.children.length > LIMITS.nodes - nodes) {
             fatal.push(`节点数超过 ${LIMITS.nodes}`)
@@ -1175,9 +1218,35 @@ window.__ModuleLoader__.load({
           if (props.weight !== undefined && !WEIGHTS.includes(props.weight)) {
             return failNode(node, path, 'weight 只能是 primary/secondary/optional')
           }
-          const writesState = node.type === 'button' ? LOCAL_BUTTON_ACTIONS.includes(props.action) : Object.hasOwn(spec.props, 'bind')
+          let writesState = Object.hasOwn(spec.props, 'bind')
+          if (node.type === 'button') writesState = LOCAL_BUTTON_ACTIONS.includes(props.action)
+          if (node.type === 'views') writesState = props.bind !== undefined
           const binding = writesState ? readBinding(props.bind) : null
           if (binding !== null && binding.scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
+          if (node.type === 'views') {
+            const panes = node.children
+            if (!Array.isArray(panes) || panes.length < 2 || panes.length > LIMITS.options || panes.some((pane) => pane?.type !== 'view')) {
+              return failNode(node, path, `views 需要 2–${LIMITS.options} 个 view`)
+            }
+            if (props.label !== undefined && readBinding(props.label).scope === undefined && drawingAttribute('views', 'label', props.label) === null) {
+              return failNode(node, path, 'views.label 需要简短文本或状态绑定')
+            }
+            if (binding !== null) {
+              const values = panes.map((pane) => pane.props?.value)
+              if (values.some((value) => value === undefined) || new Set(values).size !== values.length) {
+                return failNode(node, path, '绑定状态的 views 需要为每个 view 指定不同的 value')
+              }
+            }
+          }
+          if (node.type === 'view' && parentType === 'views') {
+            const { value } = props
+            if (value !== undefined && (!fitsStateBudget(value) || (value !== null && typeof value === 'object'))) {
+              return failNode(node, path, 'view.value 需要安全的 JSON 标量')
+            }
+            if ((!Array.isArray(node.children) || node.children.length === 0) && (typeof props.caption !== 'string' || props.caption.trim() === '')) {
+              return failNode(node, path, 'views 的 view 需要正文或图注')
+            }
+          }
           if (node.type === 'segmented') {
             const options = props.options
             if (!Array.isArray(options) || options.length === 0 || options.length > LIMITS.options) {
@@ -1320,8 +1389,13 @@ window.__ModuleLoader__.load({
           let datasetExpression = null
           if (node.type === 'chart') {
             if (!['bar', 'line', 'donut'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut')
+            if (props.xScale !== undefined && (props.kind !== 'line' || props.xScale !== 'linear')) return failNode(node, path, '数值横轴只用于折线图')
+            if (props.cursor !== undefined && (props.xScale !== 'linear'
+              || (!Number.isFinite(props.cursor) && readBinding(props.cursor).scope !== 'state'))) {
+              return failNode(node, path, 'chart.cursor 需要数值横轴，以及数值或 $state.* 绑定')
+            }
             const binding = readBinding(props.series)
-            if (binding.scope === undefined && chartMatrix(binding.literal) === null) {
+            if (binding.scope === undefined && chartMatrix(binding.literal, props.xScale) === null) {
               datasetExpression = compileDataset(binding.literal)
               if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')
             }
@@ -1418,12 +1492,15 @@ window.__ModuleLoader__.load({
           }
           const children = []
           if (spec.children && Array.isArray(node.children)) {
+            const childParent = node.type === 'view' && parentType === 'drawing' ? 'drawing-view' : node.type
             for (const [index, child] of node.children.entries()) {
-              const walked = walk(child, depth + 1, `${path}.children[${index}]`, node.type)
+              const walked = walk(child, depth + 1, `${path}.children[${index}]`, childParent)
               if (walked === null) return null
+              if (node.type === 'views' && walked.type !== 'view') continue
               children.push(walked)
             }
           }
+          if (node.type === 'views' && children.length === 0) return failNode(node, path, 'views 没有可用视图')
           if (comparison && !children.some((child) => DRAWING_SHAPES.has(child.type) || child.type === 'view' && child.children.some((part) => DRAWING_SHAPES.has(part.type)))) {
             return failNode(node, path, 'drawing 对照需要至少一个可验证的图形原语')
           }
@@ -1431,6 +1508,7 @@ window.__ModuleLoader__.load({
           const allowed = new Set([...Object.keys(spec.props), ...UNIVERSAL_PROPS])
           const safeProps = {}
           for (const key of Object.keys(props)) {
+            if (node.type === 'view' && parentType === 'drawing' && key === 'value') continue
             if (allowed.has(key)) safeProps[key] = props[key]
           }
           const normalized = { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props: safeProps, children }
@@ -1552,6 +1630,7 @@ window.__ModuleLoader__.load({
         progress: 'progress',
         empty: 'empty',
         chart: 'chart',
+        views: 'views',
         drawing: 'drawing',
         view: 'view',
         rect: 'rect',
@@ -1575,7 +1654,9 @@ window.__ModuleLoader__.load({
         button: 'button',
       })
 
-      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, drawing: true, view: true })
+      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, views: true, drawing: true, view: true })
+      const VIEW_LAYOUTS = new Set(['row', 'column', 'grid', 'card', 'details'])
+      const DRAWING_CONTENT = new Set(['rect', 'circle', 'line', 'path', 'label', 'view'])
       // 交互控件和图形原语隐式闭合。step 也保留旧的无闭合写法。
       const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true, rect: true, circle: true, line: true, path: true, label: true })
 
@@ -1590,6 +1671,15 @@ window.__ModuleLoader__.load({
 
       function isSpace(ch) {
         return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r'
+      }
+
+      /** Models sometimes close a single-quoted JSON state string with a curly quote. */
+      function closesStateString(source, start, end) {
+        if (source[start] !== '"' || source[end - 1] !== '"' || (source[end] !== '‘' && source[end] !== '’')) return false
+        let next = end + 1
+        while (isSpace(source[next])) next += 1
+        if (!source.startsWith('/>', next)) return false
+        try { return typeof JSON.parse(decodeEntities(source.slice(start, end))) === 'string' } catch { return false }
       }
 
       /** 从 index 处的 '<' 解析一个标签；失败返回 null。 */
@@ -1643,7 +1733,8 @@ window.__ModuleLoader__.load({
           if (quote === '"' || quote === "'") {
             const valueStart = j + 1
             let k = valueStart
-            while (k < source.length && source[k] !== quote) k += 1
+            const recoverStateString = name === 'state' && key === 'value' && quote === "'"
+            while (k < source.length && source[k] !== quote && !(recoverStateString && closesStateString(source, valueStart, k))) k += 1
             attrs[key] = decodeEntities(source.slice(valueStart, k))
             i = k + 1
           } else {
@@ -1730,6 +1821,8 @@ window.__ModuleLoader__.load({
         if (element.name === 'chart') {
           if (attrs.type !== undefined && attrs.kind === undefined) attrs.kind = attrs.type
           if (attrs.data !== undefined && attrs.series === undefined) attrs.series = attrs.data
+          if (attrs.xScale === undefined) attrs.xScale = attrs['x-scale']
+          if (attrs.xUnit === undefined) attrs.xUnit = attrs['x-unit']
           delete attrs.type
           delete attrs.data
         }
@@ -1769,6 +1862,36 @@ window.__ModuleLoader__.load({
         return props
       }
 
+      function readPaneValue(raw) {
+        if (typeof raw === 'string' && raw.trim().startsWith('"')) {
+          try { return JSON.parse(raw) } catch { /* Preserve unknown values for validation. */ }
+        }
+        return readValue(raw)
+      }
+
+      /** Recover consecutive content panes without inventing bindings or moving surrounding content. */
+      function groupPeerViews(nodes) {
+        const grouped = []
+        let panes = []
+        const flush = () => {
+          if (panes.length >= 2) grouped.push({ id: 'ml-views', type: 'views', props: {}, children: panes })
+          else grouped.push(...panes)
+          panes = []
+        }
+        for (const node of nodes) {
+          const contentPane = node.type === 'view'
+            && node.children.every((child) => !DRAWING_CONTENT.has(child.type))
+            && (typeof node.props.caption === 'string' || node.children.some((child) => child.degraded !== true))
+          if (contentPane) panes.push(node)
+          else {
+            flush()
+            grouped.push(node)
+          }
+        }
+        flush()
+        return grouped
+      }
+
       const TEXT_PROPS = Object.freeze({
         text: ['text'],
         p: ['gap'],
@@ -1785,7 +1908,8 @@ window.__ModuleLoader__.load({
         empty: ['text', 'title', 'description', 'icon'],
         divider: ['label'],
         metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
-        chart: ['kind', 'type', 'series', 'source', 'title'],
+        chart: ['kind', 'type', 'series', 'source', 'title', 'xScale', 'xUnit', 'cursor'],
+        views: ['label', 'bind'],
         drawing: ['width', 'height', 'label'],
         view: ['label', 'caption'],
         rect: ['x', 'y', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],
@@ -1814,7 +1938,7 @@ window.__ModuleLoader__.load({
       })
 
       /** 必须保留源码字符串的属性（表达式等），不得被 JSON/数字归一吞掉。 */
-      const RAW_PROPS = Object.freeze({ derive: ['expr'], drawing: ['label'], view: ['label', 'caption'], line: ['strokeDasharray'], path: ['d'], label: ['text'] })
+      const RAW_PROPS = Object.freeze({ derive: ['expr'], views: ['label'], drawing: ['label'], view: ['label', 'caption'], line: ['strokeDasharray'], path: ['d'], label: ['text'] })
 
       /**
        * 解析 miopiik-ml 源码。
@@ -1974,7 +2098,9 @@ window.__ModuleLoader__.load({
               item.kind === 'node' ? item.node : textNode(item, `ml-fallback-${index}`),
             )
             if (children.length === 0 && type !== 'view') return degrade('容器内没有可渲染内容')
-            return compiled({ ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }, children)
+            const props = { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }
+            if (type === 'view' && attrs.value !== undefined) props.value = readPaneValue(attrs.value)
+            return compiled(props, VIEW_LAYOUTS.has(type) ? groupPeerViews(children) : children)
           }
           const props = { ...control, ...readProps(attrs, TEXT_PROPS[element.name] ?? [], RAW_PROPS[element.name] ?? null) }
           if (type === 'step' && element.children.every((child) => child.name === '#text')) {
@@ -1988,9 +2114,9 @@ window.__ModuleLoader__.load({
         }
 
         const compiled = children.map((child) => compile(child))
-        const mapped = compiled.map((item, index) =>
+        const mapped = groupPeerViews(compiled.map((item, index) =>
           item.kind === 'node' ? item.node : textNode(item, `ml-top-${index}`),
-        )
+        ))
         let rootNode = null
         if (mapped.length === 1) rootNode = mapped[0]
         else if (mapped.length > 1) rootNode = { id: 'ml-root', type: 'column', props: {}, children: mapped }
@@ -2675,24 +2801,36 @@ window.__ModuleLoader__.load({
     }
     const DRAWING_TAGS = { rect: 'rect', circle: 'circle', line: 'line', path: 'path', label: 'text' }
 
-    function renderDrawingShape(child, key, resolve, scope, visible) {
+    function renderDrawingShape(child, key, { resolve, scope, visible, streaming, canvasWidth }) {
       if (!Object.hasOwn(DRAWING_TAGS, child.type) || !visible(child)) return null
       const props = IUI_AST.drawingProps(child.type, child.props, resolve, (attribute) => {
         const expression = child.geometryExpressions?.[attribute]
         if (expression === undefined) return undefined
         const result = IUI_EXPR.evaluateExpr(expression, scope)
-        return result.ok ? result.value : undefined
+        return result.ok ? result.value : null
       })
       if (props === null) return null
       const { fill, stroke, strokeWidth, text, size, align, ...geometry } = props
       if (child.type === 'label') {
-        return h('text', { key, ...geometry, fill: DRAWING_COLORS[fill ?? 'text'], fontSize: size ?? 13, fontFamily: SANS, textAnchor: align ?? 'start' }, text)
+        const fontSize = size ?? 13
+        let textAnchor = align ?? 'start'
+        const x = geometry.x
+        if (canvasWidth !== undefined && x >= 0 && x <= canvasWidth && textAnchor !== 'middle') {
+          // Keep near-edge labels readable using a conservative advance estimate.
+          const advance = [...text].reduce((width, char) => width + (char.charCodeAt(0) < 128 ? 0.62 : 1), 0) * fontSize
+          if (textAnchor === 'start' && x + advance > canvasWidth && x >= advance) textAnchor = 'end'
+          else if (textAnchor === 'end' && x < advance && x + advance <= canvasWidth) textAnchor = 'start'
+        }
+        return h('text', { key, ...geometry, fill: DRAWING_COLORS[fill ?? 'text'], fontSize, fontFamily: SANS, textAnchor }, text)
       }
       const outline = child.type === 'rect' || child.type === 'circle' ? 'border' : 'accent'
       const strokeColor = stroke ?? (fill === undefined || fill === 'none' ? outline : 'none')
+      const animated = streaming !== true && (child.type === 'rect' || child.type === 'circle')
+        && (child.geometryExpressions !== undefined || Object.values(child.props).some((value) => IUI_AST.readBinding(value).scope === 'state'))
       return h(DRAWING_TAGS[child.type], {
         key,
         ...geometry,
+        className: animated ? 'miopiik-shape-motion' : undefined,
         fill: DRAWING_COLORS[fill ?? 'none'],
         stroke: DRAWING_COLORS[strokeColor],
         strokeWidth: strokeWidth ?? 1.5,
@@ -2719,10 +2857,11 @@ window.__ModuleLoader__.load({
       }
       const selected = options.find(({ index }) => index === choice) ?? options[0]
       const caption = selected?.caption
+      const shapeContext = { resolve, scope, visible, streaming, canvasWidth: adaptive ? viewport.width : undefined }
       const shapes = item.children.flatMap((child, index) => {
-        if (child.type !== 'view') return renderDrawingShape(child, index, resolve, scope, visible)
+        if (child.type !== 'view') return renderDrawingShape(child, index, shapeContext)
         if (selected?.index !== index) return []
-        return child.children.map((shape, order) => renderDrawingShape(shape, `${index}-${order}`, resolve, scope, visible))
+        return child.children.map((shape, order) => renderDrawingShape(shape, `${index}-${order}`, shapeContext))
       }).filter(Boolean)
 
       const graphLabel = selected === undefined ? viewport.label : `${viewport.label} · ${selected.label}`
@@ -2769,10 +2908,74 @@ window.__ModuleLoader__.load({
       }, caption) : null)
     }
 
+    function IuiViews({ item, render, resolve, visible, updateState, streaming, weight }) {
+      const id = React.useId()
+      const [choice, choose] = React.useState(null)
+      const binding = IUI_AST.readBinding(item.props.bind)
+      const bound = binding.scope === 'state'
+      const current = bound ? resolve(item.props.bind) : choice
+      const options = item.children.flatMap((pane, index) => {
+        if (pane.type !== 'view' || !visible(pane)) return []
+        const props = IUI_AST.drawingProps('view', pane.props, resolve)
+        return props === null ? [] : [{ ...props, index, value: bound ? pane.props.value : index }]
+      })
+      const active = options.find(({ value }) => sameValue(value, current)) ?? options[0]
+      if (active === undefined) return null
+      const select = (option) => {
+        if (streaming === true) return
+        if (bound) updateState(binding.key, option.value)
+        else choose(option.value)
+      }
+      const title = resolve(item.props.label)
+      const useTabs = options.length > 1
+      const focusOnKey = (event, index) => {
+        if (streaming === true || !['Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length
+        event.preventDefault()
+        select(options[next])
+        event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[next]?.focus()
+      }
+      return h('div', {
+        'data-iui-views': '1', 'data-iui-weight': weight,
+        style: { display: 'flex', flexDirection: 'column', minWidth: 0, gap: 9, ...WEIGHT_STYLE[weight] },
+      },
+      useTabs ? h('div', {
+        role: 'tablist', 'aria-label': typeof title === 'string' ? title : '对照视图',
+        style: { display: 'flex', flexWrap: 'wrap', gap: '0 12px', borderBottom: `1px solid ${C.border}` },
+      }, ...options.map((option, index) => {
+        const selected = option === active
+        return h('button', {
+          key: option.index, id: `${id}-tab-${option.index}`, type: 'button', role: 'tab',
+          'aria-selected': selected, 'aria-controls': `${id}-panel-${option.index}`,
+          tabIndex: selected ? 0 : -1, disabled: streaming === true, className: 'miopiik-ctl',
+          onClick: () => select(option), onKeyDown: (event) => focusOnKey(event, index),
+          style: {
+            background: 'transparent', color: selected ? C.text : C.muted,
+            border: 0, borderBottom: `2px solid ${selected ? C.brand : 'transparent'}`,
+            padding: '6px 2px', fontSize: 13, fontWeight: selected ? 600 : 400, cursor: streaming === true ? 'default' : 'pointer',
+          },
+        }, option.label)
+      })) : null,
+      ...options.map((option) => {
+        const selected = option === active
+        return h('section', {
+          key: option.index, id: `${id}-panel-${option.index}`, role: useTabs ? 'tabpanel' : undefined,
+          className: streaming === true ? undefined : 'miopiik-enter',
+          'aria-labelledby': useTabs ? `${id}-tab-${option.index}` : undefined,
+          'aria-label': useTabs ? undefined : option.label, tabIndex: useTabs && selected ? 0 : undefined,
+          hidden: !selected, style: { display: selected ? 'flex' : 'none', flexDirection: 'column', minWidth: 0, gap: 7 },
+        },
+        ...(selected ? item.children[option.index].children.map((child, index) => render(child, `${option.index}-${index}`)) : []),
+        selected && option.caption !== undefined ? h('div', { style: { color: C.muted, fontSize: 12, lineHeight: '18px' } }, option.caption) : null)
+      }),
+      )
+    }
+
     /** 图表可访问摘要：读屏用户拿到的应是数据本身，而不只是"一张图"。 */
-    function chartSummary(rows, kind) {
+    function chartSummary(rows, kind, xUnit) {
       const kindName = { bar: '柱状图', line: '折线图', donut: '占比图' }[kind] ?? '图表'
-      const parts = rows.slice(0, 8).map((row) => `${String(row[0] ?? '')} ${String(row[1] ?? '')}`)
+      const parts = rows.slice(0, 8).map(([label, value]) => `${label}${xUnit} ${value}`)
       const suffix = rows.length > 8 ? `，等共 ${rows.length} 项` : ''
       return `${kindName}：${parts.join('，')}${suffix}`
     }
@@ -2784,7 +2987,7 @@ window.__ModuleLoader__.load({
       return magnitude > 0 && (magnitude < 0.01 || magnitude >= 1e9) ? value.toExponential(2) : chartNumber.format(value)
     }
 
-    function IuiLineChart({ rows, label }) {
+    function IuiLineChart({ rows, label, xScale, xUnit, cursor }) {
       const containerRef = React.useRef(null)
       const [width, setWidth] = React.useState(360)
       React.useLayoutEffect(() => {
@@ -2812,20 +3015,43 @@ window.__ModuleLoader__.load({
       const max = Math.max(0, ...scaled)
       const y = (value) => bottom - ((value - min) / (max - min || 1)) * (bottom - top)
       const last = rows.length - 1
-      const step = Math.max(1, width - 2 * pad) / Math.max(1, last)
+      const linear = xScale === 'linear'
+      const domain = rows.map(([x], index) => linear ? x : index)
+      const xMagnitude = Math.max(...domain.map(Math.abs)) || 1
+      const firstX = domain[0] / xMagnitude
+      const span = domain[last] / xMagnitude - firstX
+      const toX = (value) => span === 0 ? width / 2 : pad + (value / xMagnitude - firstX) / span * (width - 2 * pad)
       const intervals = Math.min(last, Math.max(1, Math.floor((width - 2 * pad) / 96)))
       const ticks = new Set(Array.from({ length: intervals + 1 }, (_, i) => Math.round(i * last / (intervals || 1))))
-      const points = scaled.map((value, index) => ({ x: last === 0 ? width / 2 : pad + index * step, y: y(value) }))
+      const points = scaled.map((value, index) => ({
+        x: toX(domain[index]),
+        y: y(value),
+      }))
+      if (linear) {
+        ticks.clear()
+        ticks.add(last)
+        let priorX = points[last].x
+        for (let index = last - 1; index >= 0; index -= 1) {
+          if (priorX - points[index].x < 72) continue
+          ticks.add(index)
+          priorX = points[index].x
+        }
+      }
       const labelLimit = Math.max(3, Math.min(15, Math.floor(width / (intervals + 1) / 11)))
       const parts = [
         h('line', { key: 'axis', x1: pad, y1: y(0), x2: width - pad, y2: y(0), stroke: C.border, strokeWidth: 1 }),
         h('polyline', { key: 'line', points: points.map((point) => `${point.x},${point.y}`).join(' '), fill: 'none', stroke: C.brand, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
       ]
+      if (linear && Number.isFinite(cursor) && cursor >= domain[0] && cursor <= domain[last]) {
+        const x = toX(cursor)
+        parts.push(h('line', { key: 'cursor', 'data-iui-chart-cursor': cursor, x1: x, x2: x, y1: top, y2: bottom, stroke: C.muted, strokeDasharray: '3 4' }))
+      }
       points.forEach((point, index) => {
-        const [pointLabel, value] = rows[index]
+        const [x, value] = rows[index]
+        const pointLabel = linear ? `${formatChartValue(x)}${xUnit}` : x
         parts.push(h('circle', { key: `dot-${index}`, cx: point.x, cy: point.y, r: 3, fill: C.brand }, h('title', null, `${pointLabel}：${value}`)))
         if (!ticks.has(index)) return
-        const textAnchor = last === 0 ? 'middle' : index === 0 ? 'start' : index === last ? 'end' : 'middle'
+        const textAnchor = span === 0 ? 'middle' : index === 0 ? 'start' : index === last ? 'end' : 'middle'
         const chars = [...pointLabel]
         const tick = chars.length > labelLimit ? `${chars.slice(0, labelLimit - 1).join('')}…` : pointLabel
         parts.push(
@@ -2836,8 +3062,8 @@ window.__ModuleLoader__.load({
       return h('div', { ref: containerRef, style: { width: '100%', minWidth: 0 } }, svgCanvas(width, height, parts, label, { fluid: true }))
     }
 
-    function renderChart(rows, kind, label) {
-      if (kind === 'line') return h(IuiLineChart, { rows, label })
+    function renderChart(rows, kind, label, xScale, xUnit, cursor) {
+      if (kind === 'line') return h(IuiLineChart, { rows, label, xScale, xUnit, cursor })
       const values = rows.map((row) => row[1])
       const max = Math.max(1, ...values)
       const labels = rows.map((row) => row[0])
@@ -2942,7 +3168,7 @@ window.__ModuleLoader__.load({
     }
 
     const DENSITY_CONTROLS = new Set(['segmented', 'toggle', 'slider', 'input'])
-    const DENSITY_STRUCTURES = new Set(['card', 'table', 'chart', 'steps', 'diagram', 'drawing'])
+    const DENSITY_STRUCTURES = new Set(['card', 'table', 'chart', 'steps', 'diagram', 'drawing', 'views'])
 
     /** Use the declared structure and ignore collapsed details so layout stays stable during interaction. */
     function inferDensity(root) {
@@ -2960,7 +3186,7 @@ window.__ModuleLoader__.load({
     }
 
     const ROW_INTRINSIC = new Set(['badge', 'icon', 'button', 'toggle', 'segmented', 'details'])
-    const ROW_MINIMUM = { drawing: 232, chart: 232, diagram: 232, slider: 180, input: 180, card: 160 }
+    const ROW_MINIMUM = { drawing: 232, chart: 232, diagram: 232, views: 232, slider: 180, input: 180, card: 160 }
 
     function rowBasis(item) {
       if (item.type === 'table') return Infinity
@@ -3291,13 +3517,20 @@ window.__ModuleLoader__.load({
           const unit = resolveText(props.unit)
           const unavailable = value === undefined || value === null
           if (unavailable && item.fallback) return renderIuiNotice(item.fallback, { key, 'data-iui-binding-unavailable': '1' })
+          const grouped = Number.isSafeInteger(value) && Math.abs(value) >= 1000
+          const displayedValue = grouped ? chartNumber.format(value) : String(value)
+          const displayedUnit = textOf(unit)
+          const narrative = adaptive && typeof value === 'string' && !/^[+-]?\d[\d,.]*(?::\d\d?){0,2}%?$/u.test(value.trim())
           const delta = resolveText(props.delta)
           const described = resolveText(props.caption ?? props.note)
           return h(
             'div',
-            { key, 'data-iui-metric': textOf(label), style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 0' } },
+            { key, 'data-iui-metric': textOf(label), style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 0', gridColumn: narrative ? '1 / -1' : undefined } },
             h('div', { style: { fontSize: 11, color: C.muted } }, textOf(label)),
-            h('div', { 'data-iui-binding-unavailable': unavailable ? '1' : undefined, 'aria-label': unavailable ? '结果暂不可用' : undefined, style: { fontSize: METRIC_FONT_SIZE[props.weight] ?? 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } }, unavailable ? '—' : `${String(value)}${textOf(unit)}`),
+            h('div', { 'data-iui-binding-unavailable': unavailable ? '1' : undefined, 'aria-label': unavailable ? '结果暂不可用' : undefined, style: { fontSize: narrative ? 14 : METRIC_FONT_SIZE[props.weight] ?? 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } },
+              unavailable ? '—' : displayedValue,
+              unavailable || displayedUnit === '' ? null : h('span', { style: { fontSize: '.68em', fontWeight: 500, color: C.muted, marginInlineStart: 4 } }, displayedUnit),
+            ),
             delta !== undefined && delta !== null && String(delta) !== ''
               ? h('div', { 'data-iui-delta': String(delta), style: { fontSize: 11, color: String(delta).startsWith('-') ? '#d1242f' : '#2ea043' } }, String(delta))
               : null,
@@ -3520,6 +3753,11 @@ window.__ModuleLoader__.load({
         }
         if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve, resolveText, visible })
         if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, scope, visible, streaming, adaptive })
+        if (item.type === 'views') return h(IuiViews, {
+          key, item, resolve, visible, streaming,
+          render: (child, index) => node(child, `${key}-${index}`),
+          updateState: (path, value) => setState((prev) => writeStatePath(prev, path, value)),
+        })
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')
           const color = (TONE_COLORS[tone] ?? TONE_COLORS.neutral)[1]
@@ -3697,6 +3935,9 @@ window.__ModuleLoader__.load({
           const style = { gap: Number(props.gap ?? DENSITY_STYLE[density].gap) }
           if (isFlowRow) Object.assign(style, { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', minWidth: 0 })
           else if (isRow) Object.assign(style, { display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, item.children.length)}, minmax(0, 1fr))` })
+          else if (adaptive && item.children.length > 1 && item.children.every((child) => child.type === 'metric')) {
+            Object.assign(style, { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 104px), 1fr))', minWidth: 0 })
+          }
           else Object.assign(style, { display: 'flex', flexDirection: 'column' })
           return h(
             'div',
@@ -3710,14 +3951,16 @@ window.__ModuleLoader__.load({
         }
         if (item.type === 'chart') {
           const series = resolveDataset(item, props.series)
-          const rows = IUI_AST.chartMatrix(series)
+          const rows = IUI_AST.chartMatrix(series, props.xScale)
           const kind = String(props.kind ?? 'bar')
+          const xUnit = props.xScale === 'linear' ? textOf(resolveText(props.xUnit)).slice(0, 16) : ''
+          const cursor = resolve(props.cursor)
           if (rows === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
           const source = resolveText(props.source)
           return h(
             'div',
-            { key, className: 'miopiik-enter', 'data-iui-chart': kind, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-            renderChart(rows, kind, chartSummary(rows, kind)),
+            { key, className: 'miopiik-enter', 'data-iui-chart': kind, 'data-iui-chart-scale': props.xScale, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+            renderChart(rows, kind, chartSummary(rows, kind, xUnit), props.xScale, xUnit, cursor),
             textOf(source) === '' ? null : h('div', { style: { fontSize: 10, color: C.muted } }, `来源：${textOf(source)}`),
           )
         }
@@ -3757,7 +4000,7 @@ window.__ModuleLoader__.load({
         if (!visible(item)) return false
         if (item.degraded === true) return textOf(item.props.text).trim() !== ''
         if (item.type === 'derive' || DENSITY_CONTROLS.has(item.type) || (item.type === 'button' && item.props.action !== 'copy')) return false
-        if (['column', 'row', 'grid', 'card', 'paragraph'].includes(item.type)) return item.children.some(hasOutput)
+        if (['column', 'row', 'grid', 'card', 'paragraph', 'views', 'view'].includes(item.type)) return item.children.some(hasOutput)
         return true
       }
       if ((degradedCount > 0 || deriveErrors > 0) && !hasOutput(ast.root)) {
@@ -4118,12 +4361,14 @@ window.__ModuleLoader__.load({
 /**
  * MiOpIIk IUI — the plugin's own page: Plugins → Installed → MiOpIIk IUI.
  *
- * One surface, no essays: the browser-local render switch, a live preview,
- * a one-line status, and a copyable sample. No separate settings tab is
- * registered; everything the user can adjust or wants to see lives here.
+ * The render preference is browser-local. Prompt generation is a Host setting.
+ * Both appear with the live preview and copyable sample on the same plugin page.
  * Trusted plugin chrome only: theme tokens, no gradients, no fake switches.
  */
 const IUI_PREF_KEY = 'miopiik.markdownEmbeds'
+const IUI_RENDER_LABEL = '在聊天中显示 IUI'
+const IUI_ENHANCED_LABEL = '增强视觉构思'
+const IUI_PLUGIN_ENTRY = 'miopiik-iui'
 
 const IUI_PREVIEW_ML = `<ui title="活动概览" fallback="7 日活跃 1,248；30 日活跃 4,826">
   <state name="v" value='{"range":{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]},"detail":true,"q":""}'/>
@@ -4227,9 +4472,9 @@ function IuiActionButton({ onClick, children }) {
   )
 }
 
-function IuiToggle({ enabled, onToggle }) {
+function IuiToggle({ enabled, onToggle, label = IUI_RENDER_LABEL, disabled = false }) {
   if (IuiSwitch) {
-    return h(IuiSwitch, { checked: enabled, onChange: onToggle, label: '在聊天中显示 IUI', title: '在聊天中显示 IUI' })
+    return h(IuiSwitch, { checked: enabled, onChange: onToggle, label, title: label, disabled })
   }
   return h(
     'button',
@@ -4237,14 +4482,15 @@ function IuiToggle({ enabled, onToggle }) {
       type: 'button',
       role: 'switch',
       'aria-checked': enabled,
-      'aria-label': '在聊天中显示 IUI',
-      'data-iui-settings-toggle': '1',
+      'aria-label': label,
+      'data-iui-settings-toggle': label === IUI_RENDER_LABEL ? '1' : undefined,
+      disabled,
       onClick: onToggle,
       style: {
         boxSizing: 'border-box', position: 'relative', flex: '0 0 auto',
         width: 36, height: 20, padding: 2, border: 0, borderRadius: 999,
         background: enabled ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l3)',
-        cursor: 'pointer',
+        cursor: disabled ? 'default' : 'pointer',
       },
     },
     h('span', {
@@ -4259,8 +4505,36 @@ function IuiToggle({ enabled, onToggle }) {
   )
 }
 
-/** The one real page: switch, live preview, one status line, copyable sample. */
-function IuiPluginPage() {
+function IuiEnhancedPromptSetting({ formSource }) {
+  const snapshot = React.useSyncExternalStore(formSource.subscribe, formSource.getSnapshot)
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState('')
+  if (snapshot?.status !== 'ready' || typeof snapshot.value?.enhancedVisuals !== 'boolean') return null
+  const enabled = snapshot.value.enhancedVisuals
+  const writable = snapshot.writable === true
+  const toggle = async () => {
+    if (!writable || saving) return
+    setSaving(true)
+    setError('')
+    try {
+      if (!await formSource.set(!enabled)) setError('保存被拒绝，请查看当前设置后重试。')
+    } catch {
+      setError('无法保存，请检查 DSH 连接后重试。')
+    } finally {
+      setSaving(false)
+    }
+  }
+  const status = saving ? '正在保存…' : !writable ? '当前 profile 设置为只读' : enabled ? '已开启 · 作用于此 profile 的后续回复' : '默认关闭 · 开启后模型会更主动地组织图形和交互'
+  return h(
+    'div',
+    { style: { ...IUI_PAGE.switchRow, flexWrap: 'wrap' }, 'data-iui-enhanced-prompt': enabled ? 'enabled' : 'disabled' },
+    h('span', { style: IUI_PAGE.switchLabel }, IUI_ENHANCED_LABEL),
+    h('span', { role: error ? 'alert' : 'status', style: { ...IUI_PAGE.hint, flex: '1 1 150px' } }, error || status),
+    h(IuiToggle, { label: IUI_ENHANCED_LABEL, enabled, onToggle: toggle, disabled: !writable || saving }),
+  )
+}
+
+function IuiPluginPage({ formSource }) {
   const [enabled, setEnabled] = React.useState(iuiIsEnabled)
   const [error, setError] = React.useState('')
   const [copyMessage, setCopyMessage] = React.useState('')
@@ -4297,11 +4571,12 @@ function IuiPluginPage() {
     h(
       'div',
       { style: IUI_PAGE.switchRow },
-      h('span', { style: IUI_PAGE.switchLabel }, '在聊天中显示 IUI'),
+      h('span', { style: IUI_PAGE.switchLabel }, IUI_RENDER_LABEL),
       h('span', { 'data-iui-settings-status': enabled ? 'enabled' : 'disabled', style: IUI_PAGE.hint }, enabled ? '已开启 · 仅作用于当前浏览器' : '已关闭 · iui 围栏按代码块显示'),
       h(IuiToggle, { enabled, onToggle: toggle }),
     ),
     error ? h('p', { role: 'alert', style: { margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' } }, error) : null,
+    formSource === null ? null : h(IuiEnhancedPromptSetting, { formSource }),
     h(
       'section',
       { style: IUI_PAGE.section },
@@ -4342,13 +4617,42 @@ function IuiPluginPage() {
   )
 }
 
+function iuiPromptFormSource(ctx) {
+  if (typeof ctx.inject !== 'function') return null
+  let form = null
+  const listeners = new Set()
+  const notify = () => { for (const listener of listeners) listener() }
+  ctx.inject(['configForms'], (scope) => {
+    const current = scope.configForms?.get?.(IUI_PLUGIN_ENTRY)
+    if (current == null) return
+    form = current
+    const unsubscribe = current.subscribe(notify)
+    notify()
+    return () => {
+      unsubscribe()
+      if (form !== current) return
+      form = null
+      notify()
+    }
+  })
+  return {
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    getSnapshot: () => form?.getSnapshot() ?? null,
+    set: (value) => form?.set('enhancedVisuals', value) ?? false,
+  }
+}
+
 function registerIuiSettings(ctx) {
   if (!ctx.slots || typeof ctx.slots.inject !== 'function') return
+  const formSource = iuiPromptFormSource(ctx)
   // 唯一入口：插件页承载全部可调项与状态；不再注册设置页页签。
   ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
     name: 'plugins.bundle.config',
-    key: 'miopiik-iui',
-  }, () => h(IuiPluginPage)))
+    key: IUI_PLUGIN_ENTRY,
+  }, () => h(IuiPluginPage, { formSource })))
 }
 
     return {
@@ -4373,7 +4677,8 @@ function registerIuiSettings(ctx) {
             chrome.textContent = "@keyframes miopiik-enter{from{opacity:0}}.miopiik-enter{animation:miopiik-enter .14s ease-out}.miopiik-ctl:hover{filter:brightness(1.18)}.miopiik-ctl:active{filter:brightness(.92)}.miopiik-ctl:focus-visible,[data-iui-slider] input:focus-visible,[data-iui-input] input:focus-visible{outline:2px solid var(--dsw-static-deepseek-500,#4176e6);outline-offset:2px}.miopiik-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}@media(pointer:coarse){.miopiik-ctl{min-height:32px;padding:4px 12px}input.miopiik-ctl{min-height:32px}[data-iui-slider] input{height:32px}[data-iui-input] input{min-height:32px}}@media(forced-colors:active){.miopiik-ctl{border:1px solid ButtonBorder;forced-color-adjust:auto}.miopiik-ctl:focus-visible{outline:2px solid Highlight}}@media(prefers-reduced-motion:reduce){.miopiik-enter{animation:none}.miopiik-ctl:hover,.miopiik-ctl:active{filter:none}}"
             chrome.textContent +=
               "[data-miopiik-segments=block]>[data-miopiik-block-wrap]{margin-block:8px}" +
-              "[data-miopiik-segments=block]>[data-miopiik-block-wrap]:has(>[data-iui-density=inline]){margin-block:5px}"
+              "[data-miopiik-segments=block]>[data-miopiik-block-wrap]:has(>[data-iui-density=inline]){margin-block:5px}" +
+              "@media(prefers-reduced-motion:no-preference){.miopiik-shape-motion{transition-property:x,y,cx,cy,r,width,height,opacity,fill,stroke;transition-duration:.12s;transition-timing-function:ease-out}}"
             document.head.appendChild(chrome)
           }
         }

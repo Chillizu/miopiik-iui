@@ -1,12 +1,14 @@
 /**
  * MiOpIIk IUI — the plugin's own page: Plugins → Installed → MiOpIIk IUI.
  *
- * One surface, no essays: the browser-local render switch, a live preview,
- * a one-line status, and a copyable sample. No separate settings tab is
- * registered; everything the user can adjust or wants to see lives here.
+ * The render preference is browser-local. Prompt generation is a Host setting.
+ * Both appear with the live preview and copyable sample on the same plugin page.
  * Trusted plugin chrome only: theme tokens, no gradients, no fake switches.
  */
 const IUI_PREF_KEY = 'miopiik.markdownEmbeds'
+const IUI_RENDER_LABEL = '在聊天中显示 IUI'
+const IUI_ENHANCED_LABEL = '增强视觉构思'
+const IUI_PLUGIN_ENTRY = 'miopiik-iui'
 
 const IUI_PREVIEW_ML = `<ui title="活动概览" fallback="7 日活跃 1,248；30 日活跃 4,826">
   <state name="v" value='{"range":{"total":"1,248","change":"+12.6%","points":[["一",92],["二",118],["三",105],["四",148],["五",167],["六",191],["日",220]]},"detail":true,"q":""}'/>
@@ -110,9 +112,9 @@ function IuiActionButton({ onClick, children }) {
   )
 }
 
-function IuiToggle({ enabled, onToggle }) {
+function IuiToggle({ enabled, onToggle, label = IUI_RENDER_LABEL, disabled = false }) {
   if (IuiSwitch) {
-    return h(IuiSwitch, { checked: enabled, onChange: onToggle, label: '在聊天中显示 IUI', title: '在聊天中显示 IUI' })
+    return h(IuiSwitch, { checked: enabled, onChange: onToggle, label, title: label, disabled })
   }
   return h(
     'button',
@@ -120,14 +122,15 @@ function IuiToggle({ enabled, onToggle }) {
       type: 'button',
       role: 'switch',
       'aria-checked': enabled,
-      'aria-label': '在聊天中显示 IUI',
-      'data-iui-settings-toggle': '1',
+      'aria-label': label,
+      'data-iui-settings-toggle': label === IUI_RENDER_LABEL ? '1' : undefined,
+      disabled,
       onClick: onToggle,
       style: {
         boxSizing: 'border-box', position: 'relative', flex: '0 0 auto',
         width: 36, height: 20, padding: 2, border: 0, borderRadius: 999,
         background: enabled ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l3)',
-        cursor: 'pointer',
+        cursor: disabled ? 'default' : 'pointer',
       },
     },
     h('span', {
@@ -142,8 +145,36 @@ function IuiToggle({ enabled, onToggle }) {
   )
 }
 
-/** The one real page: switch, live preview, one status line, copyable sample. */
-function IuiPluginPage() {
+function IuiEnhancedPromptSetting({ formSource }) {
+  const snapshot = React.useSyncExternalStore(formSource.subscribe, formSource.getSnapshot)
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState('')
+  if (snapshot?.status !== 'ready' || typeof snapshot.value?.enhancedVisuals !== 'boolean') return null
+  const enabled = snapshot.value.enhancedVisuals
+  const writable = snapshot.writable === true
+  const toggle = async () => {
+    if (!writable || saving) return
+    setSaving(true)
+    setError('')
+    try {
+      if (!await formSource.set(!enabled)) setError('保存被拒绝，请查看当前设置后重试。')
+    } catch {
+      setError('无法保存，请检查 DSH 连接后重试。')
+    } finally {
+      setSaving(false)
+    }
+  }
+  const status = saving ? '正在保存…' : !writable ? '当前 profile 设置为只读' : enabled ? '已开启 · 作用于此 profile 的后续回复' : '默认关闭 · 开启后模型会更主动地组织图形和交互'
+  return h(
+    'div',
+    { style: { ...IUI_PAGE.switchRow, flexWrap: 'wrap' }, 'data-iui-enhanced-prompt': enabled ? 'enabled' : 'disabled' },
+    h('span', { style: IUI_PAGE.switchLabel }, IUI_ENHANCED_LABEL),
+    h('span', { role: error ? 'alert' : 'status', style: { ...IUI_PAGE.hint, flex: '1 1 150px' } }, error || status),
+    h(IuiToggle, { label: IUI_ENHANCED_LABEL, enabled, onToggle: toggle, disabled: !writable || saving }),
+  )
+}
+
+function IuiPluginPage({ formSource }) {
   const [enabled, setEnabled] = React.useState(iuiIsEnabled)
   const [error, setError] = React.useState('')
   const [copyMessage, setCopyMessage] = React.useState('')
@@ -180,11 +211,12 @@ function IuiPluginPage() {
     h(
       'div',
       { style: IUI_PAGE.switchRow },
-      h('span', { style: IUI_PAGE.switchLabel }, '在聊天中显示 IUI'),
+      h('span', { style: IUI_PAGE.switchLabel }, IUI_RENDER_LABEL),
       h('span', { 'data-iui-settings-status': enabled ? 'enabled' : 'disabled', style: IUI_PAGE.hint }, enabled ? '已开启 · 仅作用于当前浏览器' : '已关闭 · iui 围栏按代码块显示'),
       h(IuiToggle, { enabled, onToggle: toggle }),
     ),
     error ? h('p', { role: 'alert', style: { margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' } }, error) : null,
+    formSource === null ? null : h(IuiEnhancedPromptSetting, { formSource }),
     h(
       'section',
       { style: IUI_PAGE.section },
@@ -225,11 +257,40 @@ function IuiPluginPage() {
   )
 }
 
+function iuiPromptFormSource(ctx) {
+  if (typeof ctx.inject !== 'function') return null
+  let form = null
+  const listeners = new Set()
+  const notify = () => { for (const listener of listeners) listener() }
+  ctx.inject(['configForms'], (scope) => {
+    const current = scope.configForms?.get?.(IUI_PLUGIN_ENTRY)
+    if (current == null) return
+    form = current
+    const unsubscribe = current.subscribe(notify)
+    notify()
+    return () => {
+      unsubscribe()
+      if (form !== current) return
+      form = null
+      notify()
+    }
+  })
+  return {
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    getSnapshot: () => form?.getSnapshot() ?? null,
+    set: (value) => form?.set('enhancedVisuals', value) ?? false,
+  }
+}
+
 function registerIuiSettings(ctx) {
   if (!ctx.slots || typeof ctx.slots.inject !== 'function') return
+  const formSource = iuiPromptFormSource(ctx)
   // 唯一入口：插件页承载全部可调项与状态；不再注册设置页页签。
   ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
     name: 'plugins.bundle.config',
-    key: 'miopiik-iui',
-  }, () => h(IuiPluginPage)))
+    key: IUI_PLUGIN_ENTRY,
+  }, () => h(IuiPluginPage, { formSource })))
 }

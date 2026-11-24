@@ -54,7 +54,71 @@ ${FENCE}`,
   '每片最多 120 节点、6 层、60 图点、200 表格行，交互只在当前片段。禁止自定义脚本、样式、网络和工具调用。',
 ].join('\n')
 
-export function apply(ctx) {
+/** Optional guidance for choosing and composing a visual explanation. */
+export const IUI_VISUAL_GUIDANCE = [
+  '复杂问题可以用一个可观察的场景贯穿解释。先确定这个问题有哪些关键关系，哪些关系值得用眼睛比较，哪些适合一句话交代。按用户要的篇幅写。',
+  '如果用户同时追问变化和后果，把难以从一个瞬时对比看懂的那一段放到主图。让读者在相同场景里看到结果怎样积累、延迟或消失，前置事实可直接写在相邻正文或标注里。',
+  '让构图表达问题本身：结构用剖面或叠层，机制用同一场景分阶段变化，分流用路径与瓶颈，取舍用共享尺度与阈值。标注贴近对象，保留参照物，变化前后读者能看出哪里变了。若两个视角各自能回答一个疑问，可在同一交互场景里联动。',
+  '控件优先取自用户提到的条件。安排初值和一个有对照意义的值，在输出前各代入一次。每个控件都应改变至少一个与问题有关的可见结果。若正文说图形会变，把对应的位置、尺寸、显隐或数据绑定到真正不同的结果。图形、读数和正文使用同一组假设、量纲和数值。',
+  '如果问题涉及积累与恢复，区分瞬时速率和已经积累的量。恢复输入时，存量从转折点的值继续变化。把起点、转折和结束放在同一时间轴上，使用 chart kind="line" x-scale="linear" x-unit="秒"，series 为按时间排序的 [[时间,存量],…]。cursor="$state.time" 标出当前时刻；sample(同一组点列, 当前时刻) 得到曲线上的读数。',
+  '要切换整组正文、图和读数，用 <views label="对照主题"><view label="第一种情况" caption="变化的解释">…</view><view label="第二种情况">…</view></views>。需要和其他控件联动时，为 views 写 bind="$state.名称"，两项 view 用不同的 value。drawing 内的 view 只放图元，用于切换同一张图的图层。',
+  '只使用约定中的语法和函数。角度用 sin(x)、cos(x)，参数是弧度。SVG 的 label.text 可写 $state.n + " 单位"；动态正文先用 derive 拼接整句，再使用 <text text="$state.sentence"/>。算式未知时用少数已验证的离散状态。定义统一的单位与假设，至少把一个题设值代入并核对图与正文是否一致。初值和边界的图元、标签都应留在画布内。一幅静态图足够时就直接呈现。教学示意与实测分开。',
+  `例如解释天空放晴后积水为何还在，使用一条曲线覆盖降雨和排水两个阶段。假定前 4 秒净积水每秒 3 升，停雨后每秒排走 2 升，第 10 秒排完：
+${FENCE}iui
+<ui density="auto" fallback="停雨时还有 12 升水，继续排 6 秒才排完">
+  <state name="time" value="4"/>
+  <derive name="trajectory" expr="[[0,0],[4,12],[10,0]]"/>
+  <derive name="water" expr="sample($state.trajectory, $state.time)"/>
+  <slider label="经过时间" bind="$state.time" min="0" max="10" step="1" unit="秒"/>
+  <chart kind="line" x-scale="linear" x-unit="秒" cursor="$state.time" series="$state.trajectory" source="积水量（升，示意）"/>
+  <metric label="积水量" value="$state.water" unit="升"/>
+</ui>
+${FENCE}`,
+].join('\n')
+
+// Match DSH's Standard Schema and settings wire format without a runtime dependency.
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+const visualField = Object.freeze({
+  uid: 2,
+  type: 'boolean',
+  meta: { default: false, volatile: true },
+  toJSON() { return { uid: this.uid, refs: { [this.uid]: { type: this.type, meta: { ...this.meta } } } } },
+})
+
+function validateConfig(raw) {
+  const config = raw ?? {}
+  if (typeof config !== 'object' || Array.isArray(config)) return { issues: [{ message: 'Expected an object' }] }
+  if (config.enhancedVisuals !== undefined && typeof config.enhancedVisuals !== 'boolean') {
+    return { issues: [{ message: 'Expected a boolean', path: ['enhancedVisuals'] }] }
+  }
+  let enabled = config.enhancedVisuals ?? false
+  const enhancedVisuals = Object.freeze({
+    get: () => enabled,
+    [VOLATILE_WRITE](next) { enabled = next },
+  })
+  return { value: { ...config, enhancedVisuals } }
+}
+
+export const Config = Object.assign((raw) => {
+  const checked = validateConfig(raw)
+  if (checked.issues !== undefined) throw new TypeError(checked.issues[0].message)
+  return checked.value
+}, {
+  uid: 1,
+  type: 'object',
+  meta: { default: {} },
+  dict: { enhancedVisuals: visualField },
+  '~standard': { version: 1, vendor: 'schemastery', validate: validateConfig },
+  toJSON() {
+    const field = visualField.toJSON()
+    return { uid: this.uid, refs: {
+      ...field.refs,
+      [this.uid]: { type: this.type, meta: structuredClone(this.meta), dict: { enhancedVisuals: field.uid } },
+    } }
+  },
+})
+
+export function apply(ctx, config) {
   ctx.inject(['systemPrompt'], (scope) => {
     scope.systemPrompt.section({
       name: 'miopiik-iui:render-contract',
@@ -63,6 +127,16 @@ export function apply(ctx) {
       // not a DSH prompt template, so interpolation stays off.
       interpolate: false,
       text: IUI_CHARTER,
+    })
+    scope.systemPrompt.section({
+      name: 'miopiik-iui:visual-guidance',
+      order: 671,
+      interpolate: false,
+      text: () => {
+        const setting = config?.enhancedVisuals
+        const enabled = typeof setting?.get === 'function' ? setting.get() : setting
+        return enabled === true ? IUI_VISUAL_GUIDANCE : ''
+      },
     })
   })
 }

@@ -4,6 +4,14 @@ import assert from 'node:assert/strict'
 import { validateAst } from '../shared/iui-ast.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 
+test('已完整闭合的 JSON 状态串能从弯引号恢复，保留之后的标签', () => {
+  const parsed = parseMiopiikMl(`<ui><state name="phase" value='"故障"‘/><metric label="当前" value="$state.phase"/></ui>`)
+  assert.equal(parsed.ok, true)
+  assert.deepEqual(parsed.degraded, [])
+  assert.equal(parsed.doc.state.phase, '故障')
+  assert.equal(parsed.doc.root.type, 'metric')
+})
+
 const ML = `<ui title="周活跃" fallback="近7天活跃45次">
   <state>{"range":{"current":45,"prev":31,"series":[["一",12]]}}</state>
   <column gap="10">
@@ -68,6 +76,67 @@ test('miopiik-ml：card/grid/table 是通用组合原语，不是预设卡片', 
   assert.equal(grid.children.length, 2)
   assert.equal(grid.children[0].type, 'card')
   assert.equal(grid.children[1].children[0].type, 'table')
+})
+
+test('miopiik-ml：views 的内容可以使用同一个状态和任意受信组件', () => {
+  const source = `<ui><state name="stage" value='"working"'/>
+    <views label="2026" bind="$state.stage">
+      <view label="处理数据" value='"working"' caption="正在读取输入"><metric label="进度" value="1"/></view>
+      <view label="整理结果" value='"result"'><text>已完成</text></view>
+    </views>
+  </ui>`
+  const { doc, degraded } = parseMiopiikMl(source)
+  const checked = validateAst(doc)
+  assert.deepEqual(degraded, [])
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 0)
+  const { root } = checked.ast
+  assert.deepEqual(root.props, { label: '2026', bind: '$state.stage' })
+  assert.deepEqual(root.children.map((pane) => pane.props.value), ['working', 'result'])
+  assert.deepEqual(root.children.map((pane) => pane.children[0].type), ['metric', 'text'])
+})
+
+test('miopiik-ml：只归并相邻正文视图，不修改绘图图层、周边正文或状态', () => {
+  const source = `<ui>
+    <text>开头</text>
+    <view label="初始"><drawing width="40" height="40" label="位置"><rect x="0" y="0" width="10" height="10"/></drawing></view>
+    <view label="后来" caption="出现新结果"><text>过程结束</text></view>
+    <drawing width="40" height="40" label="局部">
+      <view label="原始" value="ignored"><line x1="0" y1="0" x2="10" y2="10"/></view>
+      <view label="变化"><line x1="0" y1="0" x2="12" y2="10"/></view>
+    </drawing>
+    <view label="单独"><text>未归并</text></view>
+    <text>结尾</text>
+  </ui>`
+  const parsed = parseMiopiikMl(source)
+  assert.deepEqual(parsed.degraded, [])
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 1)
+  assert.deepEqual(checked.ast.state, {})
+  const [leading, group, drawing, orphan, trailing] = checked.ast.root.children
+  assert.equal(group.type, 'views')
+  assert.deepEqual(group.props, {})
+  assert.deepEqual(group.children.map((pane) => pane.props.label), ['初始', '后来'])
+  assert.deepEqual([leading.props.text, trailing.props.text], ['开头', '结尾'])
+  assert.deepEqual(drawing.children.map((pane) => pane.type), ['view', 'view'])
+  assert.equal(drawing.children[0].props.value, undefined)
+  assert.equal(orphan.degraded, true)
+})
+
+test('miopiik-ml：可切换视图遵守状态写入约束、容量与内容类型', () => {
+  const valid = '<view label="第一" value="one" caption="第一段"/><view label="第二" value="two" caption="第二段"/>'
+  const check = (attrs, children = valid) => validateAst(parseMiopiikMl(`<ui><views ${attrs}>${children}</views></ui>`).doc)
+  assert.equal(check('').ok, true)
+  assert.equal(check('bind="$data.phase"').ok, false)
+  assert.equal(check('bind="$state.__proto__"').ok, false)
+  assert.equal(check('bind="$state.phase"', valid.replace('value="two"', 'value="one"')).ok, false)
+  assert.equal(check('bind="$state.phase"', valid.replace('value="two"', '')).ok, false)
+  assert.equal(check('', valid.repeat(4)).ok, false)
+  assert.equal(check('', '<text>只能有视图</text>' + valid).ok, false)
+  const badContent = check('', valid.replace('caption="第二段"/>', '><rect x="0" y="0" width="10" height="10"/></view>'))
+  assert.equal(badContent.degraded, 1)
+  assert.equal(badContent.ast.root.children[1].children[0].degraded, true)
 })
 
 test('miopiik-ml：没有 <ui> 根 / 空内容时明确拒绝，让调用方降级为文本', () => {

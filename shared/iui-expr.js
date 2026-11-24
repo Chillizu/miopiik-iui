@@ -27,9 +27,9 @@ export const EXPR_LIMITS = Object.freeze({
 
 const RESERVED = new Set(['__proto__', 'prototype', 'constructor'])
 const SEQUENCE_ARITY = Object.freeze({
-  len: 1, at: 2, gather: 2, dot: 2, matvec: 2, scale: 2, softmax: 1, roundEach: 2, zip: [2, 6], join: 2,
+  len: 1, at: 2, gather: 2, dot: 2, matvec: 2, scale: 2, softmax: 1, roundEach: 2, zip: [2, 6], join: 2, sample: 2,
 })
-const FUNCTIONS = Object.freeze({ round: [1, 2], floor: 1, ceil: 1, abs: 1, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY })
+const FUNCTIONS = Object.freeze({ round: [1, 2], floor: 1, ceil: 1, abs: 1, sin: 1, cos: 1, exp: 1, when: 3, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY })
 const SCOPES = new Set(['state', 'data'])
 const IDENT_START = /[A-Za-z_]/u
 const IDENT_PART = /[A-Za-z0-9_]/u
@@ -224,6 +224,7 @@ function createParser(tokens) {
       ? args.length >= arity[0] && args.length <= arity[1]
       : arity === -1 ? args.length >= 1 : args.length === arity
     if (!validArity) return fail(`${name} 参数个数不合法`)
+    if (name === 'when') return { ok: true, node: { t: 'cond', c: args[0], a: args[1], b: args[2] } }
     return { ok: true, node: { t: 'call', name, args } }
   }
 
@@ -458,9 +459,36 @@ function dotProduct(left, right) {
   return result
 }
 
+/** Interpolate an ordered numeric series. Equal x values use the last value at that x. */
+function sampleLine(points, x, work) {
+  if (points.length === 0 || !numeric(x)) return fail('sample 需要非空数值点列和有限横坐标')
+  if (!spend(work, points.length)) return fail('表达式求值预算超限')
+  let previousX = -Infinity
+  let next = points.length
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index]
+    if (!Array.isArray(point) || !numeric(point[0]) || !numeric(point[1]) || point[0] < previousX) {
+      return fail('sample 需要按横坐标排序的 [x,y] 数值点')
+    }
+    if (point[0] > x && next === points.length) next = index
+    previousX = point[0]
+  }
+  if (next === 0) return finite(points[0][1])
+  const [leftX, leftY] = points[next - 1]
+  if (next === points.length || x === leftX) return finite(leftY)
+  const [rightX, rightY] = points[next]
+  const distance = rightX - leftX
+  const magnitude = Math.max(Math.abs(leftX), Math.abs(rightX)) || 1
+  const left = leftX / magnitude
+  const fraction = Number.isFinite(distance) ? (x - leftX) / distance
+    : (x / magnitude - left) / (rightX / magnitude - left)
+  return finite(leftY * (1 - fraction) + rightY * fraction)
+}
+
 function sequenceCall(name, args, work) {
   const [array, argument] = args
   if (!boundedArray(array)) return fail(`${name} 需要有界数组（最多 ${EXPR_LIMITS.items} 项）`)
+  if (name === 'sample') return sampleLine(array, argument, work)
   if (name === 'len') return { ok: true, value: array.length }
   if (name === 'at') {
     return arrayIndex(array, argument)
@@ -643,6 +671,9 @@ function evaluate(node, scope, work, depth = 0) {
     if (node.name === 'floor') return finite(Math.floor(args[0]))
     if (node.name === 'ceil') return finite(Math.ceil(args[0]))
     if (node.name === 'abs') return finite(Math.abs(args[0]))
+    if (node.name === 'sin') return finite(Math.sin(args[0]))
+    if (node.name === 'cos') return finite(Math.cos(args[0]))
+    if (node.name === 'exp') return finite(Math.exp(args[0]))
     if (node.name === 'min') return finite(Math.min(...args))
     if (node.name === 'max') return finite(Math.max(...args))
     if (args[1] > args[2]) return fail('clamp 需要 lo <= hi')

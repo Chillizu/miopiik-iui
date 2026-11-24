@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { chartMatrix, readBinding, tableMatrix, validateAst } from '../shared/iui-ast.js'
 import { evaluateExpr } from '../shared/iui-expr.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
-import { IUI_CHARTER } from '../index.js'
+import { IUI_CHARTER, IUI_VISUAL_GUIDANCE } from '../index.js'
 import { splitTrustedBlocks } from '../shared/markdown-segments.js'
 
 const compile = (source) => {
@@ -54,6 +54,9 @@ test('数字数组、数组对、对象点列，都按同一种受限图表语�
   assert.equal(chartMatrix([false, 1]), null)
   assert.equal(chartMatrix([1, Number.POSITIVE_INFINITY]), null)
   assert.equal(chartMatrix([]), null)
+  assert.deepEqual(chartMatrix([[0, 2], [1, 3], [1, 4]], 'linear'), [[0, 2], [1, 3], [1, 4]])
+  assert.equal(chartMatrix([[2, 2], [1, 3]], 'linear'), null)
+  assert.equal(chartMatrix([['起点', 2]], 'linear'), null)
 })
 
 test('图表和表格的数据可以直接用受限表达式并保留动态值', () => {
@@ -121,10 +124,10 @@ test('模型常驻章程把用不用交给模型判断，并给出可解析的�
   assert.doesNotMatch(prompt, /优先普通 Markdown/u)
   assert.doesNotMatch(prompt, /展示协议（Extra 层，删掉也不影响主干）/u)
 
-  const blocks = splitTrustedBlocks(IUI_CHARTER)
+  const blocks = splitTrustedBlocks(IUI_CHARTER + '\n' + IUI_VISUAL_GUIDANCE)
     .filter((part) => part.kind === 'block')
     .map((part) => part.raw)
-  assert.ok(blocks.length >= 2, '章程至少应有两个完整围栏示例')
+  assert.ok(blocks.length >= 3, '基础约定和增强指引应包含完整围栏示例')
   for (const block of blocks) {
     const parsed = parseMiopiikMl(block)
     assert.equal(parsed.ok, true, block)
