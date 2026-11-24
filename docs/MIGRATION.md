@@ -13,9 +13,9 @@
 
 ## 2. 版本与发布
 
-- 独立仓库当前版本为 `0.1.1`（**stable**）；发布时未消除的两项已知限制见 [RELEASE-NOTES.md](RELEASE-NOTES.md)。
+- 独立仓库当前版本为 `0.2.0`（**stable**）。兼容范围和已知限制见 [RELEASE-NOTES.md](RELEASE-NOTES.md)。
 - 旧仓库的同名 Release `miopiik-iui-v0.1.0-rc.4` 及其资产、下载链接保持有效。
-- 新仓库已发布 `v0.1.0-rc.4` 至 `v0.1.0-rc.15` 十二个 prerelease tag，以及定稿的 `v0.1.0`；各自附带独立 tarball 与 `SHA256SUMS.txt`。
+- 新仓库的 GitHub Releases 提供 `v0.1.0-rc.4` 至 `v0.1.0-rc.15` 的预发布版本和 `v0.1.0`、`v0.1.1`、`v0.2.0` 正式版，含独立安装包与 SHA-256 校验文件。
 - 包名保持 `miopiik-iui` 不变。
 
 ## 3. 历史数据兼容

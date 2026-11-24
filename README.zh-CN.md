@@ -4,8 +4,8 @@
 
 [English](README.md) | **简体中文**
 
-> **Version 0.2.0-rc.4 — 预发布候选。**
-> 本版本为本地候选，未发布到 npm registry，属于独立插件而非 DeepSeek Harness 上游内置功能；聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
+> **Version 0.2.0 — 正式版。**
+> 这是一个独立插件，可从 [GitHub Releases](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.2.0) 下载。聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
 
 MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输出包含受信行内 token 与受控 `iui` 围栏的普通 Markdown，浏览器将其渲染为声明式界面组件。本插件不依赖 MiOpIIk 的 Mind/Ink/Operator Agent，不维护账本，也不注册模型工具。
 
@@ -21,7 +21,7 @@ MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输�
 
 ## 发布状态
 
-**0.2.0-rc.4** 支持直接在同一幅图里对照条件。图形可共享底图，切换时本地更新图形和图注。图表和表格支持有界数据表达式，无效片段保留可读回退。见[自然问法验收](docs/NATURAL-EXPRESSION.md)和[程序与绘图示例](docs/PROGRAMMABLE-IUI.md)。
+**0.2.0** 支持直接在同一幅图里对照条件。图形可共享底图，切换时本地更新图形和图注。图表和表格支持有界数据表达式，无效片段保留可读回退。见[自然问法验收](docs/NATURAL-EXPRESSION.md)和[程序与绘图示例](docs/PROGRAMMABLE-IUI.md)。
 
 已知限制：
 
@@ -38,7 +38,7 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 
 | | **MiOpIIk IUI**（本仓库） | **MiOpIIk Agent** |
 |---|---|---|
-| 包 | `miopiik-iui` 0.2.0-rc.4，预发布 | `miopiik-dsh` 0.1.2，stable |
+| 包 | `miopiik-iui` 0.2.0，正式版 | `miopiik-dsh` 0.1.2，stable |
 | 层次 | 纯表现层：浏览器侧的受信 Markdown 片段 | host 侧：记忆、治理、后台执行 |
 | 主要面 | 行内 token、`iui` 围栏、声明式组件、本地状态 | `ink_*` 工具面、收件箱/事实/开环/鱼骨账本、Operator 派发 |
 | 状态 | 浏览器 `localStorage` 中的单个渲染偏好 | 工作区 `.dsh/miopiik/` 下的 append-only JSONL 账本 |
@@ -282,8 +282,9 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
    或使用本地打包的 tarball：
 
    ```sh
+   mkdir -p .dsh/tmp/packs
    npm pack --pack-destination .dsh/tmp/packs
-   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.2.0-rc.4.tgz
+   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.2.0.tgz
    ```
 
    也可使用封装脚本 [tools/install-plugin.mjs](tools/install-plugin.mjs)（默认 dry-run；写入运行中的 `web` profile 需显式加 `--allow-running-profile`）：
