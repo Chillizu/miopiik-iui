@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { drawingProps, resolveValue, validateAst } from '../shared/iui-ast.js'
+import { evaluateExpr } from '../shared/iui-expr.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 
 function check(source) {
@@ -49,6 +50,23 @@ test('drawings keep safe siblings and discard unsupported graphics attributes', 
   assert.deepEqual(checked.ast.root.children.map((child) => child.type), ['rect', 'text', 'text', 'text', 'label'])
   assert.deepEqual(checked.ast.root.children[0].props, { x: 0, y: 0, width: 30, height: 30, fill: 'accent' })
   assert.equal(checked.ast.root.children[4].props.text, '210')
+})
+
+test('numeric drawing expressions use local state and retain SVG field bounds', () => {
+  const checked = check(`<ui><drawing width="300" height="120" label="负载示意">
+    <rect x="20" y="20" width="$state.load * 10" height="30" opacity="$state.load / 10"/>
+    <rect x="20" y="40" width="40" height="30" fill="$state.load + 1"/>
+  </drawing></ui>`)
+  assert.equal(checked.degraded, 1)
+  const shape = checked.ast.root.children[0]
+  const render = (load) => {
+    const scope = { state: { load } }
+    return drawingProps('rect', shape.props, (value) => resolveValue(value, scope),
+      (key) => evaluateExpr(shape.geometryExpressions[key], scope).value)
+  }
+  assert.equal(render(4).width, 40)
+  assert.equal(render(7).opacity, 0.7)
+  assert.equal(render(11), null)
 })
 
 test('drawing geometry, path operations and viewport have bounded safe ranges', () => {

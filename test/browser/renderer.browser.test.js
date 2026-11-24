@@ -187,7 +187,7 @@ const DRAWING_COMPARISON_ML = `<ui density="auto" fallback="蓝色圆点仅出�
     <rect x="4" y="4" width="232" height="104"/>
     <view label="之前" caption="共同结构。"/>
     <line x1="16" y1="20" x2="16" y2="48" stroke="muted" stroke-dasharray="3 4"/>
-    <view label="之后" caption="新增一个圆点。" when="$state.showLater"><circle cx="40" cy="40" r="9" fill="accent"/></view>
+    <view label="之后" caption="新增一个圆点。" when="$state.showLater == true"><circle cx="40" cy="40" r="9" fill="accent"/></view>
     <label x="120" y="97" align="center" text="共用标注"/>
   </drawing>
 </ui>`

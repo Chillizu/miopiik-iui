@@ -265,8 +265,8 @@ function drawingAttribute(type, key, value) {
   return boundedDrawingNumber(value, ...limits) ? value : null
 }
 
-/** SVG props are allowlisted and revalidated after resolving the permitted bindings. */
-export function drawingProps(type, props, resolve = null) {
+/** SVG props are allowlisted and revalidated after resolving local values. */
+export function drawingProps(type, props, resolve = null, inlineNumber = null) {
   if (type !== 'drawing' && type !== 'view' && !DRAWING_SHAPES.has(type)) return null
   const safe = {}
   for (const [key, rule] of Object.entries(REGISTRY[type].props)) {
@@ -281,7 +281,10 @@ export function drawingProps(type, props, resolve = null) {
       }
       value = resolve(value)
     }
-    const normalized = drawingAttribute(type, key, value)
+    const calculated = !bound && DRAWING_SHAPES.has(type) && rule.startsWith('number') && typeof value === 'string'
+      ? inlineNumber?.(key, value)
+      : undefined
+    const normalized = calculated !== undefined && resolve === null ? value : drawingAttribute(type, key, calculated ?? value)
     if (normalized === null && type === 'view' && key === 'caption' && (bound || typeof value === 'string' && value.trim() === '')) continue
     if (normalized === null) return null
     safe[key] = normalized
@@ -599,8 +602,10 @@ export function validateAst(input) {
     if (node.type === 'table' && props.filter !== undefined && readBinding(props.filter).scope !== 'state') {
       return failNode(node, path, 'table.filter 只能绑定 $state.*')
     }
+    let conditionExpression = null
     if (props.when !== undefined && typeof props.when !== 'boolean' && readBinding(props.when).scope !== 'state') {
-      return failNode(node, path, 'when 需要布尔值或 $state.* 绑定')
+      if (typeof props.when === 'string' && props.when.includes('$state.')) conditionExpression = compileDataset(props.when)
+      if (conditionExpression === null) return failNode(node, path, 'when 需要布尔值、$state.* 绑定或局部条件')
     }
     let datasetExpression = null
     if (node.type === 'chart') {
@@ -620,7 +625,15 @@ export function validateAst(input) {
       if (views.length === 1 || views.length > DRAWING_MAX_VIEWS) return failNode(node, path, `drawing 需要 2–${DRAWING_MAX_VIEWS} 个 view 来展示对照`)
       if (count === 0 || count > DRAWING_MAX_SHAPES) return failNode(node, path, `drawing 需要 1–${DRAWING_MAX_SHAPES} 个图形原语`)
     }
-    if ((node.type === 'drawing' || node.type === 'view' || shape) && drawingProps(node.type, props) === null) {
+    const geometryExpressions = {}
+    const compileGeometry = (key, source) => {
+      if (!source.includes('$state.')) return undefined
+      const expression = compileDataset(source)
+      if (expression === null) return undefined
+      geometryExpressions[key] = expression
+      return source
+    }
+    if ((node.type === 'drawing' || node.type === 'view' || shape) && drawingProps(node.type, props, null, compileGeometry) === null) {
       return failNode(node, path, `${node.type} 的图形属性无效或超出预算`)
     }
     if (node.type === 'text' && typeof props.text === 'string' && props.text.length > LIMITS.text) {
@@ -628,18 +641,20 @@ export function validateAst(input) {
     }
     if (node.type === 'table') {
       // columns/rows 可为字面量，也可绑定到 $state.*（派生状态）；绑定形态在渲染期解析后再归一。
+      const positional = props.columns === undefined
       const columnsBound = readBinding(props.columns).scope !== undefined
       const rowsBinding = readBinding(props.rows)
       datasetExpression = compileDataset(rowsBinding.literal)
       const rowsBound = rowsBinding.scope !== undefined || datasetExpression !== null
-      if (!columnsBound && (!Array.isArray(props.columns) || props.columns.length === 0 || props.columns.length > 12)) return failNode(node, path, 'table 需要 1–12 列')
+      if (!positional && !columnsBound && (!Array.isArray(props.columns) || props.columns.length === 0 || props.columns.length > 12)) return failNode(node, path, 'table 需要 1–12 列')
       if (!rowsBound && !Array.isArray(props.rows)) return failNode(node, path, 'table 需要 rows 数组或 $state 绑定')
       if (!rowsBound && Array.isArray(props.rows) && props.rows.length > 200) return failNode(node, path, 'table 最多 200 行')
-      if (!columnsBound) {
+      if (!positional && !columnsBound) {
         const columnsOk = props.columns.every((column) => typeof column === 'string' || (isRecord(column) && typeof column.label === 'string' && (column.key === undefined || (typeof column.key === 'string' && !RESERVED.has(column.key) && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u.test(column.key)))))
         if (!columnsOk) return failNode(node, path, 'table.columns 需要字符串或 {key,label} 描述符')
       }
       if (!rowsBound) {
+        if (positional && positionalTableColumns(props.rows) === null) return failNode(node, path, '无表头的 table 需要 1–12 列位置数据')
         const rowsOk = props.rows.every((row) => Array.isArray(row) || (row !== null && typeof row === 'object'))
         if (!rowsOk) return failNode(node, path, 'table.rows 的每一项需要数组或对象')
       }
@@ -711,6 +726,8 @@ export function validateAst(input) {
     const normalized = { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props: safeProps, children }
     if (typeof node.fallback === 'string' && node.fallback.trim() !== '') normalized.fallback = node.fallback.slice(0, LIMITS.text)
     if (datasetExpression !== null) normalized.datasetExpression = datasetExpression
+    if (Object.keys(geometryExpressions).length > 0) normalized.geometryExpressions = geometryExpressions
+    if (conditionExpression !== null) normalized.conditionExpression = conditionExpression
     if (node.type === 'derive') derives.push({ node: normalized, source: node, path })
     if (binding !== null) bindPaths.push(binding.key)
     return normalized
@@ -735,6 +752,17 @@ export function validateAst(input) {
     derivePlan,
     ast: { version: IUI_VERSION, state, root, density, fallback, title: typeof input?.title === 'string' ? input.title : '' },
   }
+}
+
+/** Recover positional rows without inventing column names or object field order. */
+export function positionalTableColumns(rows) {
+  if (!Array.isArray(rows) || rows.length > 200) return null
+  let count = 0
+  for (const row of rows) {
+    if (!Array.isArray(row) || row.length > 12) return null
+    count = Math.max(count, row.length)
+  }
+  return Array(count).fill('')
 }
 
 /** 表格归一：列可为字符串或 {key,label}，行可为二维数组或对象；输出纯二维字符串表。 */

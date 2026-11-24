@@ -39,6 +39,20 @@ test('未知组件只降级该子树：父布局与合法兄弟保留', () => {
   assert.equal(checked.ast.root.type, 'column', '父布局必须保留')
 })
 
+test('省略表头的表格恢复位置数据，并拒绝对象行和超列预算', () => {
+  const check = (rows) => {
+    const doc = good()
+    doc.root.children.push({ type: 'table', props: { rows } })
+    return validateAst(doc)
+  }
+  const live = check('[["间隔", $state.range.current, "秒"]]')
+  assert.equal(live.degraded, 0)
+  assert.equal(live.ast.root.children.at(-1).datasetExpression.ok, true)
+  assert.equal(check([['班次', 27], ['间隔', 133, '秒']]).degraded, 0)
+  assert.equal(check([{ name: '班次', value: 27 }]).degraded, 1)
+  assert.equal(check([Array(13).fill(1)]).degraded, 1)
+})
+
 test('根节点损坏 / 预算超限：整份拒绝（安全边界）', () => {
   assert.equal(validateAst({ root: { id: 'r', type: 'nope' }, fallback: 'f' }).ok, false)
   const deep = (() => { let node = { id: 'leaf', type: 'text', props: { text: 'x' } }; for (let i = 0; i < 6; i += 1) node = { id: `n${i}`, type: 'column', children: [node] }; return node })()
