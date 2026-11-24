@@ -5,7 +5,7 @@
 **English** | [简体中文](README.zh-CN.md)
 
 > **Version 0.2.0 — stable.**
-> Download the independent plugin from [GitHub Releases](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.2.0). In-chat rendering requires an **unofficial, version-coupled patch** of `@deepseek-ai/dsh-client-ui-chat`. See [Release status](#release-status).
+> Install the independent plugin from [npm](https://www.npmjs.com/package/miopiik-iui/v/0.2.0) or [GitHub Releases](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.2.0). In-chat rendering requires an **unofficial, version-coupled patch** of `@deepseek-ai/dsh-client-ui-chat`. See [Release status](#release-status).
 
 MiOpIIk IUI is a presentation-only plugin for DeepSeek Harness (DSH) Web. Models write standard Markdown containing trusted inline tokens and fenced `iui` blocks; the browser renders those fragments as declarative interface components. The plugin operates independently of the MiOpIIk Mind/Ink/Operator agent, stores no ledger, and registers no model tools.
 
@@ -261,28 +261,35 @@ Full support details are in [docs/SUPPORT-MATRIX.md](docs/SUPPORT-MATRIX.md).
 
 ## Install, upgrade, rollback
 
-Evaluate this candidate in a separate DSH profile. In-chat rendering requires the local host patch generated from this checkout.
+Install into the DSH Web profile you want to use. In-chat rendering requires the local host patch generated in step 3.
 
 ### Prerequisites
 
 - A DSH Web installation (`0.2.2-rc.1` baseline) with a modifiable profile.
 - Node.js `>= 23.6` and `dsh` on `PATH`.
-- A local checkout of this repository.
+- A checkout of [the `v0.2.0` release](https://github.com/Chillizu/miopiik-iui/tree/v0.2.0) to generate the host patch.
 
 ### Install
 
-1. Add the plugin to the target profile:
+1. Install the package into the target profile.
+
+   ```sh
+   dsh plugin --profile <profile> add miopiik-iui@0.2.0
+   ```
+
+   To install through DSH Web, enable **Custom plugin indexes** in **Plugins → Experimental plugins**. Open **Discover → Add index source**, paste the [MiOpIIk index URL](https://raw.githubusercontent.com/Chillizu/miopiik-iui/main/dsh-index.json), and install **MiOpIIk IUI**. Then continue with the host patch steps below.
+
+   To use a release tarball, download `miopiik-iui-0.2.0.tgz` and `SHA256SUMS.txt` from the [GitHub Release](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.2.0). From the download directory, verify and install the tarball.
+
+   ```sh
+   sha256sum -c SHA256SUMS.txt
+   dsh plugin --profile <profile> add ./miopiik-iui-0.2.0.tgz
+   ```
+
+   To install your own development checkout, use its absolute path:
 
    ```sh
    dsh plugin --profile <profile> add /absolute/path/to/miopiik-iui
-   ```
-
-   Or install from a local tarball:
-
-   ```sh
-   mkdir -p .dsh/tmp/packs
-   npm pack --pack-destination .dsh/tmp/packs
-   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.2.0.tgz
    ```
 
    You can also use [tools/install-plugin.mjs](tools/install-plugin.mjs), which defaults to dry-run and requires `--allow-running-profile` before modifying the `web` profile:
@@ -319,7 +326,7 @@ Evaluate this candidate in a separate DSH profile. In-chat rendering requires th
 
 ### Upgrade
 
-1. Install the updated checkout or tarball (`dsh plugin --profile <profile> add <new-checkout-or-tarball>`).
+1. Run `dsh plugin --profile <profile> add miopiik-iui@<new-version>`. You can also pass the new checkout or tarball path in place of the npm spec.
 2. Run `node tools/build.mjs --check`.
 3. If the DSH version changed, rerun `node tools/fork-chat-embeds.mjs` and `node tools/fork-chat-embeds.mjs --check`.
 4. Restart DSH Web. Existing session messages render with the updated bundle on next load.
@@ -418,8 +425,6 @@ No. `miopiik-iui` and `miopiik-dsh` are independent packages and can be installe
 ## Limitations
 
 - **Inline tokens inside single backticks.** The paragraph splitter matches `{{badge:...}}`, `{{icon:...}}`, and `{{code:...}}` inside single-backtick inline code; place literal token examples inside fenced code blocks.
-- **Lossy cross-token Markdown.** Splitting text nodes at inline tokens interrupts formatting spans (such as `**bold**`) and alters selection, copy, and screen-reader traversal across the token boundary.
-- **Non-incremental streaming.** Unclosed `iui` fences render as plain text until the closing fence arrives.
 - **Version-coupled host patch.** The `ui-chat` patch targets specific anchors in DSH `0.2.2-rc.1` and must be regenerated when DSH upgrades.
 - **Local-only fork.** The generated `upstream/dsh-client-ui-chat-embeds/` directory is a local profile artifact and must not be published to npm.
 - **Read-only legacy widget replay.** The retired seven-widget `ink-view` protocol is mapped on a best-effort basis; `choice` actions are non-interactive, and unmappable specs remain as raw text (ignoring the old spec's `fallback` field).

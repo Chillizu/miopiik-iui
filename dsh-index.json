@@ -1,0 +1,57 @@
+{
+  "format": 1,
+  "title": {
+    "en": "MiOpIIk plugins",
+    "zh": "MiOpIIk 插件"
+  },
+  "plugins": [
+    {
+      "name": "miopiik-iui",
+      "title": "MiOpIIk IUI",
+      "description": {
+        "en": "Interactive diagrams, charts, and controls in DSH Web chat. In-chat rendering requires a local host patch.",
+        "zh": "在 DSH Web 聊天中渲染交互图、图表和控件。正文内联渲染需要本地宿主补丁。"
+      },
+      "icon": "icon.svg",
+      "author": "Chillizu",
+      "homepage": "https://github.com/Chillizu/miopiik-iui#readme",
+      "repository": {
+        "url": "https://github.com/Chillizu/miopiik-iui"
+      },
+      "versions": [
+        {
+          "version": "0.2.0",
+          "publishTimestamp": 1795498564,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    },
+    {
+      "name": "miopiik-dsh",
+      "title": "MiOpIIk Agent",
+      "description": {
+        "en": "Session ledgers, approval gates, and background execution for DSH Web.",
+        "zh": "为 DSH Web 提供会话账本、操作确认与后台执行。"
+      },
+      "icon": "https://raw.githubusercontent.com/Chillizu/miopiik/a5044465151617b3465a8b412504856b8dcc2307/icon.svg",
+      "author": "Chillizu",
+      "homepage": "https://github.com/Chillizu/miopiik#readme",
+      "repository": {
+        "url": "https://github.com/Chillizu/miopiik"
+      },
+      "versions": [
+        {
+          "version": "0.1.2",
+          "publishTimestamp": 1794630652,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/Chillizu/miopiik",
+            "commit": "a5044465151617b3465a8b412504856b8dcc2307"
+          }
+        }
+      ]
+    }
+  ]
+}

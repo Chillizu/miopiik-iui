@@ -5,7 +5,7 @@
 [English](README.md) | **简体中文**
 
 > **Version 0.2.0 — 正式版。**
-> 这是一个独立插件，可从 [GitHub Releases](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.2.0) 下载。聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
+> 可通过 [npm](https://www.npmjs.com/package/miopiik-iui/v/0.2.0) 或 [GitHub Releases](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.2.0) 单独安装。聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
 
 MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输出包含受信行内 token 与受控 `iui` 围栏的普通 Markdown，浏览器将其渲染为声明式界面组件。本插件不依赖 MiOpIIk 的 Mind/Ink/Operator Agent，不维护账本，也不注册模型工具。
 
@@ -263,28 +263,35 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 ## 安装、升级、回滚
 
-请在独立 DSH profile 中验证本候选。聊天内联渲染依赖从此 checkout 生成的本地宿主补丁。
+将插件装到要使用的 DSH Web profile。聊天内联渲染依赖第 3 步生成的本地宿主补丁。
 
 ### 前置条件
 
 - 可修改 profile 的 DSH Web 安装（基线 `0.2.2-rc.1`）。
 - Node.js `>= 23.6`，且 `PATH` 中包含 `dsh` CLI。
-- 本仓库的本地 checkout。
+- 本仓库 [`v0.2.0` 版本](https://github.com/Chillizu/miopiik-iui/tree/v0.2.0)的本地 checkout，用于生成宿主补丁。
 
 ### 安装
 
-1. 将插件加入目标 profile：
+1. 将插件安装到目标 profile。
+
+   ```sh
+   dsh plugin --profile <profile> add miopiik-iui@0.2.0
+   ```
+
+   也可在 DSH Web 的「插件 → 实验性插件」启用「自定义插件索引」，打开「发现 → 添加索引源」，粘贴 [MiOpIIk 索引地址](https://raw.githubusercontent.com/Chillizu/miopiik-iui/main/dsh-index.json)，安装 **MiOpIIk IUI**。随后继续配置下方的宿主补丁。
+
+   若使用发布包，从 [GitHub Release](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.2.0) 下载 `miopiik-iui-0.2.0.tgz` 和 `SHA256SUMS.txt`，在下载目录校验并安装。
+
+   ```sh
+   sha256sum -c SHA256SUMS.txt
+   dsh plugin --profile <profile> add ./miopiik-iui-0.2.0.tgz
+   ```
+
+   开发时可直接用 checkout 的绝对路径安装。
 
    ```sh
    dsh plugin --profile <profile> add /absolute/path/to/miopiik-iui
-   ```
-
-   或使用本地打包的 tarball：
-
-   ```sh
-   mkdir -p .dsh/tmp/packs
-   npm pack --pack-destination .dsh/tmp/packs
-   dsh plugin --profile <profile> add .dsh/tmp/packs/miopiik-iui-0.2.0.tgz
    ```
 
    也可使用封装脚本 [tools/install-plugin.mjs](tools/install-plugin.mjs)（默认 dry-run；写入运行中的 `web` profile 需显式加 `--allow-running-profile`）：
@@ -321,7 +328,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 ### 升级
 
-1. 将目标 profile 的依赖更新为新版本路径或 tarball（`dsh plugin --profile <profile> add <新 checkout 或 tarball>`）。
+1. 运行 `dsh plugin --profile <profile> add miopiik-iui@<新版本>`，也可用新 checkout 或 tarball 路径替换 npm 包名。
 2. 在新版本目录执行 `node tools/build.mjs --check`。
 3. 若 DSH 版本已升级，重新执行 `node tools/fork-chat-embeds.mjs` 与 `--check`。
 4. 重启 DSH Web。历史消息无需迁移，查看时按新版本渲染。
@@ -420,8 +427,6 @@ node tools/fork-chat-embeds.mjs --check
 ## 局限
 
 - **单反引号行内代码中的 token 会被识别。** 切分器在普通段落（含单反引号内文本）匹配行内 token；展示字面 token 示例请使用围栏代码块。
-- **跨 token Markdown 有损。** 行内 token 会切分 Markdown 文本块，跨越 token 边界的加粗/斜体等格式会断开，选中复制与屏幕阅读器朗读顺序与单节点 Markdown 存在差异。
-- **流式非增量。** 未闭合的 `iui` 围栏在流式期间按纯文本显示，闭合后一次性渲染。
 - **版本耦合的实验性补丁。** 宿主挂钩基于 DSH `0.2.2-rc.1` 的 `ui-chat` 包锚点生成，DSH 升级后需重新生成。
 - **本地 fork 不可作为官方包发布。** `upstream/dsh-client-ui-chat-embeds/` 仅供本地受控 profile 链接使用。
 - **旧 `ink-view` 仅做只读回放。** 七 Widget 协议已退役；历史数据零迁移，由只读 legacy adapter 映射回放，`choice` 动作不执行，无法映射的 spec 保留原始文本（不使用旧 spec 的 `fallback` 字段），不写回账本。
