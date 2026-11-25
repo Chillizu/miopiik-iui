@@ -215,6 +215,16 @@ const STATIC_DRAWING_ML = `<ui density="auto" fallback="剖面中可以看到密
   </drawing>
 </ui>`
 
+// 自适应边界回归：静态曲线路径和固定标注略微越过作者视口，切换视图后应共用完整边界。
+const ADAPTIVE_DRAWING_ML = `<ui density="auto">
+  <drawing width="240" height="100" label="边界适配">
+    <path d="M20 64 C92 18 196 18 282 64" stroke="accent" fill="none"/>
+    <label x="236" y="24" align="start" text="边缘说明"/>
+    <view label="路径" caption="包含轻微越界路径。"><circle cx="40" cy="82" r="4"/></view>
+    <view label="标注" caption="包含轻微越界标注。"><circle cx="60" cy="82" r="4"/></view>
+  </drawing>
+</ui>`
+
 const BOUND_VIEWS_ML = `<ui density="auto">
   <state name="phase" value='"before"'/>
   <views label="变化过程" bind="$state.phase">
@@ -384,6 +394,7 @@ const SETUP = `
       if (flat.length > 0) props.children = flat;
       return { __iuiEl: true, type, key: key === null || key === undefined ? null : String(key), props };
     }
+    const svgAttributes = Object.fromEntries(['fontSize', 'fontFamily', 'textAnchor', 'strokeWidth', 'strokeLinecap', 'strokeLinejoin', 'strokeDasharray', 'markerEnd'].map(name => [name, name.replace(/[A-Z]/g, char => '-' + char.toLowerCase())]));
     function applyProps(el, props) {
       for (const name of Object.keys(props)) {
         const value = props[name];
@@ -397,7 +408,7 @@ const SETUP = `
           }
           continue;
         }
-        if (name === 'className') { el.className = value === undefined || value === null ? '' : String(value); continue; }
+        if (name === 'className') { el.setAttribute('class', value === undefined || value === null ? '' : String(value)); continue; }
         if (name === 'value' && ['INPUT','SELECT','TEXTAREA'].includes(el.tagName)) { el.value = value === undefined || value === null ? '' : String(value); continue; }
         if (/^on[A-Z]/u.test(name) && typeof value === 'function') {
           const event = name.slice(2).toLowerCase();
@@ -407,7 +418,8 @@ const SETUP = `
           continue;
         }
         if (value === undefined || value === null || value === false) continue;
-        try { el.setAttribute(name, String(value)); } catch (error) { failures.push('attr:' + String(error && error.message)); }
+        const attr = el.namespaceURI === 'http://www.w3.org/2000/svg' ? svgAttributes[name] ?? name : name;
+        try { el.setAttribute(attr, String(value)); } catch (error) { failures.push('attr:' + String(error && error.message)); }
       }
     }
     function __instance() {
@@ -579,6 +591,7 @@ const MAIN_RUN = `
       legacyLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML.replace(' density="auto"', ''))}),
       comparison:mountBlock(${JSON.stringify(DRAWING_COMPARISON_ML)}),
       staticDrawing:mountBlock(${JSON.stringify(STATIC_DRAWING_ML)}),
+      adaptiveDrawing:mountBlock(${JSON.stringify(ADAPTIVE_DRAWING_ML)}),
       boundViews:mountBlock(${JSON.stringify(BOUND_VIEWS_ML)}),
       numericAxis:mountBlock(${JSON.stringify(NUMERIC_AXIS_ML)}),
       chartScrub:mountBlock(${JSON.stringify(CHART_SCRUB_ML)}),
@@ -980,6 +993,35 @@ const MAIN_RUN = `
             && host.scrollWidth <= host.clientWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth
             ? true : '单视图的图元、图注、可访问关系或窄列布局错误';
         });
+        const adaptive = r3.adaptiveDrawing;
+        const adaptiveFigure = () => adaptive.querySelector('figure[data-iui-drawing-comparison]')
+          ?? adaptive.querySelector('figure');
+        const adaptiveGraph = () => adaptiveFigure()?.querySelector('svg[data-iui-drawing]');
+        const adaptiveBounds = () => {
+          const graph = adaptiveGraph();
+          const path = graph?.querySelector('path');
+          const label = [...(graph?.querySelectorAll('text') ?? [])].find(node => node.textContent === '边缘说明');
+          if (!graph || !path || !label) return null;
+          const pathBox = path.getBBox();
+          const labelBox = label.getBBox();
+          const viewBox = (graph.getAttribute('viewBox') ?? '').trim().split(/[ ,]+/).map(Number);
+          if (viewBox.length !== 4 || viewBox.some(value => !Number.isFinite(value))) return null;
+          return { graph, right: Math.max(pathBox.x + pathBox.width, labelBox.x + labelBox.width), viewRight: viewBox[0] + viewBox[2], viewWidth: viewBox[2] };
+        };
+        const adaptiveOptions = () => [...(adaptiveFigure()?.querySelectorAll('button[data-iui-drawing-option]') ?? [])];
+        const initialAdaptiveBounds = adaptiveBounds();
+        const initialAdaptiveViewBox = adaptiveGraph()?.getAttribute('viewBox');
+        check('adaptiveDrawingBounds', () => initialAdaptiveBounds !== null
+          && initialAdaptiveBounds.viewRight >= initialAdaptiveBounds.right
+          && initialAdaptiveBounds.viewWidth > 240
+          && adaptiveGraph()?.querySelector('path')?.getAttribute('d') === 'M 20 64 C 92 18 196 18 282 64'
+          ? true : '自适应视口未包含路径与标注的实际包围盒');
+        adaptiveOptions()[1]?.click();
+        await wait(25);
+        check('adaptiveDrawingViewSwitch', () => adaptiveOptions()[1]?.getAttribute('aria-pressed') === 'true'
+          && adaptiveGraph()?.getAttribute('viewBox') === initialAdaptiveViewBox
+          && adaptiveBounds()?.viewRight >= adaptiveBounds()?.right
+          ? true : '切换视图后包围盒或共享视口发生变化');
         const boundViews = r3.boundViews;
         const tabs = () => [...boundViews.querySelectorAll('[role=tab]')];
         tabs()[1]?.click();
@@ -1438,7 +1480,7 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-iui-diagram="2"/u,'泳道图应渲染两条 lane')
   assert.match(html,/data-iui-diagram-node="m1"/u,'节点药丸应携带图内 id')
   assert.match(html,/aria-label="派发链路（演示），3 条连线"/u,'连线应有可访问摘要')
-  assert.match(html,/strokeDasharray="4 3"/u,'虚线语义应落在 SVG path 上')
+  assert.match(html,/stroke-dasharray="4 3"/u,'虚线语义应落在 SVG path 上')
   assert.match(html,/注释行：虚线表示异步路径/u,'纯文本行应按注释保留')
   assert.match(html,/data-iui-diagram-edge-label="1"/u,'连线标签应为 HTML 覆盖层（SVG 拉伸会压扁文字）')
   // L-11 基础：DOM 级嫁接与流式部分渲染

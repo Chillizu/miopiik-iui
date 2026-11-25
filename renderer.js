@@ -40,6 +40,7 @@
 
     // A checked drawing survives local interactions. Keep its fixed SVG attributes without retaining old drawings.
     const drawingShapePlans = new WeakMap()
+    const drawingMeasuredBounds = new WeakMap()
 
     function getDrawingShapePlan(child) {
       const cached = drawingShapePlans.get(child)
@@ -58,19 +59,77 @@
       return plan
     }
 
+    function measureDrawingBounds(children, width, height) {
+      const doc = globalThis.document
+      if (doc?.body == null) return
+      const samples = []
+      for (const child of children) {
+        if (drawingMeasuredBounds.has(child) || (child.type !== 'path' && child.type !== 'label')) continue
+        const shape = getDrawingShapePlan(child).props
+        if (shape == null) continue
+        if (child.type === 'label') {
+          const size = shape.size ?? 13
+          const advance = shape.text.length * size * 1.2
+          const left = shape.align === 'end' ? shape.x - advance : shape.align === 'middle' ? shape.x - advance / 2 : shape.x
+          if (left >= 0 && left + advance <= width && shape.y - size >= 0 && shape.y + size / 2 <= height) continue
+        }
+        samples.push({ child, shape })
+      }
+      if (samples.length === 0) return
+
+      const ns = 'http://www.w3.org/2000/svg'
+      const svg = doc.createElementNS(ns, 'svg')
+      svg.setAttribute('aria-hidden', 'true')
+      svg.setAttribute('data-iui-drawing-measure', '1')
+      svg.style.cssText = 'position:fixed;inset:0 auto auto 0;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none'
+      for (const sample of samples) {
+        const { child, shape } = sample
+        const element = doc.createElementNS(ns, DRAWING_TAGS[child.type])
+        if (child.type === 'path') element.setAttribute('d', shape.d)
+        else {
+          element.setAttribute('x', shape.x)
+          element.setAttribute('y', shape.y)
+          element.setAttribute('text-anchor', shape.align ?? 'start')
+          element.style.fontFamily = SANS
+          element.style.fontSize = `${shape.size ?? 13}px`
+          element.textContent = shape.text
+        }
+        sample.element = element
+        svg.appendChild(element)
+      }
+      doc.body.appendChild(svg)
+      try {
+        for (const { child, element } of samples) {
+          let bounds = null
+          try {
+            const { x, y, width: w, height: h } = element.getBBox()
+            const measured = [x, y, x + w, y + h]
+            if ((w > 0 || h > 0) && measured.every(Number.isFinite)) bounds = measured
+          } catch {
+            // SVG bounds may be unavailable in non-browser previews.
+          }
+          drawingMeasuredBounds.set(child, bounds)
+        }
+      } finally {
+        svg.remove()
+      }
+    }
+
     function fitDrawingFrame(children, width, height) {
       const frame = { x: 0, y: 0, right: width, bottom: height }
       // Fit modest overhangs across every view. A stray distant coordinate should not shrink the scene.
       const extraX = width / 4
       const extraY = height / 4
-      for (const child of children.flatMap((part) => part.type === 'view' ? part.children : [part])) {
-        if (child.type !== 'rect' && child.type !== 'circle' && child.type !== 'line') continue
+      for (const child of children) {
+        if (!Object.hasOwn(DRAWING_TAGS, child.type)) continue
         const shape = getDrawingShapePlan(child).props
         if (shape == null) continue
         let bounds
         if (child.type === 'rect') bounds = [shape.x, shape.y, shape.x + shape.width, shape.y + shape.height]
         else if (child.type === 'circle') bounds = [shape.cx - shape.r, shape.cy - shape.r, shape.cx + shape.r, shape.cy + shape.r]
-        else bounds = [Math.min(shape.x1, shape.x2), Math.min(shape.y1, shape.y2), Math.max(shape.x1, shape.x2), Math.max(shape.y1, shape.y2)]
+        else if (child.type === 'line') bounds = [Math.min(shape.x1, shape.x2), Math.min(shape.y1, shape.y2), Math.max(shape.x1, shape.x2), Math.max(shape.y1, shape.y2)]
+        else bounds = drawingMeasuredBounds.get(child)
+        if (bounds == null) continue
         const [left, top, right, bottom] = bounds
         if (left < -extraX || top < -extraY || right > width + extraX || bottom > height + extraY) continue
         const inset = Math.ceil((shape.strokeWidth ?? 1.5) / 2)
@@ -125,11 +184,26 @@
       const captionId = React.useId()
       const weightStyle = weight === undefined ? {} : WEIGHT_STYLE[weight]
       const viewport = IUI_AST.drawingProps('drawing', item.props, resolve)
-      const frame = React.useMemo(() => {
-        if (!adaptive || viewport === null) return null
-        if (streaming === true) return { x: 0, y: 0, right: viewport.width, bottom: viewport.height }
-        return fitDrawingFrame(item.children, viewport.width, viewport.height)
-      }, [adaptive, item.children, streaming, viewport?.width, viewport?.height])
+      const widthHint = viewport?.width
+      const heightHint = viewport?.height
+      const primitives = React.useMemo(() => {
+        if (!adaptive || streaming === true || widthHint === undefined) return null
+        return item.children.flatMap((part) => part.type === 'view' ? part.children : [part])
+      }, [adaptive, item.children, streaming, widthHint])
+      const [measured, updateMeasured] = React.useState(null)
+      const baseFrame = React.useMemo(() => {
+        if (!adaptive || widthHint === undefined) return null
+        if (primitives === null) return { x: 0, y: 0, right: widthHint, bottom: heightHint }
+        return fitDrawingFrame(primitives, widthHint, heightHint)
+      }, [adaptive, widthHint, heightHint, primitives])
+      React.useLayoutEffect(() => {
+        if (primitives === null) return
+        measureDrawingBounds(primitives, widthHint, heightHint)
+        const next = fitDrawingFrame(primitives, widthHint, heightHint)
+        if (next.x === baseFrame.x && next.y === baseFrame.y && next.right === baseFrame.right && next.bottom === baseFrame.bottom) return
+        updateMeasured({ baseFrame, frame: next })
+      }, [primitives, widthHint, heightHint, baseFrame])
+      const frame = measured?.baseFrame === baseFrame ? measured.frame : baseFrame
       if (viewport === null) return h('div', { 'data-iui-drawing-invalid': '1', 'data-iui-weight': weight, style: { color: C.muted, ...weightStyle } }, '示意图暂不可用')
 
       const options = []
