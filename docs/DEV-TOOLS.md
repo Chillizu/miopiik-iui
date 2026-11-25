@@ -56,6 +56,8 @@ node tools/fork-chat-embeds.mjs           # 生成或更新 fork（需已安装 
 
 `tools/bench-formats.mjs` 与 `tools/analyze-bench.mjs` 用于对比模型输出格式（需将 `MIOPIIK_DSH_SESSIONS_DIR` 指向目标工作区会话目录，并在新建测试会话中运行）。
 
+跨平台同题的样本、定性标准和缺陷归纳见 [IUI 表达验收](EXPRESSION-ACCEPTANCE.md)。
+
 ## 5. 离线历史会话回放统计
 
 ```sh
