@@ -33,7 +33,7 @@ export const REGISTRY = Object.freeze({
   callout: { props: { tone: 'string?', title: 'string?', text: 'string?' }, children: true },
   progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
   empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
-  chart: { props: { kind: 'string', series: 'value', source: 'string?', xScale: 'string?', xUnit: 'string?', cursor: 'value?' }, children: false },
+  chart: { props: { kind: 'string', series: 'value', source: 'string?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?' }, children: false },
   views: { props: { label: 'string?', bind: 'string?' }, children: true },
   drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
   view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
@@ -480,7 +480,7 @@ export function validateAst(input) {
       fatal.push(`节点数超过 ${LIMITS.nodes}`)
       return null
     }
-    const props = isRecord(node.props) ? node.props : {}
+    let props = isRecord(node.props) ? node.props : {}
     if (props.weight !== undefined && !WEIGHTS.includes(props.weight)) {
       return failNode(node, path, 'weight 只能是 primary/secondary/optional')
     }
@@ -656,6 +656,15 @@ export function validateAst(input) {
     if (node.type === 'chart') {
       if (!['bar', 'line', 'donut'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut')
       if (props.xScale !== undefined && (props.kind !== 'line' || props.xScale !== 'linear')) return failNode(node, path, '数值横轴只用于折线图')
+      if (props.yUnit !== undefined && typeof props.yUnit !== 'string') return failNode(node, path, 'chart.yUnit 需要文本或状态绑定')
+      if (props.scrub !== undefined) {
+        if (props.kind !== 'line' || props.cursor !== undefined) return failNode(node, path, 'chart.scrub 只用于折线图，且不能与 chart.cursor 同时使用')
+        const label = typeof props.scrub === 'string' ? props.scrub.trim() : ''
+        if (label === '' || props.scrub.length > 120 || readBinding(label).scope !== undefined) {
+          return failNode(node, path, 'chart.scrub 需要 120 字以内的非空字面标签')
+        }
+        props = { ...props, xScale: 'linear', scrub: label }
+      }
       if (props.cursor !== undefined && (props.xScale !== 'linear'
         || (!Number.isFinite(props.cursor) && readBinding(props.cursor).scope !== 'state'))) {
         return failNode(node, path, 'chart.cursor 需要数值横轴，以及数值或 $state.* 绑定')

@@ -90,7 +90,8 @@
   border-block-end: 1px solid var(--iui-line);
 }
 
-[data-iui-slider] {
+[data-iui-slider],
+[data-iui-chart-scrub] {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
@@ -277,6 +278,17 @@
   color: var(--iui-muted);
   font-size: 11px;
   line-height: 1.5;
+}
+
+[data-iui-chart-scrub] {
+  margin-block-start: 2px;
+  padding-block-start: 5px;
+  border-block-start: 1px solid var(--iui-line);
+}
+
+.miopiik-scrub-position {
+  color: var(--iui-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .miopiik-chart-guide { stroke: var(--iui-line); }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 import { IUI_VERSION, readBinding, resolveValue, validateAst } from '../shared/iui-ast.js'
+import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 
 const good = () => ({
   title: 't',
@@ -136,6 +137,33 @@ test('chart.kind 放行 donut，其余未知 kind 仍拒绝', () => {
   assert.equal(compile('donut').degraded, 0)
   assert.equal(compile('line').degraded, 0)
   assert.equal(compile('pie').degraded, 1)
+})
+
+test('折线图 scrub 使用线性横轴，保留单位绑定并拒绝冲突控制', () => {
+  const ml = parseMiopiikMl(`<ui><chart kind="line" scrub=" 经过时间 " x-unit="秒" y-unit="$state.unit"
+    series='accumulate([[0,2],[4,-1],[12,0]],0)'/></ui>`)
+  assert.equal(ml.ok, true)
+  const checked = validateAst(ml.doc)
+  assert.equal(checked.ok, true)
+  const { props, datasetExpression } = checked.ast.root
+  assert.equal(props.scrub, '经过时间')
+  assert.equal(props.xScale, 'linear')
+  assert.equal(props.xUnit, '秒')
+  assert.equal(resolveValue(props.yUnit, { state: { unit: '件' } }), '件')
+  assert.equal(datasetExpression.ok, true)
+  assert.equal(ml.doc.root.props.xScale, undefined, '校验不会修改原始文档')
+
+  const chart = (overrides) => validateAst({ root: {
+    type: 'chart', props: { kind: 'line', scrub: '时间', series: [[0, 2], [4, 0]], ...overrides },
+  } })
+  assert.equal(chart({ yUnit: '件' }).ok, true)
+  assert.equal(chart({ scrub: '字'.repeat(120) }).ok, true)
+  const invalid = [
+    { kind: 'bar' }, { scrub: true }, { scrub: '   ' }, { scrub: '字'.repeat(121) },
+    { scrub: '$state.t' }, { cursor: 0 }, { xScale: 'ordinal' }, { series: [['开始', 2], ['结束', 0]] },
+  ]
+  for (const overrides of invalid) assert.equal(chart(overrides).ok, false, JSON.stringify(overrides))
+  assert.equal(chart({ scrub: undefined, cursor: 0, xScale: 'linear' }).ok, true)
 })
 
 test('when / table.filter：只接受 $state 绑定，坏值只降级自身、兄弟保留', () => {

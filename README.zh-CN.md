@@ -176,6 +176,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 | 图连线 | `edge` | `from`/`to`（节点 id）、`label`、`kind`（默认 `solid` / `dashed`）。未知引用只降级该边；纯文本行按注释渲染。 |
 | 视图切换 | `views` | 包含 2–6 个 `view`，可在其中组合正文、图形和指标。每项有 `label` 和可选 `caption`。可通过 `bind="$state.*"` 联动其它控件，绑定时各项需有不同的标量 `value`。 |
 | 数值折线横轴 | `chart kind="line" x-scale="linear"` | `series` 为按横坐标排序的 `[x,y]` 数值点列。`x-unit` 标注横轴单位，`cursor="$state.time"` 标记当前横坐标。`accumulate([[时间,净速率], …], 初值)` 生成非负存量曲线，最后一点指定结束时间。`sample(series, time)` 从同一曲线读取当前值。 |
+| 探索曲线 | `chart kind="line" scrub="经过时间" x-unit="秒" y-unit="升"` | 从数值 `series` 生成滑杆与插值读数，游标从第一个点起步。需要和其他组件共享位置时，另用 `slider` 配合 `cursor="$state.time"`。 |
 
 任何组件都可写 `when="$state.*"`（可配 `is="值"` 做等值切换），按本地状态控制自身显隐。组件白名单由 [shared/iui-ast.js](shared/iui-ast.js) 的 `REGISTRY` 强制执行，未知标签会局部降级。
 

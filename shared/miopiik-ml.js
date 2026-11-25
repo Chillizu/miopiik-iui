@@ -243,6 +243,7 @@ function normalizeAttrs(element) {
     if (attrs.data !== undefined && attrs.series === undefined) attrs.series = attrs.data
     if (attrs.xScale === undefined) attrs.xScale = attrs['x-scale']
     if (attrs.xUnit === undefined) attrs.xUnit = attrs['x-unit']
+    if (attrs.yUnit === undefined) attrs.yUnit = attrs['y-unit']
     delete attrs.type
     delete attrs.data
   }
@@ -328,7 +329,7 @@ const TEXT_PROPS = Object.freeze({
   empty: ['text', 'title', 'description', 'icon'],
   divider: ['label'],
   metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
-  chart: ['kind', 'type', 'series', 'source', 'title', 'xScale', 'xUnit', 'cursor'],
+  chart: ['kind', 'type', 'series', 'source', 'title', 'xScale', 'xUnit', 'yUnit', 'cursor', 'scrub'],
   views: ['label', 'bind'],
   drawing: ['width', 'height', 'label'],
   view: ['label', 'caption'],
@@ -358,7 +359,7 @@ const TEXT_PROPS = Object.freeze({
 })
 
 /** 必须保留源码字符串的属性（表达式等），不得被 JSON/数字归一吞掉。 */
-const RAW_PROPS = Object.freeze({ derive: ['expr'], views: ['label'], drawing: ['label'], view: ['label', 'caption'], line: ['strokeDasharray'], path: ['d'], label: ['text'] })
+const RAW_PROPS = Object.freeze({ derive: ['expr'], views: ['label'], drawing: ['label'], view: ['label', 'caption'], line: ['strokeDasharray'], path: ['d'], label: ['text'], chart: ['yUnit', 'scrub'] })
 
 /**
  * 解析 miopiik-ml 源码。

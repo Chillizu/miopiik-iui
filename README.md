@@ -174,6 +174,7 @@ Grammar rules:
 | Diagram edge | `edge` | `from`/`to` (node ids), `label`, `kind` (`solid` default / `dashed`). Unknown ids degrade that edge only; plain text lines render as annotations. |
 | View switcher | `views` | Two to six `view` children with a `label`, optional `caption`, and display content. Optional `bind="$state.*"` shares the selection with other controls. Each bound view needs a distinct scalar `value`. |
 | Numeric line axis | `chart kind="line" x-scale="linear"` | `series` takes `[x,y]` numeric pairs ordered by x. Optional `x-unit` labels the axis and `cursor="$state.time"` marks the current x value. Use `accumulate([[time,netRate], …], initial)` to calculate a nonnegative stock curve and `sample(series, time)` for the corresponding readout. The last point sets the end time. |
+| Explore a curve | `chart kind="line" scrub="Elapsed time" x-unit="s" y-unit=" L"` | A numeric `series` supplies the range and the interpolated readout. Scrubbing starts at the first point and changes the local cursor. Use `cursor="$state.time"` with a separate slider to share the position with other components. |
 
 Any component may carry `when="$state.*"` (optionally with `is="value"` for equality switching) to gate its own visibility against local state. The component whitelist is defined by `REGISTRY` in [shared/iui-ast.js](shared/iui-ast.js). Unlisted tag names degrade locally.
 

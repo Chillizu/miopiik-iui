@@ -60,18 +60,14 @@ export const IUI_VISUAL_GUIDANCE = [
   '如果用户同时追问变化和后果，把难以从一个瞬时对比看懂的那一段放到主图。让读者在相同场景里看到结果怎样积累、延迟或消失，前置事实可直接写在相邻正文或标注里。',
   '让构图表达问题本身：结构用剖面或叠层，机制用同一场景分阶段变化，分流用路径与瓶颈，取舍用共享尺度与阈值。标注贴近对象，保留参照物，变化前后读者能看出哪里变了。若两个视角各自能回答一个疑问，可在同一交互场景里联动。',
   '先确定片段内的主图或读数，再写它需要的 state 和 derive。每个片段都须实际呈现可见内容。控件优先取自用户提到的条件，变化应改到与问题有关的图形或读数。图形、读数和正文使用同一组假设、量纲和数值。输出前代入初值和一个有意义的对照值。',
-  '如果问题涉及积累与恢复，区分瞬时速率和已经积累的量。用 accumulate([[起始时刻,净速率],[改速时刻,新速率],[结束时刻,0]], 初始存量) 生成非负库存曲线。每个速率沿用到下一个时刻，算出实际归零点。净速率须来自正文相同的输入减输出。用 chart kind="line" x-scale="linear" x-unit="秒" 的 series 绑定该曲线，cursor="$state.time" 标出时刻，sample(同一曲线, 当前时刻) 生成读数。',
+  '积累和恢复用同一个时间轴画出用户问到的量：写出起点、条件改变当下、之后的结果。条件改变当下的存量沿用已经积累的数值。可直接把算过的 [[时刻,存量],…] 写入 chart.series，时刻必须用数值并严格递增；也可用 accumulate([[起点,净速率],[改速时刻,新速率],[终点,0]], 初始存量)，净速率等于流入减流出。',
+  '折线只需加 scrub="观察时刻"、x-unit 和 y-unit，宿主就会用横轴数值生成滑杆、游标与同步读数。此时无需写 slider、cursor、sample 或时间 state。只有想让其他图形也跟随同一时刻时，才自行用 slider、cursor 和 sample 共用 state。',
   '要切换整组正文、图和读数，用 <views label="对照主题"><view label="第一种情况" caption="变化的解释">…</view><view label="第二种情况">…</view></views>。需要和其他控件联动时，为 views 写 bind="$state.名称"，两项 view 用不同的 value。drawing 内的 view 只放图元，用于切换同一张图的图层。',
   '只使用约定中的语法和函数。角度用 sin(x)、cos(x)，参数是弧度。SVG 的 label.text 可写 $state.n + " 单位"；动态正文先用 derive 拼接整句，再使用 <text text="$state.sentence"/>。算式未知时用少数已验证的离散状态。定义统一的单位与假设，至少把一个题设值代入并核对图与正文是否一致。初值和边界的图元、标签都应留在画布内。一幅静态图足够时就直接呈现。教学示意与实测分开。',
   `例如解释天空放晴后积水为何还在，使用一条曲线覆盖降雨和排水两个阶段。假定前 4 秒净积水每秒 3 升，停雨后每秒排走 2 升，第 10 秒排完：
 ${FENCE}iui
 <ui density="auto" fallback="停雨时还有 12 升水，继续排 6 秒才排完">
-  <state name="time" value="4"/>
-  <derive name="trajectory" expr="accumulate([[0,3],[4,-2],[10,0]], 0)"/>
-  <derive name="water" expr="sample($state.trajectory, $state.time)"/>
-  <slider label="经过时间" bind="$state.time" min="0" max="10" step="1" unit="秒"/>
-  <chart kind="line" x-scale="linear" x-unit="秒" cursor="$state.time" series="$state.trajectory" source="积水量（升，示意）"/>
-  <metric label="积水量" value="$state.water" unit="升"/>
+  <chart kind="line" scrub="经过时间" x-unit="秒" y-unit="升" series='[[0,0],[4,12],[10,0]]' source="第 4 秒停雨，积水从当时的 12 升开始消退（示意）"/>
 </ui>
 ${FENCE}`,
 ].join('\n')

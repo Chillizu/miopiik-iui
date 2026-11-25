@@ -208,6 +208,10 @@ const NUMERIC_AXIS_ML = `<ui density="auto">
   <chart kind="line" x-scale="linear" x-unit="秒" cursor="$state.t" series='[[0,0],[4,60],[8,120],[14,0],[20,0]]'/>
 </ui>`
 
+const CHART_SCRUB_ML = `<ui density="auto">
+  <chart kind="line" scrub="经过时间" x-unit="秒" y-unit="件" series='accumulate([[0,2],[4,-1],[12,0]],0)'/>
+</ui>`
+
 const R3_WEIGHT_AST = {
   title: '语义权重',
   root: {
@@ -540,6 +544,7 @@ const MAIN_RUN = `
       comparison:mountBlock(${JSON.stringify(DRAWING_COMPARISON_ML)}),
       boundViews:mountBlock(${JSON.stringify(BOUND_VIEWS_ML)}),
       numericAxis:mountBlock(${JSON.stringify(NUMERIC_AXIS_ML)}),
+      chartScrub:mountBlock(${JSON.stringify(CHART_SCRUB_ML)}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
       copy:mountBlock(${JSON.stringify(JSON.stringify(R3_COPY_AST))}),
@@ -553,6 +558,7 @@ const MAIN_RUN = `
       deriveFail:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_FAIL_AST))}),
       deriveCycle:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_CYCLE_AST))}),
     };
+    r3Hosts.chartScrub.style.maxWidth = '320px';
     window.__r3Hosts=r3Hosts;
     // L-11 基础：DOM 级行内嫁接——原生先渲染（加粗跨 token 保留），再原位替换受信 token
     const graftHost=document.createElement('div');
@@ -933,9 +939,53 @@ const MAIN_RUN = `
           const xs = plot?.querySelector('polyline')?.getAttribute('points')?.split(' ').map(point => Number(point.split(',')[0]));
           const cursor = plot?.querySelector('[data-iui-chart-cursor="0"]');
           return xs?.length === 5 && cursor !== null && cursor !== undefined
+            && r3.numericAxis.querySelector('[data-iui-chart-scrub], [data-iui-chart-readout]') === null
             && Math.abs((xs[3] - xs[2]) / (xs[2] - xs[1]) - 1.5) < 0.00001
-            ? true : '时间间距未按实际比例绘制';
+            ? true : '旧式时间轴的数值间距、外部游标或控件发生变化';
         });
+        const linkedSlider = r3.numericAxis.querySelector('input[type="range"][aria-label="观察时刻"]');
+        if (linkedSlider !== null) {
+          linkedSlider.value = '8';
+          linkedSlider.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(25);
+        }
+        check('numericAxisWrite', () => (
+          r3.numericAxis.querySelector('[data-iui-chart-cursor="8"]') !== null
+          && r3.numericAxis.querySelector('[data-iui-chart-scrub], [data-iui-chart-readout]') === null
+        ) || '外部滑轨未同步旧式图表游标');
+        const scrub = r3.chartScrub;
+        const scrubInput = () => scrub.querySelector('[data-iui-chart-scrub] input[type="range"][aria-label="经过时间"]');
+        const scrubSample = () => {
+          const cursor = scrub.querySelector('[data-iui-chart-cursor]')?.getAttribute('data-iui-chart-cursor');
+          const readout = scrub.querySelector('output[data-iui-chart-readout]')?.textContent;
+          const stock = readout?.match(/([+-]?\\d+(?:\\.\\d+)?)\\s*件/u)?.[1];
+          return [scrubInput()?.valueAsNumber, Number(cursor ?? NaN), Number(stock ?? NaN)];
+        };
+        const fits = () => scrub.scrollWidth <= scrub.clientWidth + 1
+          && document.documentElement.scrollWidth <= window.innerWidth;
+        check('chartScrubInitial', () => {
+          const input = scrubInput();
+          return input?.min === '0' && input.max === '12' && input.step === 'any'
+            && scrub.querySelector('[data-iui-chart-scale="linear"]') !== null && fits()
+            && JSON.stringify(scrubSample()) === '[0,0,0]'
+            ? true : '滑轨范围、初始点、原生读数或窄列布局错误';
+        });
+        if (scrubInput() !== null) {
+          const points = scrub.querySelector('polyline')?.getAttribute('points');
+          const samples = [];
+          for (const time of [2.5, 4, 6.5, 12, 0]) {
+            const input = scrubInput();
+            if (input === null) break;
+            input.value = String(time);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            await wait(25);
+            samples.push(scrubSample());
+          }
+          check('chartScrubSamples', () => points && fits()
+            && scrub.querySelector('polyline')?.getAttribute('points') === points
+            && JSON.stringify(samples) === '[[2.5,2.5,5],[4,4,8],[6.5,6.5,5.5],[12,12,0],[0,0,0]]'
+            ? true : JSON.stringify(samples));
+        }
         check('r3Weight', () => {
           const host = r3.weight;
           const primary = host.querySelector('[data-iui-weight="primary"]');
@@ -1288,6 +1338,9 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-bound-views="ok"/u,'切换完整视图应更新共享状态')
   assert.match(html,/data-bound-views-reset="ok"/u,'外部动作应切换完整视图')
   assert.match(html,/data-numeric-axis="ok"/u,'时间轴应保留数值间距和当前时刻标记')
+  assert.match(html,/data-numeric-axis-write="ok"/u,'旧时间轴应继续响应外部滑轨')
+  assert.match(html,/data-chart-scrub-initial="ok"/u,'时间轴 scrub 应默认选择首点且适合窄列')
+  assert.match(html,/data-chart-scrub-samples="ok"/u,'拖动应同步滑轨、游标和分阶段读数，原曲线保持不变')
   assert.match(html,/data-r3-weight="ok"/u,'weight 三态应输出 data-iui-weight 并给出强弱视觉（primary 加粗 / secondary·optional 弱化）')
   assert.match(html,/data-r3-details-closed="ok"/u,'details 初始应收起并带 aria-expanded=false')
   assert.match(html,/data-r3-details-open="ok"/u,'details 由 IuiSheet 受控展开（aria-controls 指向内容）')

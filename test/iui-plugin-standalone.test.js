@@ -225,6 +225,21 @@ test('绘图复用静态路径而保留同一个图层的动态形状与显隐',
   assert.equal(after.some((node) => node.type === 'circle'), true)
 })
 
+test('自动横排将剩余空间优先分配给图形，维持换行的基准宽度', () => {
+  const { registry } = loadStandalonePlugin()
+  const chartRow = (kind) => `<row>
+    <drawing width="320" height="150" label="回源示意"><circle cx="20" cy="20" r="8"/></drawing>
+    <chart kind="${kind}" series='[["恢复前",12],["恢复后",4]]'/>
+    <metric label="积压" value="12"/>
+  </row>`
+  for (const kind of ['line', 'bar', 'donut']) {
+    const block = registry.renderBlock(`<ui density="auto">${chartRow(kind)}</ui>`)
+    const row = render(block).find((node) => node.props['data-iui-container'] === 'row')
+    assert.equal(row.props.style.flexWrap, 'wrap')
+    assert.deepEqual(row.children.map((child) => child.props.style.flex), ['3 1 232px', '3 1 232px', '1 1 112px'])
+  }
+})
+
 test('局部、整块和流式兜底保留读者文本并分离诊断', () => {
   const { registry } = loadStandalonePlugin()
   const renderText = (node) => render(node).flatMap((element) => element.children ?? [])

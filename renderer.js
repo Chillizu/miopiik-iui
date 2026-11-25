@@ -218,9 +218,9 @@
     }
 
     /** 图表可访问摘要：读屏用户拿到的应是数据本身，而不只是"一张图"。 */
-    function chartSummary(rows, kind, xUnit) {
+    function chartSummary(rows, kind, xUnit, yUnit) {
       const kindName = { bar: '柱状图', line: '折线图', donut: '占比图' }[kind] ?? '图表'
-      const parts = rows.slice(0, 8).map(([label, value]) => `${label}${xUnit} ${value}`)
+      const parts = rows.slice(0, 8).map(([label, value]) => `${label}${xUnit} ${value}${yUnit}`)
       const suffix = rows.length > 8 ? `，等共 ${rows.length} 项` : ''
       return `${kindName}：${parts.join('，')}${suffix}`
     }
@@ -232,9 +232,27 @@
       return magnitude > 0 && (magnitude < 0.01 || magnitude >= 1e9) ? value.toExponential(2) : chartNumber.format(value)
     }
 
-    function IuiLineChart({ rows, label, xScale, xUnit, cursor }) {
+    function renderRangeInput({ min, max, step, value, label, valueText, onChange }) {
+      const span = max - min
+      const ratio = Number.isFinite(span) ? (span > 0 ? (value - min) / span : 0)
+        : (value / 2 - min / 2) / (max / 2 - min / 2)
+      return h('span', { className: 'miopiik-range' },
+        h('span', { className: 'miopiik-range-fill', 'aria-hidden': true, style: { transform: `translateY(-50%) scaleX(${ratio})` } }),
+        h('input', {
+          type: 'range', min, max, step, value,
+          'aria-label': label, 'aria-valuetext': valueText,
+          onChange: (event) => {
+            const next = Number(event.target.value)
+            if (Number.isFinite(next)) onChange(next)
+          },
+        }),
+      )
+    }
+
+    function IuiLineChart({ rows, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub }) {
       const containerRef = React.useRef(null)
       const [width, setWidth] = React.useState(360)
+      const [scrubValue, setScrubValue] = React.useState(undefined)
       React.useLayoutEffect(() => {
         const container = containerRef.current
         if (container === null) return
@@ -265,6 +283,10 @@
       const xMagnitude = Math.max(...domain.map(Math.abs)) || 1
       const firstX = domain[0] / xMagnitude
       const span = domain[last] / xMagnitude - firstX
+      const scrubMin = domain[0]
+      const scrubMax = domain[last]
+      const scrubbable = scrub !== undefined && scrubMax > scrubMin && Number.isFinite(scrubMax - scrubMin)
+      const cursor = scrubbable ? Math.min(scrubMax, Math.max(scrubMin, scrubValue ?? scrubMin)) : externalCursor
       const toX = (value) => span === 0 ? width / 2 : pad + (value / xMagnitude - firstX) / span * (width - 2 * pad)
       const intervals = Math.min(last, Math.max(1, Math.floor((width - 2 * pad) / 96)))
       const ticks = new Set(Array.from({ length: intervals + 1 }, (_, i) => Math.round(i * last / (intervals || 1))))
@@ -298,13 +320,18 @@
       parts.push(h('line', { key: 'axis', className: 'miopiik-chart-guide', x1: pad, y1: baseline, x2: width - pad, y2: baseline, stroke: C.border, strokeWidth: 1 }))
       parts.push(h('polyline', { key: 'line', points: coordinates, fill: 'none', stroke: C.brand, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))
       let marker = null
+      let sampledValue = null
       if (linear && Number.isFinite(cursor) && cursor >= domain[0] && cursor <= domain[last]) {
         const x = toX(cursor)
         const next = domain.findIndex((coordinate) => coordinate > cursor)
-        const before = points[next === -1 ? last : next - 1]
-        const after = points[next === -1 ? last : next]
-        const fraction = before.x === after.x ? 0 : (x - before.x) / (after.x - before.x)
-        marker = { x, y: before.y + (after.y - before.y) * fraction }
+        const before = next === -1 ? last : next - 1
+        const after = next === -1 ? last : next
+        const distance = domain[after] - domain[before]
+        const fraction = before === after ? 0 : Number.isFinite(distance) ? (cursor - domain[before]) / distance
+          : (x - points[before].x) / (points[after].x - points[before].x)
+        const sampled = scaled[before] * (1 - fraction) + scaled[after] * fraction
+        marker = { x, y: y(sampled) }
+        if (scrubbable) sampledValue = values[before] * (1 - fraction) + values[after] * fraction
         parts.push(h('line', { key: 'cursor', 'data-iui-chart-cursor': cursor, x1: x, x2: x, y1: top, y2: bottom, stroke: C.muted, strokeDasharray: '3 4' }))
       }
       points.forEach((point, index) => {
@@ -321,11 +348,20 @@
         )
       })
       if (marker !== null) parts.push(h('circle', { key: 'marker', 'data-iui-chart-marker': '1', className: 'miopiik-chart-marker', cx: marker.x, cy: marker.y, r: 4.5, stroke: C.brand, strokeWidth: 2 }))
-      return h('div', { ref: containerRef, style: { width: '100%', minWidth: 0 } }, svgCanvas(width, height, parts, label, { fluid: true }))
+      const position = scrubbable ? `${formatChartValue(cursor)}${xUnit}` : ''
+      const readout = sampledValue === null ? '' : `${formatChartValue(sampledValue)}${yUnit}`
+      return h('div', { ref: containerRef, style: { width: '100%', minWidth: 0 } },
+        svgCanvas(width, height, parts, label, { fluid: true }),
+        scrubbable ? h('div', { 'data-iui-chart-scrub': '1' },
+          h('span', { className: 'miopiik-control-label' }, scrub, ' ', h('span', { className: 'miopiik-scrub-position' }, position)),
+          h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': sampledValue }, readout),
+          renderRangeInput({ min: scrubMin, max: scrubMax, step: 'any', value: cursor, label: scrub, valueText: `${position}，${readout}`, onChange: setScrubValue }),
+        ) : null,
+      )
     }
 
-    function renderChart(rows, kind, label, xScale, xUnit, cursor) {
-      if (kind === 'line') return h(IuiLineChart, { rows, label, xScale, xUnit, cursor })
+    function renderChart(rows, kind, label, { xScale, xUnit, yUnit, cursor, scrub }) {
+      if (kind === 'line') return h(IuiLineChart, { rows, label, xScale, xUnit, yUnit, cursor, scrub })
       const values = rows.map((row) => row[1])
       const max = Math.max(1, ...values)
       const labels = rows.map((row) => row[0])
@@ -460,7 +496,8 @@
 
     function flowItemStyle(item) {
       const basis = rowBasis(item)
-      const flex = basis === 0 ? '0 1 auto' : `1 1 ${Number.isFinite(basis) ? `${basis}px` : '100%'}`
+      const visual = item.type === 'drawing' || item.type === 'chart' || item.type === 'diagram'
+      const flex = basis === 0 ? '0 1 auto' : `${visual ? 3 : 1} 1 ${Number.isFinite(basis) ? `${basis}px` : '100%'}`
       return { flex, minWidth: 0, maxWidth: '100%' }
     }
 
@@ -882,31 +919,14 @@
           const raw = Number(current)
           const value = Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : min
           const ariaLabel = label ? textOf(label) : '数值'
-          const span = max - min
-          const ratio = Number.isFinite(span) ? (span > 0 ? (value - min) / span : 0)
-            : (value / 2 - min / 2) / (max / 2 - min / 2)
           return h(
             'div',
             { key, 'data-iui-slider': String(value) },
             label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
             h('span', { className: 'miopiik-range-value' }, `${value}${textOf(unit)}`),
-            h('span', { className: 'miopiik-range' },
-              h('span', { className: 'miopiik-range-fill', 'aria-hidden': true, style: { transform: `translateY(-50%) scaleX(${ratio})` } }),
-              h('input', {
-                key: `${key}-ctl`,
-                type: 'range',
-                min,
-                max,
-                step: stepSize,
-                value,
-                'aria-label': ariaLabel,
-                onChange: (event) => {
-                  if (binding.scope !== 'state') return
-                  const next = Number(event.target.value)
-                  if (Number.isFinite(next)) setState((prev) => writeStatePath(prev, binding.key, next))
-                },
-              }),
-            ),
+            renderRangeInput({ min, max, step: stepSize, value, label: ariaLabel, onChange: (next) => {
+              if (binding.scope === 'state') setState((prev) => writeStatePath(prev, binding.key, next))
+            } }),
           )
         }
         if (item.type === 'input') {
@@ -1208,6 +1228,7 @@
           const series = resolveDataset(item, props.series)
           const kind = String(props.kind ?? 'bar')
           const xUnit = props.xScale === 'linear' ? textOf(resolveText(props.xUnit)).slice(0, 16) : ''
+          const yUnit = textOf(resolveText(props.yUnit)).slice(0, 16)
           const rows = IUI_AST.chartMatrix(series, props.xScale, xUnit)
           const cursor = resolve(props.cursor)
           if (rows === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
@@ -1215,7 +1236,7 @@
           return h(
             'div',
             { key, className: 'miopiik-enter miopiik-chart-frame', 'data-iui-chart': kind, 'data-iui-chart-scale': props.xScale },
-            renderChart(rows, kind, chartSummary(rows, kind, xUnit), props.xScale, xUnit, cursor),
+            renderChart(rows, kind, chartSummary(rows, kind, xUnit, yUnit), { xScale: props.xScale, xUnit, yUnit, cursor, scrub: props.scrub }),
             textOf(source) === '' ? null : h('div', { className: 'miopiik-chart-source' }, `来源：${textOf(source)}`),
           )
         }
