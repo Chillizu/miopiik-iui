@@ -57,6 +57,8 @@ test('数字数组、数组对、对象点列，都按同一种受限图表语�
   assert.deepEqual(chartMatrix([[0, 2], [1, 3], [1, 4]], 'linear'), [[0, 2], [1, 3], [1, 4]])
   assert.equal(chartMatrix([[2, 2], [1, 3]], 'linear'), null)
   assert.equal(chartMatrix([['起点', 2]], 'linear'), null)
+  assert.deepEqual(chartMatrix([['0分钟', 2], ['1.5分钟', 3]], 'linear', '分钟'), [[0, 2], [1.5, 3]])
+  assert.equal(chartMatrix([['0秒', 2]], 'linear', '分钟'), null)
 })
 
 test('图表和表格的数据可以直接用受限表达式并保留动态值', () => {

@@ -26,8 +26,9 @@ export const EXPR_LIMITS = Object.freeze({
 })
 
 const RESERVED = new Set(['__proto__', 'prototype', 'constructor'])
+const MAX_RATE_CHANGES = 30
 const SEQUENCE_ARITY = Object.freeze({
-  len: 1, at: 2, gather: 2, dot: 2, matvec: 2, scale: 2, softmax: 1, roundEach: 2, zip: [2, 6], join: 2, sample: 2,
+  len: 1, at: 2, gather: 2, dot: 2, matvec: 2, scale: 2, softmax: 1, roundEach: 2, zip: [2, 6], join: 2, sample: 2, accumulate: 2,
 })
 const FUNCTIONS = Object.freeze({ round: [1, 2], floor: 1, ceil: 1, abs: 1, sin: 1, cos: 1, exp: 1, when: 3, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY })
 const SCOPES = new Set(['state', 'data'])
@@ -485,10 +486,42 @@ function sampleLine(points, x, work) {
   return finite(leftY * (1 - fraction) + rightY * fraction)
 }
 
+/** Accumulate nonnegative stock at constant rates between successive time points. */
+function accumulateRates(schedule, initial, work) {
+  if (!numeric(initial) || initial < 0 || schedule.length < 2 || schedule.length > MAX_RATE_CHANGES) {
+    return fail(`accumulate 需要非负初值和 2–${MAX_RATE_CHANGES} 个变速点`)
+  }
+  if (!spend(work, schedule.length)) return fail('表达式求值预算超限')
+  let previousTime = -Infinity
+  for (const pair of schedule) {
+    if (!Array.isArray(pair) || pair.length !== 2 || !numeric(pair[0]) || !numeric(pair[1]) || pair[0] <= previousTime) {
+      return fail('accumulate 需要严格按时间递增的 [时间, 速率] 数值点')
+    }
+    previousTime = pair[0]
+  }
+
+  let stock = initial
+  const points = [[schedule[0][0], initial]]
+  for (let index = 1; index < schedule.length; index += 1) {
+    const [start, rate] = schedule[index - 1]
+    const [end] = schedule[index]
+    const next = stock + (end - start) * rate
+    if (!numeric(next)) return fail('accumulate 结果必须是有限数字')
+    if (stock > 0 && next < 0) {
+      const empty = start + stock / -rate
+      if (empty > start && empty < end) points.push([empty, 0])
+    }
+    stock = Math.max(0, next)
+    points.push([end, stock])
+  }
+  return inspectResult(points, work)
+}
+
 function sequenceCall(name, args, work) {
   const [array, argument] = args
   if (!boundedArray(array)) return fail(`${name} 需要有界数组（最多 ${EXPR_LIMITS.items} 项）`)
   if (name === 'sample') return sampleLine(array, argument, work)
+  if (name === 'accumulate') return accumulateRates(array, argument, work)
   if (name === 'len') return { ok: true, value: array.length }
   if (name === 'at') {
     return arrayIndex(array, argument)

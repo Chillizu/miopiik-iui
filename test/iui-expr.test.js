@@ -107,6 +107,15 @@ test('expr: 序列索引、收集、并列与拼接保留数组顺序和类型',
   assert.deepEqual(gathered[1], ['A'])
 })
 
+test('expr: 累积曲线在速率恢复后保留存量，并在真实归零时刻转平', () => {
+  assert.deepEqual(value('accumulate([[0,300],[6,-50],[60,0]], 0)'), [[0, 0], [6, 1800], [42, 0], [60, 0]])
+  assert.equal(value('sample(accumulate([[0,300],[6,-50],[60,0]], 0), 7)'), 1750)
+  assert.deepEqual(value('accumulate([[1,-3],[3,2],[5,0]], 0)'), [[1, 0], [3, 0], [5, 4]])
+  assert.match(rejected('accumulate([[0,2],[0,3]], 0)'), /严格按时间递增/u)
+  assert.match(rejected('accumulate([[0,2],[3,0]], -1)'), /非负初值/u)
+  assert.match(rejected('accumulate([[0,$state.rate],[10,0]], 0)', { state: { rate: 1e308 } }), /有限数字/u)
+})
+
 test('expr: 线性运算按矩形行向量求值并正确处理大数与小数', () => {
   assert.equal(value('dot([1, -3, 2], [4, 2, 5])'), 8)
   assert.equal(value('dot([], [])'), 0)

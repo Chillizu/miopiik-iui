@@ -38,9 +38,30 @@
     }
     const DRAWING_TAGS = { rect: 'rect', circle: 'circle', line: 'line', path: 'path', label: 'text' }
 
+    // A checked drawing survives local interactions. Keep its fixed SVG attributes without retaining old drawings.
+    const drawingShapePlans = new WeakMap()
+
+    function getDrawingShapePlan(child) {
+      const cached = drawingShapePlans.get(child)
+      if (cached !== undefined) return cached
+      const bindings = Object.entries(child.props).flatMap(([key, value]) => {
+        const { scope } = IUI_AST.readBinding(value)
+        return scope === undefined ? [] : [{ key, scope }]
+      })
+      const calculated = child.geometryExpressions !== undefined
+      const dynamic = calculated || bindings.some(({ key }) => key !== 'when' && key !== 'is' && key !== 'weight')
+      const plan = {
+        props: dynamic ? undefined : IUI_AST.drawingProps(child.type, child.props),
+        animated: calculated || bindings.some(({ scope }) => scope === 'state'),
+      }
+      drawingShapePlans.set(child, plan)
+      return plan
+    }
+
     function renderDrawingShape(child, key, { resolve, scope, visible, streaming, canvasWidth }) {
       if (!Object.hasOwn(DRAWING_TAGS, child.type) || !visible(child)) return null
-      const props = IUI_AST.drawingProps(child.type, child.props, resolve, (attribute) => {
+      const plan = streaming === true ? null : getDrawingShapePlan(child)
+      const props = plan?.props !== undefined ? plan.props : IUI_AST.drawingProps(child.type, child.props, resolve, (attribute) => {
         const expression = child.geometryExpressions?.[attribute]
         if (expression === undefined) return undefined
         const result = IUI_EXPR.evaluateExpr(expression, scope)
@@ -62,8 +83,7 @@
       }
       const outline = child.type === 'rect' || child.type === 'circle' ? 'border' : 'accent'
       const strokeColor = stroke ?? (fill === undefined || fill === 'none' ? outline : 'none')
-      const animated = streaming !== true && (child.type === 'rect' || child.type === 'circle')
-        && (child.geometryExpressions !== undefined || Object.values(child.props).some((value) => IUI_AST.readBinding(value).scope === 'state'))
+      const animated = plan?.animated && (child.type === 'rect' || child.type === 'circle')
       return h(DRAWING_TAGS[child.type], {
         key,
         ...geometry,
@@ -117,23 +137,17 @@
         'data-iui-weight': weight,
         style: { ...layout, ...visualLayout, display: 'flex', flexDirection: 'column', gap: 6 },
       },
-      options.length > 1 ? h('div', { role: 'group', 'aria-label': `对照视图：${viewport.label}`, style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+      options.length > 1 ? h('div', { className: 'miopiik-choices', role: 'group', 'aria-label': `对照视图：${viewport.label}` },
         ...options.map((option) => {
           const active = option.index === selected?.index
           return h('button', {
             key: option.index,
             type: 'button',
-            className: 'miopiik-ctl',
+            className: 'miopiik-ctl miopiik-choice',
             'data-iui-drawing-option': String(option.index),
             'aria-pressed': active,
             disabled: streaming === true,
             onClick: () => choose(option.index),
-            style: {
-              border: `1px solid ${active ? C.brand : C.border}`, borderRadius: 999,
-              background: active ? `color-mix(in srgb, ${C.brand} 12%, transparent)` : 'transparent',
-              color: active ? C.text : C.muted, fontSize: 12, fontWeight: active ? 600 : 400,
-              lineHeight: '18px', padding: '2px 10px', cursor: streaming === true ? 'default' : 'pointer',
-            },
           }, option.label)
         })) : null,
       graph,
@@ -178,20 +192,14 @@
         style: { display: 'flex', flexDirection: 'column', minWidth: 0, gap: 9, ...WEIGHT_STYLE[weight] },
       },
       useTabs ? h('div', {
-        role: 'tablist', 'aria-label': typeof title === 'string' ? title : '对照视图',
-        style: { display: 'flex', flexWrap: 'wrap', gap: '0 12px', borderBottom: `1px solid ${C.border}` },
+        className: 'miopiik-choices', role: 'tablist', 'aria-label': typeof title === 'string' ? title : '对照视图',
       }, ...options.map((option, index) => {
         const selected = option === active
         return h('button', {
           key: option.index, id: `${id}-tab-${option.index}`, type: 'button', role: 'tab',
           'aria-selected': selected, 'aria-controls': `${id}-panel-${option.index}`,
-          tabIndex: selected ? 0 : -1, disabled: streaming === true, className: 'miopiik-ctl',
+          tabIndex: selected ? 0 : -1, disabled: streaming === true, className: 'miopiik-ctl miopiik-choice',
           onClick: () => select(option), onKeyDown: (event) => focusOnKey(event, index),
-          style: {
-            background: 'transparent', color: selected ? C.text : C.muted,
-            border: 0, borderBottom: `2px solid ${selected ? C.brand : 'transparent'}`,
-            padding: '6px 2px', fontSize: 13, fontWeight: selected ? 600 : 400, cursor: streaming === true ? 'default' : 'pointer',
-          },
         }, option.label)
       })) : null,
       ...options.map((option) => {
@@ -275,12 +283,28 @@
         }
       }
       const labelLimit = Math.max(3, Math.min(15, Math.floor(width / (intervals + 1) / 11)))
-      const parts = [
-        h('line', { key: 'axis', x1: pad, y1: y(0), x2: width - pad, y2: y(0), stroke: C.border, strokeWidth: 1 }),
-        h('polyline', { key: 'line', points: points.map((point) => `${point.x},${point.y}`).join(' '), fill: 'none', stroke: C.brand, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-      ]
+      const baseline = y(0)
+      const coordinates = points.map((point) => `${point.x},${point.y}`).join(' ')
+      const parts = []
+      // A quiet reference grid and fill use the same zero line as the curve.
+      if (max !== min) {
+        for (const division of [0, 1, 2, 3]) {
+          const guide = y(min + (max - min) * division / 3)
+          if (Math.abs(guide - baseline) < 2) continue
+          parts.push(h('line', { key: `guide-${division}`, className: 'miopiik-chart-guide', x1: pad, y1: guide, x2: width - pad, y2: guide, strokeWidth: 1 }))
+        }
+      }
+      if (span > 0) parts.push(h('polygon', { key: 'area', className: 'miopiik-chart-area', points: `${points[0].x},${baseline} ${coordinates} ${points[last].x},${baseline}`, fill: 'none' }))
+      parts.push(h('line', { key: 'axis', className: 'miopiik-chart-guide', x1: pad, y1: baseline, x2: width - pad, y2: baseline, stroke: C.border, strokeWidth: 1 }))
+      parts.push(h('polyline', { key: 'line', points: coordinates, fill: 'none', stroke: C.brand, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))
+      let marker = null
       if (linear && Number.isFinite(cursor) && cursor >= domain[0] && cursor <= domain[last]) {
         const x = toX(cursor)
+        const next = domain.findIndex((coordinate) => coordinate > cursor)
+        const before = points[next === -1 ? last : next - 1]
+        const after = points[next === -1 ? last : next]
+        const fraction = before.x === after.x ? 0 : (x - before.x) / (after.x - before.x)
+        marker = { x, y: before.y + (after.y - before.y) * fraction }
         parts.push(h('line', { key: 'cursor', 'data-iui-chart-cursor': cursor, x1: x, x2: x, y1: top, y2: bottom, stroke: C.muted, strokeDasharray: '3 4' }))
       }
       points.forEach((point, index) => {
@@ -296,6 +320,7 @@
           h('text', { key: `lab-${index}`, x: point.x, y: height - 9, fontSize: 11, fill: C.muted, fontFamily: SANS, textAnchor }, tick),
         )
       })
+      if (marker !== null) parts.push(h('circle', { key: 'marker', 'data-iui-chart-marker': '1', className: 'miopiik-chart-marker', cx: marker.x, cy: marker.y, r: 4.5, stroke: C.brand, strokeWidth: 2 }))
       return h('div', { ref: containerRef, style: { width: '100%', minWidth: 0 } }, svgCanvas(width, height, parts, label, { fluid: true }))
     }
 
@@ -661,21 +686,33 @@
       return renderIuiNotice(fallback, props)
     }
 
-    function IuiSheet({ sample, format, degraded, streaming }) {
-      const checked = React.useMemo(() => IUI_AST.validateAst(sample), [sample])
-      const adaptive = checked.ok && checked.ast.density === 'auto'
-      const density = React.useMemo(() => {
-        if (!checked.ok) return 'panel'
-        return adaptive ? inferDensity(checked.ast.root) : checked.ast.density
-      }, [checked, adaptive])
+    function isComputationOnly(item) {
+      if (item.type === 'derive') return true
+      return (item.type === 'column' || item.type === 'row' || item.type === 'grid')
+        && item.children.length > 0 && item.children.every(isComputationOnly)
+    }
+
+    function prepareIuiDocument(sample) {
+      const checked = IUI_AST.validateAst(sample)
       // 依赖必须是**内容**而不是对象引用：正文每次渲染都会产生新对象，用引用会导致状态被重置。
-      const sampleKey = React.useMemo(() => {
-        try {
-          return JSON.stringify(checked.ok ? { state: checked.ast.state, root: checked.ast.root } : sample)
-        } catch {
-          return String(sample)
-        }
-      }, [sample])
+      let sampleKey
+      try {
+        sampleKey = JSON.stringify(checked.ok ? { state: checked.ast.state, root: checked.ast.root } : sample)
+      } catch {
+        sampleKey = String(sample)
+      }
+      const adaptive = checked.ok && checked.ast.density === 'auto'
+      const density = checked.ok ? (adaptive ? inferDensity(checked.ast.root) : checked.ast.density) : 'panel'
+      const computationOnly = checked.ok && isComputationOnly(checked.ast.root)
+      return { checked, sampleKey, density, adaptive, computationOnly }
+    }
+
+    function IuiSheet({ document, streaming }) {
+      const { format, degraded } = document
+      const { checked, sampleKey, density, adaptive, computationOnly } = React.useMemo(
+        () => document.prepared ?? prepareIuiDocument(document.doc),
+        [document],
+      )
       const [state, setState] = React.useState(checked.ok ? checked.ast.state : {})
       // Keep disclosure state by position so conditional unmounting preserves it.
       const [openDetails, setOpenDetails] = React.useState(() => new Map())
@@ -686,11 +723,15 @@
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [sampleKey])
       const derived = React.useMemo(
-        () => checked.ok ? deriveState(checked.derivePlan, state) : { state, errors: 0 },
-        [checked, state],
+        () => checked.ok && !computationOnly ? deriveState(checked.derivePlan, state) : { state, errors: 0 },
+        [checked, computationOnly, state],
       )
       const parserDiagnostics = Array.isArray(degraded) ? degraded : []
       if (!checked.ok) return renderIuiFallback({ ...checked, format, degraded: parserDiagnostics, streaming })
+      if (computationOnly) return renderIuiFallback({
+        fallback: streaming ? '' : checked.ast.fallback,
+        format, errors: ['片段只有派生状态，未提供可呈现内容'], degraded: parserDiagnostics, streaming,
+      })
       const degradation = [...parserDiagnostics, ...checked.diagnostics]
       const degradedCount = parserDiagnostics.length + checked.degraded
       const ast = checked.ast
@@ -762,11 +803,11 @@
           const described = resolveText(props.caption ?? props.note)
           return h(
             'div',
-            { key, 'data-iui-metric': textOf(label), style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 0', gridColumn: narrative ? '1 / -1' : undefined } },
-            h('div', { style: { fontSize: 11, color: C.muted } }, textOf(label)),
-            h('div', { 'data-iui-binding-unavailable': unavailable ? '1' : undefined, 'aria-label': unavailable ? '结果暂不可用' : undefined, style: { fontSize: narrative ? 14 : METRIC_FONT_SIZE[props.weight] ?? 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } },
+            { key, 'data-iui-metric': textOf(label), 'data-iui-metric-narrative': narrative ? '1' : undefined, style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, gridColumn: narrative ? '1 / -1' : undefined } },
+            h('div', { className: 'miopiik-control-label' }, textOf(label)),
+            h('div', { className: 'miopiik-metric-value', 'data-iui-binding-unavailable': unavailable ? '1' : undefined, 'aria-label': unavailable ? '结果暂不可用' : undefined, style: { fontSize: narrative ? 14 : METRIC_FONT_SIZE[props.weight] ?? 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: props.tone ? tone[1] : C.text } },
               unavailable ? '—' : displayedValue,
-              unavailable || displayedUnit === '' ? null : h('span', { style: { fontSize: '.68em', fontWeight: 500, color: C.muted, marginInlineStart: 4 } }, displayedUnit),
+              unavailable || displayedUnit === '' ? null : h('span', { className: 'miopiik-metric-unit' }, displayedUnit),
             ),
             delta !== undefined && delta !== null && String(delta) !== ''
               ? h('div', { 'data-iui-delta': String(delta), style: { fontSize: 11, color: String(delta).startsWith('-') ? '#d1242f' : '#2ea043' } }, String(delta))
@@ -782,29 +823,19 @@
           const selectedIndex = options.findIndex((option) => sameValue(option?.value, current))
           return h(
             'div',
-            { key, role: 'group', 'aria-label': label ? textOf(label) : undefined, style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
-            label ? h('span', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
+            { key, className: 'miopiik-choices', role: 'group', 'aria-label': label ? textOf(label) : undefined },
+            label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
             ...options.map((option, index) =>
               h(
                 'button',
                 {
                   key: `${key}-${index}`,
-                  className: 'miopiik-ctl',
+                  className: 'miopiik-ctl miopiik-choice',
                   type: 'button',
                   'aria-pressed': index === selectedIndex,
                   onClick: () => {
                     if (binding.scope !== 'state') return
                     setState((prev) => writeStatePath(prev, binding.key, option.value))
-                  },
-                  style: {
-                    border: `1px solid ${index === selectedIndex ? C.brand : C.border}`,
-                    background: index === selectedIndex ? C.brand : 'transparent',
-                    color: index === selectedIndex ? '#fff' : C.muted,
-                    borderRadius: 999,
-                    padding: '2px 10px',
-                    fontSize: 11,
-                    cursor: 'pointer',
-                    transition: 'background-color .12s ease, border-color .12s ease, color .12s ease',
                   },
                 },
                 String(option.label ?? ''),
@@ -821,12 +852,12 @@
           return h(
             'div',
             { key, 'data-iui-toggle': on ? 'on' : 'off', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
-            label ? h('span', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
+            label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
             h(
               'button',
               {
                 key: `${key}-ctl`,
-                className: 'miopiik-ctl',
+                className: 'miopiik-ctl miopiik-switch',
                 type: 'button',
                 role: 'switch',
                 'aria-checked': on,
@@ -835,24 +866,8 @@
                   if (binding.scope !== 'state') return
                   setState((prev) => writeStatePath(prev, binding.key, !on))
                 },
-                style: {
-                  boxSizing: 'border-box',
-                  position: 'relative',
-                  flex: 'none',
-                  width: 28,
-                  height: 16,
-                  padding: 2,
-                  border: 0,
-                  borderRadius: 999,
-                  background: on ? C.brand : 'rgba(127,127,127,0.35)',
-                  cursor: 'pointer',
-                  transition: 'background-color .12s ease',
-                },
               },
-              h('span', {
-                'aria-hidden': true,
-                style: { display: 'block', width: 12, height: 12, borderRadius: '50%', background: on ? '#fff' : C.text, transform: on ? 'translateX(12px)' : 'translateX(0)', transition: 'transform .12s ease' },
-              }),
+              h('span', { 'aria-hidden': true }),
             ),
           )
         }
@@ -867,26 +882,31 @@
           const raw = Number(current)
           const value = Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : min
           const ariaLabel = label ? textOf(label) : '数值'
+          const span = max - min
+          const ratio = Number.isFinite(span) ? (span > 0 ? (value - min) / span : 0)
+            : (value / 2 - min / 2) / (max / 2 - min / 2)
           return h(
             'div',
-            { key, 'data-iui-slider': String(value), style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-            label ? h('span', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
-            h('input', {
-              key: `${key}-ctl`,
-              type: 'range',
-              min,
-              max,
-              step: stepSize,
-              value,
-              'aria-label': ariaLabel,
-              onChange: (event) => {
-                if (binding.scope !== 'state') return
-                const next = Number(event.target.value)
-                if (Number.isFinite(next)) setState((prev) => writeStatePath(prev, binding.key, next))
-              },
-              style: { flex: '1 1 120px', minWidth: 120, accentColor: C.brand },
-            }),
-            h('span', { style: { fontSize: 11, fontVariantNumeric: 'tabular-nums', color: C.text } }, `${value}${textOf(unit)}`),
+            { key, 'data-iui-slider': String(value) },
+            label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
+            h('span', { className: 'miopiik-range-value' }, `${value}${textOf(unit)}`),
+            h('span', { className: 'miopiik-range' },
+              h('span', { className: 'miopiik-range-fill', 'aria-hidden': true, style: { transform: `translateY(-50%) scaleX(${ratio})` } }),
+              h('input', {
+                key: `${key}-ctl`,
+                type: 'range',
+                min,
+                max,
+                step: stepSize,
+                value,
+                'aria-label': ariaLabel,
+                onChange: (event) => {
+                  if (binding.scope !== 'state') return
+                  const next = Number(event.target.value)
+                  if (Number.isFinite(next)) setState((prev) => writeStatePath(prev, binding.key, next))
+                },
+              }),
+            ),
           )
         }
         if (item.type === 'input') {
@@ -897,7 +917,7 @@
           return h(
             'div',
             { key, 'data-iui-input': '1', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
-            label ? h('span', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
+            label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
             h('input', {
               key: `${key}-ctl`,
               type: 'text',
@@ -909,7 +929,6 @@
                 if (binding.scope !== 'state') return
                 setState((prev) => writeStatePath(prev, binding.key, event.target.value))
               },
-              style: { flex: '1 1 140px', minWidth: 140, border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', padding: '3px 8px', fontSize: 12, color: C.text, lineHeight: '18px' },
             }),
           )
         }
@@ -1169,16 +1188,15 @@
         if (item.type === 'row' || item.type === 'column') {
           const isRow = item.type === 'row'
           const isFlowRow = isRow && adaptive
+          const isMetricColumn = !isRow && adaptive && item.children.length > 1 && item.children.every((child) => child.type === 'metric')
           const style = { gap: Number(props.gap ?? DENSITY_STYLE[density].gap) }
           if (isFlowRow) Object.assign(style, { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', minWidth: 0 })
           else if (isRow) Object.assign(style, { display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, item.children.length)}, minmax(0, 1fr))` })
-          else if (adaptive && item.children.length > 1 && item.children.every((child) => child.type === 'metric')) {
-            Object.assign(style, { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 104px), 1fr))', minWidth: 0 })
-          }
+          else if (isMetricColumn) Object.assign(style, { display: 'flex', flexWrap: 'wrap', minWidth: 0 })
           else Object.assign(style, { display: 'flex', flexDirection: 'column' })
           return h(
             'div',
-            { key, 'data-iui-container': item.type, style },
+            { key, 'data-iui-container': item.type, className: isMetricColumn ? 'miopiik-metric-row' : undefined, style },
             ...item.children.map((child, index) => {
               const childKey = `${key}-${index}`
               const content = node(child, childKey)
@@ -1188,17 +1206,17 @@
         }
         if (item.type === 'chart') {
           const series = resolveDataset(item, props.series)
-          const rows = IUI_AST.chartMatrix(series, props.xScale)
           const kind = String(props.kind ?? 'bar')
           const xUnit = props.xScale === 'linear' ? textOf(resolveText(props.xUnit)).slice(0, 16) : ''
+          const rows = IUI_AST.chartMatrix(series, props.xScale, xUnit)
           const cursor = resolve(props.cursor)
           if (rows === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
           const source = resolveText(props.source)
           return h(
             'div',
-            { key, className: 'miopiik-enter', 'data-iui-chart': kind, 'data-iui-chart-scale': props.xScale, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+            { key, className: 'miopiik-enter miopiik-chart-frame', 'data-iui-chart': kind, 'data-iui-chart-scale': props.xScale },
             renderChart(rows, kind, chartSummary(rows, kind, xUnit), props.xScale, xUnit, cursor),
-            textOf(source) === '' ? null : h('div', { style: { fontSize: 10, color: C.muted } }, `来源：${textOf(source)}`),
+            textOf(source) === '' ? null : h('div', { className: 'miopiik-chart-source' }, `来源：${textOf(source)}`),
           )
         }
         if (item.type === 'details') {
@@ -1559,8 +1577,7 @@
       return h('span', null, '')
     }
 
-    function readIuiFence(raw, streaming) {
-      const text = String(raw ?? '').trim()
+    function readIuiFence(text, streaming) {
       if (text === '') return { ok: false, errors: ['空内容'], format: 'ml' }
       if (text.startsWith('{')) {
         let parsed = null
@@ -1584,12 +1601,43 @@
         : { ...parsed, format: 'ml' }
     }
 
+    // Keep only recently replayed completed blocks. Open streams do not retain their prefixes.
+    const IUI_FENCE_CACHE_LIMIT = 24
+    const IUI_FENCE_CACHE_CHARS = 160_000
+    const IUI_FENCE_MAX_CACHEABLE = 24_000
+    const iuiFenceCache = new Map()
+    let iuiFenceCacheChars = 0
+    const MemoIuiSheet = typeof React.memo === 'function' ? React.memo(IuiSheet) : IuiSheet
+
+    function readCompletedIuiFence(text) {
+      const cached = iuiFenceCache.get(text)
+      if (cached !== undefined) {
+        iuiFenceCache.delete(text)
+        iuiFenceCache.set(text, cached)
+        return cached
+      }
+      const parsed = readIuiFence(text, false)
+      if (!parsed.ok || text.length > IUI_FENCE_MAX_CACHEABLE) return parsed
+      const prepared = prepareIuiDocument(parsed.doc)
+      const document = { ok: true, format: parsed.format, degraded: parsed.degraded, prepared }
+      if (!prepared.checked.ok) return document
+      while (iuiFenceCache.size >= IUI_FENCE_CACHE_LIMIT || iuiFenceCacheChars + text.length > IUI_FENCE_CACHE_CHARS) {
+        const oldest = iuiFenceCache.keys().next().value
+        iuiFenceCache.delete(oldest)
+        iuiFenceCacheChars -= oldest.length
+      }
+      iuiFenceCache.set(text, document)
+      iuiFenceCacheChars += text.length
+      return document
+    }
+
     function renderIuiFence(raw, streaming = false) {
       try {
-        const parsed = readIuiFence(raw, streaming)
-        return parsed.ok
-          ? h(IuiSheet, { sample: parsed.doc, format: parsed.format, degraded: parsed.degraded, streaming })
-          : renderIuiFallback({ ...parsed, streaming })
+        const text = String(raw ?? '').trim()
+        const document = streaming ? readIuiFence(text, true) : readCompletedIuiFence(text)
+        return document.ok
+          ? h(MemoIuiSheet, { document, streaming })
+          : renderIuiFallback({ ...document, streaming })
       } catch {
         return renderIuiFallback({ errors: ['IUI parse failed'], streaming })
       }

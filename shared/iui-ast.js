@@ -103,14 +103,21 @@ export function resolveValue(value, scope) {
  * 把受信图表输入统一变成 [标签, 数值] 点列。
  * 模型常给数字数组、[label,value] 数组或 {label,value}；三种都受限解析，不用表达式。
  */
-export function chartMatrix(series, xScale) {
+export function chartMatrix(series, xScale, xUnit) {
   if (!Array.isArray(series) || series.length === 0 || series.length > LIMITS.series) return null
   const rows = []
   for (let i = 0; i < series.length; i += 1) {
     const item = series[i]
     if (xScale === 'linear') {
       if (!Array.isArray(item)) return null
-      const [x, y] = item
+      let [x, y] = item
+      if (typeof x === 'string' && x.length <= 100) {
+        x = x.trim()
+        if (typeof xUnit === 'string' && xUnit.length <= 16 && xUnit !== '' && !xUnit.startsWith('$') && x.endsWith(xUnit)) {
+          x = x.slice(0, -xUnit.length).trim()
+        }
+        if (/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(x)) x = Number(x)
+      }
       if (!Number.isFinite(x) || !Number.isFinite(y) || (i > 0 && x < rows[i - 1][0])) return null
       rows.push([x, y])
       continue
@@ -654,7 +661,7 @@ export function validateAst(input) {
         return failNode(node, path, 'chart.cursor 需要数值横轴，以及数值或 $state.* 绑定')
       }
       const binding = readBinding(props.series)
-      if (binding.scope === undefined && chartMatrix(binding.literal, props.xScale) === null) {
+      if (binding.scope === undefined && chartMatrix(binding.literal, props.xScale, props.xUnit) === null) {
         datasetExpression = compileDataset(binding.literal)
         if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')
       }

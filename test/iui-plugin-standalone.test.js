@@ -17,6 +17,7 @@ function loadStandalonePlugin({ preference = null, configForm } = {}) {
     useMemo(value) { return value() },
     useState(value) { return [typeof value === 'function' ? value() : value, () => {}] },
     useEffect() {},
+    useId() { return 'fixture-svg' },
     useLayoutEffect() {},
     useRef() { return { current: null } },
     useCallback(value) { return value },
@@ -169,6 +170,59 @@ test('客户端在没有 Mind/Ink/Operator 时可加载、渲染并注销', () =
   assert.equal(output.props['data-iui-degraded'], '0')
   dispose()
   assert.equal(sandbox.__miopiikMarkdownEmbeds, undefined)
+})
+
+test('复用已闭合块的校验结果，开放流与超长块不进入完成态缓存', () => {
+  const { registry } = loadStandalonePlugin()
+  const source = '<ui><metric label="缓存标记" value="12"/></ui>'
+  const first = registry.renderBlock(source)
+  assert.equal(first.props.document.prepared.checked.ok, true)
+  assert.equal(registry.renderBlock(`\n${source}\n`).props.document, first.props.document)
+  assert.notEqual(registry.renderBlockStreaming(source).props.document, registry.renderBlockStreaming(source).props.document)
+  assert.equal(registry.renderBlockStreaming(source).props.document.prepared, undefined)
+
+  const oversized = '<ui><text>超长源</text>' + ' '.repeat(25_000) + '</ui>'
+  assert.notEqual(registry.renderBlock(oversized).props.document, registry.renderBlock(oversized).props.document)
+  for (let index = 0; index < 32; index += 1) registry.renderBlock(`<ui><metric label="其他块" value="${index}"/></ui>`)
+  assert.notEqual(registry.renderBlock(source).props.document, first.props.document)
+
+  const large = (value) => `<ui><metric label="大块" value="${value}"/>` + ' '.repeat(22_000) + '</ui>'
+  const firstLarge = registry.renderBlock(large(0)).props.document
+  for (let index = 1; index < 9; index += 1) registry.renderBlock(large(index))
+  assert.notEqual(registry.renderBlock(large(0)).props.document, firstLarge)
+})
+
+test('只包含计算的片段在流式阶段安静等待，完成后显示兜底', () => {
+  const { registry } = loadStandalonePlugin()
+  const source = '<ui fallback="恢复后逐步消化积压"><column><derive name="queue" expr="5"/></column></ui>'
+  const partial = registry.renderBlockStreaming(source)
+  assert.equal(partial.type(partial.props).props.hidden, true)
+  const completed = registry.renderBlock(source)
+  const fallback = render(completed).find((node) => node.props['data-iui-output'] === 'invalid')
+  assert.ok(fallback?.children.includes('恢复后逐步消化积压'))
+})
+
+test('绘图复用静态路径而保留同一个图层的动态形状与显隐', () => {
+  const { registry } = loadStandalonePlugin()
+  const element = registry.renderBlock(`<ui><state name="t" value="4"/>
+    <drawing width="320" height="110" label="Path and current height">
+      <path d="M4 4 h9 v8 Z" stroke="accent"/>
+      <rect x="10" y="10" width="5" height="$state.t * 2"/>
+      <circle cx="18" cy="18" r="3" when="$state.notify"/>
+    </drawing></ui>`)
+  const drawing = element.type(element.props).children.find((node) => node?.props?.item?.type === 'drawing')
+  const draw = (t, notify) => render(drawing.type({
+    ...drawing.props,
+    scope: { state: { t } },
+    visible: (node) => node.props.when === '$state.notify' ? notify : true,
+  }))
+  const before = draw(4, false)
+  const after = draw(9, true)
+  assert.equal(before.find((node) => node.type === 'path').props.d, after.find((node) => node.type === 'path').props.d)
+  assert.equal(before.find((node) => node.type === 'rect').props.height, 8)
+  assert.equal(after.find((node) => node.type === 'rect').props.height, 18)
+  assert.equal(before.some((node) => node.type === 'circle'), false)
+  assert.equal(after.some((node) => node.type === 'circle'), true)
 })
 
 test('局部、整块和流式兜底保留读者文本并分离诊断', () => {
