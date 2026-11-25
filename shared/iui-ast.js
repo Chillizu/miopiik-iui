@@ -141,6 +141,28 @@ export function chartMatrix(series, xScale, xUnit) {
   return rows
 }
 
+/** 将同一数值横轴上的多组数据分别归一化，沿用单图的点数上限。 */
+export function chartTraces(series, xUnit) {
+  if (!Array.isArray(series) || series.length === 0 || series.length > 4) return null
+  const traces = []
+  const labels = new Set()
+  let points = 0
+  for (const entry of series) {
+    if (!Array.isArray(entry) || entry.length !== 2) return null
+    const [rawLabel, pairs] = entry
+    if (typeof rawLabel !== 'string' || rawLabel.length > 100 || !Array.isArray(pairs) || pairs.length < 2) return null
+    const label = rawLabel.trim()
+    if (label === '' || labels.has(label)) return null
+    points += pairs.length
+    if (points > LIMITS.series || pairs.some((pair) => !Array.isArray(pair) || pair.length !== 2)) return null
+    const rows = chartMatrix(pairs, 'linear', xUnit)
+    if (rows === null || rows.at(-1)[0] <= rows[0][0]) return null
+    labels.add(label)
+    traces.push({ label, rows })
+  }
+  return traces
+}
+
 /** Inline datasets use the same bounded expression grammar as derive. */
 function compileDataset(value) {
   if (typeof value !== 'string' || readBinding(value).scope !== undefined) return null
@@ -670,7 +692,10 @@ export function validateAst(input) {
         return failNode(node, path, 'chart.cursor 需要数值横轴，以及数值或 $state.* 绑定')
       }
       const binding = readBinding(props.series)
-      if (binding.scope === undefined && chartMatrix(binding.literal, props.xScale, props.xUnit) === null) {
+      const namedTraces = props.kind === 'line' && binding.scope === undefined ? chartTraces(binding.literal, props.xUnit) : null
+      if (namedTraces !== null && props.xScale === undefined) props = { ...props, xScale: 'linear' }
+      if (binding.scope === undefined && chartMatrix(binding.literal, props.xScale, props.xUnit) === null
+        && namedTraces === null) {
         datasetExpression = compileDataset(binding.literal)
         if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')
       }

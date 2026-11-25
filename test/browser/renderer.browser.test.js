@@ -212,6 +212,10 @@ const CHART_SCRUB_ML = `<ui density="auto">
   <chart kind="line" scrub="经过时间" x-unit="秒" y-unit="件" series='accumulate([[0,2],[4,-1],[12,0]],0)'/>
 </ui>`
 
+const MULTI_CHART_SCRUB_ML = `<ui density="auto">
+  <chart kind="line" scrub="经过时间" x-unit="秒" y-unit="件" series='[["乙",[[2,10],[12,2]]],["甲",[[0,0],[4,8],[12,0]]]]'/>
+</ui>`
+
 const R3_WEIGHT_AST = {
   title: '语义权重',
   root: {
@@ -545,6 +549,7 @@ const MAIN_RUN = `
       boundViews:mountBlock(${JSON.stringify(BOUND_VIEWS_ML)}),
       numericAxis:mountBlock(${JSON.stringify(NUMERIC_AXIS_ML)}),
       chartScrub:mountBlock(${JSON.stringify(CHART_SCRUB_ML)}),
+      multiChartScrub:mountBlock(${JSON.stringify(MULTI_CHART_SCRUB_ML)}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
       copy:mountBlock(${JSON.stringify(JSON.stringify(R3_COPY_AST))}),
@@ -559,6 +564,7 @@ const MAIN_RUN = `
       deriveCycle:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_CYCLE_AST))}),
     };
     r3Hosts.chartScrub.style.maxWidth = '320px';
+    r3Hosts.multiChartScrub.style.maxWidth = '320px';
     window.__r3Hosts=r3Hosts;
     // L-11 基础：DOM 级行内嫁接——原生先渲染（加粗跨 token 保留），再原位替换受信 token
     const graftHost=document.createElement('div');
@@ -953,37 +959,88 @@ const MAIN_RUN = `
           r3.numericAxis.querySelector('[data-iui-chart-cursor="8"]') !== null
           && r3.numericAxis.querySelector('[data-iui-chart-scrub], [data-iui-chart-readout]') === null
         ) || '外部滑轨未同步旧式图表游标');
+        const scrubInput = (host) => host.querySelector('[data-iui-chart-scrub] input[type="range"][aria-label="经过时间"]');
+        const scrubFits = (host) => host.scrollWidth <= host.clientWidth + 1
+          && document.documentElement.scrollWidth <= window.innerWidth;
+        const setScrubTime = async (host, time) => {
+          const input = scrubInput(host);
+          if (input === null) throw new Error('时间轴滑轨缺失');
+          input.value = String(time);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(25);
+        };
         const scrub = r3.chartScrub;
-        const scrubInput = () => scrub.querySelector('[data-iui-chart-scrub] input[type="range"][aria-label="经过时间"]');
         const scrubSample = () => {
           const cursor = scrub.querySelector('[data-iui-chart-cursor]')?.getAttribute('data-iui-chart-cursor');
           const readout = scrub.querySelector('output[data-iui-chart-readout]')?.textContent;
           const stock = readout?.match(/([+-]?\\d+(?:\\.\\d+)?)\\s*件/u)?.[1];
-          return [scrubInput()?.valueAsNumber, Number(cursor ?? NaN), Number(stock ?? NaN)];
+          return [scrubInput(scrub)?.valueAsNumber, Number(cursor ?? NaN), Number(stock ?? NaN)];
         };
-        const fits = () => scrub.scrollWidth <= scrub.clientWidth + 1
-          && document.documentElement.scrollWidth <= window.innerWidth;
         check('chartScrubInitial', () => {
-          const input = scrubInput();
+          const input = scrubInput(scrub);
           return input?.min === '0' && input.max === '12' && input.step === 'any'
-            && scrub.querySelector('[data-iui-chart-scale="linear"]') !== null && fits()
+            && scrub.querySelector('[data-iui-chart-scale="linear"]') !== null && scrubFits(scrub)
             && JSON.stringify(scrubSample()) === '[0,0,0]'
             ? true : '滑轨范围、初始点、原生读数或窄列布局错误';
         });
-        if (scrubInput() !== null) {
+        if (scrubInput(scrub) !== null) {
           const points = scrub.querySelector('polyline')?.getAttribute('points');
           const samples = [];
           for (const time of [2.5, 4, 6.5, 12, 0]) {
-            const input = scrubInput();
-            if (input === null) break;
-            input.value = String(time);
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            await wait(25);
+            await setScrubTime(scrub, time);
             samples.push(scrubSample());
           }
-          check('chartScrubSamples', () => points && fits()
+          check('chartScrubSamples', () => points && scrubFits(scrub)
             && scrub.querySelector('polyline')?.getAttribute('points') === points
             && JSON.stringify(samples) === '[[2.5,2.5,5],[4,4,8],[6.5,6.5,5.5],[12,12,0],[0,0,0]]'
+            ? true : JSON.stringify(samples));
+        }
+        const multiScrub = r3.multiChartScrub;
+        const multiCursor = () => multiScrub.querySelector('[data-iui-chart-cursor]');
+        const traceValue = (label) => {
+          const readout = multiScrub.querySelector('[data-iui-chart-readout] [data-iui-trace-value="' + label + '"]');
+          const value = readout?.textContent.match(/[+-]?[0-9]+(?:[.][0-9]+)?/u)?.[0];
+          return value === undefined ? null : Number(value);
+        };
+        const multiSample = () => [
+          scrubInput(multiScrub)?.valueAsNumber,
+          Number(multiCursor()?.getAttribute('data-iui-chart-cursor') ?? NaN),
+          traceValue('甲'),
+          traceValue('乙'),
+        ];
+        check('multiChartScrubInitial', () => {
+          const input = scrubInput(multiScrub);
+          return input?.min === '0' && input.max === '12' && input.step === 'any'
+            && multiScrub.querySelectorAll('input[type="range"]').length === 1
+            && multiScrub.querySelectorAll('[data-iui-chart-cursor]').length === 1
+            && multiScrub.querySelectorAll('polyline[data-iui-chart-trace]').length === 2
+            && [...multiScrub.querySelectorAll('svg[role="img"] text')].some(label => label.textContent === '0秒')
+            && scrubFits(multiScrub) && JSON.stringify(multiSample()) === '[0,0,0,null]'
+            ? true : JSON.stringify(multiSample());
+        });
+        if (scrubInput(multiScrub) !== null) {
+          const xCoordinates = (label) => {
+            const points = multiScrub.querySelector('polyline[data-iui-chart-trace="' + label + '"]')?.getAttribute('points');
+            return points?.trim().split(' ').map((point) => Number(point.split(',')[0])) ?? [];
+          };
+          const samples = [];
+          await setScrubTime(multiScrub, 1);
+          samples.push(multiSample());
+          await setScrubTime(multiScrub, 4);
+          samples.push(multiSample());
+          const first = xCoordinates('甲');
+          const second = xCoordinates('乙');
+          const cursorX = Number(multiCursor()?.getAttribute('x1') ?? NaN);
+          const near = (a, b) => Math.abs(a - b) < 0.01;
+          check('multiChartScrubScale', () => first.length === 3 && second.length === 2
+            && near(first[2], second[1]) && near(cursorX, first[1])
+            && near(cursorX, second[0] + (second[1] - second[0]) * (4 - 2) / (12 - 2))
+            ? true : JSON.stringify({ first, second, cursorX }));
+          await setScrubTime(multiScrub, 12);
+          samples.push(multiSample());
+          check('multiChartScrubSamples', () => scrubFits(multiScrub)
+            && multiScrub.querySelectorAll('[data-iui-chart-cursor]').length === 1
+            && JSON.stringify(samples) === '[[1,1,2,null],[4,4,8,8.4],[12,12,0,2]]'
             ? true : JSON.stringify(samples));
         }
         check('r3Weight', () => {
@@ -1341,6 +1398,9 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-numeric-axis-write="ok"/u,'旧时间轴应继续响应外部滑轨')
   assert.match(html,/data-chart-scrub-initial="ok"/u,'时间轴 scrub 应默认选择首点且适合窄列')
   assert.match(html,/data-chart-scrub-samples="ok"/u,'拖动应同步滑轨、游标和分阶段读数，原曲线保持不变')
+  assert.match(html,/data-multi-chart-scrub-initial="ok"/u,'两条曲线应共用滑轨，起点按两条曲线的联合范围确定')
+  assert.match(html,/data-multi-chart-scrub-scale="ok"/u,'同一时刻应在两条曲线上共享横坐标')
+  assert.match(html,/data-multi-chart-scrub-samples="ok"/u,'各曲线应独立插值，范围外不显示读数，窄列无横溢')
   assert.match(html,/data-r3-weight="ok"/u,'weight 三态应输出 data-iui-weight 并给出强弱视觉（primary 加粗 / secondary·optional 弱化）')
   assert.match(html,/data-r3-details-closed="ok"/u,'details 初始应收起并带 aria-expanded=false')
   assert.match(html,/data-r3-details-open="ok"/u,'details 由 IuiSheet 受控展开（aria-controls 指向内容）')

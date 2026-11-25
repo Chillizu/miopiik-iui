@@ -915,6 +915,28 @@ window.__ModuleLoader__.load({
         return rows
       }
 
+      /** 将同一数值横轴上的多组数据分别归一化，沿用单图的点数上限。 */
+      function chartTraces(series, xUnit) {
+        if (!Array.isArray(series) || series.length === 0 || series.length > 4) return null
+        const traces = []
+        const labels = new Set()
+        let points = 0
+        for (const entry of series) {
+          if (!Array.isArray(entry) || entry.length !== 2) return null
+          const [rawLabel, pairs] = entry
+          if (typeof rawLabel !== 'string' || rawLabel.length > 100 || !Array.isArray(pairs) || pairs.length < 2) return null
+          const label = rawLabel.trim()
+          if (label === '' || labels.has(label)) return null
+          points += pairs.length
+          if (points > LIMITS.series || pairs.some((pair) => !Array.isArray(pair) || pair.length !== 2)) return null
+          const rows = chartMatrix(pairs, 'linear', xUnit)
+          if (rows === null || rows.at(-1)[0] <= rows[0][0]) return null
+          labels.add(label)
+          traces.push({ label, rows })
+        }
+        return traces
+      }
+
       /** Inline datasets use the same bounded expression grammar as derive. */
       function compileDataset(value) {
         if (typeof value !== 'string' || readBinding(value).scope !== undefined) return null
@@ -1444,7 +1466,10 @@ window.__ModuleLoader__.load({
               return failNode(node, path, 'chart.cursor 需要数值横轴，以及数值或 $state.* 绑定')
             }
             const binding = readBinding(props.series)
-            if (binding.scope === undefined && chartMatrix(binding.literal, props.xScale, props.xUnit) === null) {
+            const namedTraces = props.kind === 'line' && binding.scope === undefined ? chartTraces(binding.literal, props.xUnit) : null
+            if (namedTraces !== null && props.xScale === undefined) props = { ...props, xScale: 'linear' }
+            if (binding.scope === undefined && chartMatrix(binding.literal, props.xScale, props.xUnit) === null
+              && namedTraces === null) {
               datasetExpression = compileDataset(binding.literal)
               if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')
             }
@@ -1624,7 +1649,7 @@ window.__ModuleLoader__.load({
       function degradeToText(text) {
         return { id: 'degraded', type: 'text', props: { text: String(text ?? '') }, children: [] }
       }
-      return { IUI_VERSION, REGISTRY, LIMITS, INLINE_TYPES, TONES, ICONS, readBinding, resolveValue, validateAst, writeStatePath, localActionValue, drawingProps, positionalTableColumns, tableMatrix, chartMatrix, degradeToText }
+      return { IUI_VERSION, REGISTRY, LIMITS, INLINE_TYPES, TONES, ICONS, readBinding, resolveValue, validateAst, writeStatePath, localActionValue, drawingProps, positionalTableColumns, tableMatrix, chartMatrix, chartTraces, degradeToText }
     })()
     const MIOPIIK_ML = (() => {
       /**
@@ -3062,16 +3087,126 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function IuiLineChart({ rows, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub }) {
+    const traceDashes = [undefined, '7 4', '2 3', '8 3 2 3']
+
+    function lineValueAt(rows, x) {
+      if (x < rows[0][0] || x > rows.at(-1)[0]) return null
+      const next = rows.findIndex(([coordinate]) => coordinate > x)
+      if (next === -1) return rows.at(-1)[1]
+      const [fromX, fromY] = rows[next - 1]
+      const [toX, toY] = rows[next]
+      if (x === fromX) return fromY
+      const span = toX - fromX
+      const fraction = Number.isFinite(span) ? (x - fromX) / span : (x / 2 - fromX / 2) / (toX / 2 - fromX / 2)
+      return fromY * (1 - fraction) + toY * fraction
+    }
+
+    function prepareLineChart(rows, traces, width, linear, xUnit, yUnit) {
+      const multiple = traces !== null
+      const height = multiple ? 182 : 152
+      const top = 22
+      const bottom = height - 29
+      const values = multiple ? traces.flatMap((trace) => trace.rows.map(([, value]) => value)) : rows.map(([, value]) => value)
+      const magnitude = Math.max(...values.map(Math.abs)) || 1
+      const scaled = values.map((value) => value / magnitude)
+      const min = Math.min(0, ...scaled)
+      const max = Math.max(0, ...scaled)
+      const y = (value) => bottom - ((value - min) / (max - min || 1)) * (bottom - top)
+      const toY = (value) => y(value / magnitude)
+      const axisLabels = [min, max].map((value) => formatChartValue(value * magnitude))
+      const left = multiple ? Math.min(66, 10 + Math.max(...axisLabels.map((value) => value.length)) * 7) : 9
+      const right = Math.max(left, width - 9)
+      const domain = multiple
+        ? [...new Set(traces.flatMap((trace) => trace.rows.map(([x]) => x)))].sort((a, b) => a - b)
+        : rows.map(([x], index) => linear ? x : index)
+      const last = domain.length - 1
+      const domainMin = domain[0]
+      const domainMax = domain[last]
+      const xMagnitude = Math.max(Math.abs(domainMin), Math.abs(domainMax)) || 1
+      const firstX = domainMin / xMagnitude
+      const span = domainMax / xMagnitude - firstX
+      const toX = (value) => span === 0 ? width / 2 : left + (value / xMagnitude - firstX) / span * (right - left)
+      const intervals = Math.min(last, Math.max(1, Math.floor((right - left) / 96)))
+      const ticks = new Set(Array.from({ length: intervals + 1 }, (_, i) => Math.round(i * last / (intervals || 1))))
+      if (linear) {
+        ticks.clear()
+        ticks.add(last)
+        if (multiple) ticks.add(0)
+        let priorX = toX(domainMax)
+        const startX = toX(domainMin)
+        for (let index = last - 1; index >= 0; index -= 1) {
+          const x = toX(domain[index])
+          if (priorX - x < 72 || (multiple && x - startX < 72)) continue
+          ticks.add(index)
+          priorX = x
+        }
+      }
+      const labelLimit = Math.max(3, Math.min(15, Math.floor(width / (intervals + 1) / 11)))
+      const baseline = y(0)
+      const parts = []
+      const guides = max === min ? [0] : [min, (min + max) / 2, max]
+      if (multiple) {
+        guides.forEach((value, index) => {
+          const guide = y(value)
+          parts.push(
+            h('line', { key: `guide-${index}`, className: 'miopiik-chart-guide', x1: left, y1: guide, x2: right, y2: guide, strokeWidth: 1 }),
+            h('text', { key: `scale-${index}`, x: left - 6, y: guide + 4, textAnchor: 'end', fontSize: 11, fill: C.muted, fontFamily: SANS }, formatChartValue(value * magnitude)),
+          )
+        })
+        if (yUnit !== '') parts.push(h('text', { key: 'unit', x: left, y: 11, fontSize: 10, fill: C.muted, fontFamily: SANS }, yUnit.trim()))
+      } else if (max !== min) {
+        for (const division of [0, 1, 2, 3]) {
+          const guide = y(min + (max - min) * division / 3)
+          if (Math.abs(guide - baseline) < 2) continue
+          parts.push(h('line', { key: `guide-${division}`, className: 'miopiik-chart-guide', x1: left, y1: guide, x2: right, y2: guide, strokeWidth: 1 }))
+        }
+      }
+      parts.push(h('line', { key: 'axis', className: 'miopiik-chart-guide', x1: left, y1: baseline, x2: right, y2: baseline, stroke: C.border, strokeWidth: 1 }))
+      const chartSeries = traces ?? [{ rows }]
+      chartSeries.forEach((trace, traceIndex) => {
+        const points = trace.rows.map(([x, value], index) => ({ x: toX(linear ? x : index), y: toY(value) }))
+        const xy = points.map((point) => `${point.x},${point.y}`).join(' ')
+        if (!multiple && span > 0) parts.push(h('polygon', { key: 'area', className: 'miopiik-chart-area', points: `${points[0].x},${baseline} ${xy} ${points.at(-1).x},${baseline}`, fill: 'none' }))
+        parts.push(h('polyline', {
+          key: `line-${traceIndex}`, points: xy, fill: 'none', stroke: C.brand, strokeWidth: 2,
+          strokeDasharray: traceDashes[traceIndex], strokeLinecap: 'round', strokeLinejoin: 'round',
+          'data-iui-chart-trace': trace.label, 'data-iui-trace-tone': multiple ? traceIndex : undefined,
+          className: multiple ? 'miopiik-trace-stroke' : undefined,
+        }))
+        if (multiple) return
+        points.forEach((point, index) => {
+          const [x, value] = rows[index]
+          const pointLabel = linear ? `${formatChartValue(x)}${xUnit}` : x
+          parts.push(h('circle', { key: `dot-${index}`, cx: point.x, cy: point.y, r: 3, fill: C.brand }, h('title', null, `${pointLabel}：${value}`)))
+          if (!ticks.has(index)) return
+          const textAnchor = span === 0 ? 'middle' : index === 0 ? 'start' : index === last ? 'end' : 'middle'
+          parts.push(h('text', { key: `val-${index}`, x: point.x, y: point.y - 8, fontSize: 11, fill: C.text, fontFamily: SANS, textAnchor }, formatChartValue(value)))
+        })
+      })
+      for (const index of ticks) {
+        const x = domain[index]
+        const textAnchor = span === 0 ? 'middle' : index === 0 ? 'start' : index === last ? 'end' : 'middle'
+        const pointLabel = linear ? `${formatChartValue(x)}${xUnit}` : rows[index][0]
+        const chars = [...pointLabel]
+        const tick = chars.length > labelLimit ? `${chars.slice(0, labelLimit - 1).join('')}…` : pointLabel
+        parts.push(h('text', { key: `lab-${index}`, x: toX(x), y: height - 9, fontSize: 11, fill: C.muted, fontFamily: SANS, textAnchor }, tick))
+      }
+      return { parts, chartSeries, domainMin, domainMax, toX, toY, height, top, bottom }
+    }
+
+    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub }) {
       const containerRef = React.useRef(null)
       const [width, setWidth] = React.useState(360)
       const [scrubValue, setScrubValue] = React.useState(undefined)
       React.useLayoutEffect(() => {
         const container = containerRef.current
         if (container === null) return
+        let previousWidth
         const measure = () => {
           const measured = container.clientWidth
-          if (measured > 0) setWidth(measured)
+          if (measured <= 0 || measured === previousWidth) return
+          previousWidth = measured
+          setWidth(measured)
         }
         measure()
         if (typeof ResizeObserver === 'undefined') return
@@ -3080,96 +3215,52 @@ window.__ModuleLoader__.load({
         return () => observer.disconnect()
       }, [])
 
-      const height = 152
-      const pad = 9
-      const top = 22
-      const bottom = height - 29
-      const values = rows.map(([, value]) => value)
-      const magnitude = Math.max(...values.map(Math.abs)) || 1
-      const scaled = values.map((value) => value / magnitude)
-      const min = Math.min(0, ...scaled)
-      const max = Math.max(0, ...scaled)
-      const y = (value) => bottom - ((value - min) / (max - min || 1)) * (bottom - top)
-      const last = rows.length - 1
       const linear = xScale === 'linear'
-      const domain = rows.map(([x], index) => linear ? x : index)
-      const xMagnitude = Math.max(...domain.map(Math.abs)) || 1
-      const firstX = domain[0] / xMagnitude
-      const span = domain[last] / xMagnitude - firstX
-      const scrubMin = domain[0]
-      const scrubMax = domain[last]
-      const scrubbable = scrub !== undefined && scrubMax > scrubMin && Number.isFinite(scrubMax - scrubMin)
-      const cursor = scrubbable ? Math.min(scrubMax, Math.max(scrubMin, scrubValue ?? scrubMin)) : externalCursor
-      const toX = (value) => span === 0 ? width / 2 : pad + (value / xMagnitude - firstX) / span * (width - 2 * pad)
-      const intervals = Math.min(last, Math.max(1, Math.floor((width - 2 * pad) / 96)))
-      const ticks = new Set(Array.from({ length: intervals + 1 }, (_, i) => Math.round(i * last / (intervals || 1))))
-      const points = scaled.map((value, index) => ({
-        x: toX(domain[index]),
-        y: y(value),
-      }))
-      if (linear) {
-        ticks.clear()
-        ticks.add(last)
-        let priorX = points[last].x
-        for (let index = last - 1; index >= 0; index -= 1) {
-          if (priorX - points[index].x < 72) continue
-          ticks.add(index)
-          priorX = points[index].x
-        }
-      }
-      const labelLimit = Math.max(3, Math.min(15, Math.floor(width / (intervals + 1) / 11)))
-      const baseline = y(0)
-      const coordinates = points.map((point) => `${point.x},${point.y}`).join(' ')
-      const parts = []
-      // A quiet reference grid and fill use the same zero line as the curve.
-      if (max !== min) {
-        for (const division of [0, 1, 2, 3]) {
-          const guide = y(min + (max - min) * division / 3)
-          if (Math.abs(guide - baseline) < 2) continue
-          parts.push(h('line', { key: `guide-${division}`, className: 'miopiik-chart-guide', x1: pad, y1: guide, x2: width - pad, y2: guide, strokeWidth: 1 }))
-        }
-      }
-      if (span > 0) parts.push(h('polygon', { key: 'area', className: 'miopiik-chart-area', points: `${points[0].x},${baseline} ${coordinates} ${points[last].x},${baseline}`, fill: 'none' }))
-      parts.push(h('line', { key: 'axis', className: 'miopiik-chart-guide', x1: pad, y1: baseline, x2: width - pad, y2: baseline, stroke: C.border, strokeWidth: 1 }))
-      parts.push(h('polyline', { key: 'line', points: coordinates, fill: 'none', stroke: C.brand, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))
-      let marker = null
-      let sampledValue = null
-      if (linear && Number.isFinite(cursor) && cursor >= domain[0] && cursor <= domain[last]) {
+      const layout = React.useMemo(() => prepareLineChart(rows, traces, width, linear, xUnit, yUnit), [rows, traces, width, linear, xUnit, yUnit])
+      const { chartSeries, domainMin, domainMax, parts, toX, toY, height, top, bottom } = layout
+      const multiple = traces !== null
+      const scrubbable = scrub !== undefined && domainMax > domainMin && Number.isFinite(domainMax - domainMin)
+      const cursor = scrubbable ? Math.min(domainMax, Math.max(domainMin, scrubValue ?? domainMin)) : externalCursor
+      const active = linear && Number.isFinite(cursor) && cursor >= domainMin && cursor <= domainMax
+      const cursorParts = []
+      const readings = active ? chartSeries.map((trace) => lineValueAt(trace.rows, cursor)) : []
+      if (active) {
         const x = toX(cursor)
-        const next = domain.findIndex((coordinate) => coordinate > cursor)
-        const before = next === -1 ? last : next - 1
-        const after = next === -1 ? last : next
-        const distance = domain[after] - domain[before]
-        const fraction = before === after ? 0 : Number.isFinite(distance) ? (cursor - domain[before]) / distance
-          : (x - points[before].x) / (points[after].x - points[before].x)
-        const sampled = scaled[before] * (1 - fraction) + scaled[after] * fraction
-        marker = { x, y: y(sampled) }
-        if (scrubbable) sampledValue = values[before] * (1 - fraction) + values[after] * fraction
-        parts.push(h('line', { key: 'cursor', 'data-iui-chart-cursor': cursor, x1: x, x2: x, y1: top, y2: bottom, stroke: C.muted, strokeDasharray: '3 4' }))
+        cursorParts.push(h('line', { key: 'cursor', 'data-iui-chart-cursor': cursor, x1: x, x2: x, y1: top, y2: bottom, stroke: C.muted, strokeDasharray: '3 4' }))
+        readings.forEach((value, index) => {
+          if (value === null) return
+          cursorParts.push(h('circle', {
+            key: `marker-${index}`, 'data-iui-chart-marker': '1', 'data-iui-trace-tone': multiple ? index : undefined,
+            className: multiple ? 'miopiik-chart-marker miopiik-trace-stroke' : 'miopiik-chart-marker',
+            cx: x, cy: toY(value), r: 4.5, stroke: C.brand, strokeWidth: 2,
+          }))
+        })
       }
-      points.forEach((point, index) => {
-        const [x, value] = rows[index]
-        const pointLabel = linear ? `${formatChartValue(x)}${xUnit}` : x
-        parts.push(h('circle', { key: `dot-${index}`, cx: point.x, cy: point.y, r: 3, fill: C.brand }, h('title', null, `${pointLabel}：${value}`)))
-        if (!ticks.has(index)) return
-        const textAnchor = span === 0 ? 'middle' : index === 0 ? 'start' : index === last ? 'end' : 'middle'
-        const chars = [...pointLabel]
-        const tick = chars.length > labelLimit ? `${chars.slice(0, labelLimit - 1).join('')}…` : pointLabel
-        parts.push(
-          h('text', { key: `val-${index}`, x: point.x, y: point.y - 8, fontSize: 11, fill: C.text, fontFamily: SANS, textAnchor }, formatChartValue(value)),
-          h('text', { key: `lab-${index}`, x: point.x, y: height - 9, fontSize: 11, fill: C.muted, fontFamily: SANS, textAnchor }, tick),
-        )
-      })
-      if (marker !== null) parts.push(h('circle', { key: 'marker', 'data-iui-chart-marker': '1', className: 'miopiik-chart-marker', cx: marker.x, cy: marker.y, r: 4.5, stroke: C.brand, strokeWidth: 2 }))
-      const position = scrubbable ? `${formatChartValue(cursor)}${xUnit}` : ''
-      const readout = sampledValue === null ? '' : `${formatChartValue(sampledValue)}${yUnit}`
+      const position = active ? `${formatChartValue(cursor)}${xUnit}` : ''
+      const readingText = (value) => value === null ? '—' : `${formatChartValue(value)}${yUnit}`
+      const legend = multiple ? h('div', {
+        className: 'miopiik-trace-legend', role: 'list', 'aria-label': '曲线', 'data-iui-chart-readout': active ? 'multi' : undefined,
+      }, ...traces.map((trace, index) => h('div', {
+        key: trace.label, className: 'miopiik-trace-legend-item', role: 'listitem', 'data-iui-trace-tone': index,
+      },
+      h('span', { className: 'miopiik-trace-label' },
+        h('svg', { width: 18, height: 8, 'aria-hidden': true }, h('line', { className: 'miopiik-trace-stroke', x1: 1, y1: 4, x2: 17, y2: 4, strokeWidth: 2, strokeDasharray: traceDashes[index] })),
+        h('span', null, trace.label),
+      ),
+      active ? h('span', { className: 'miopiik-trace-value', 'data-iui-trace-value': trace.label, 'aria-label': readings[index] === null ? '无数据' : undefined }, readings[index] === null ? '—' : formatChartValue(readings[index])) : null,
+      ))) : null
+      const readout = scrubbable && !multiple ? readingText(readings[0]) : ''
+      const ariaValue = multiple && active
+        ? traces.map((trace, index) => `${trace.label} ${readings[index] === null ? '无数据' : readingText(readings[index])}`).join('，')
+        : readout
       return h('div', { ref: containerRef, style: { width: '100%', minWidth: 0 } },
-        svgCanvas(width, height, parts, label, { fluid: true }),
+        svgCanvas(width, height, [...parts, ...cursorParts], label, { fluid: true }),
         scrubbable ? h('div', { 'data-iui-chart-scrub': '1' },
           h('span', { className: 'miopiik-control-label' }, scrub, ' ', h('span', { className: 'miopiik-scrub-position' }, position)),
-          h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': sampledValue }, readout),
-          renderRangeInput({ min: scrubMin, max: scrubMax, step: 'any', value: cursor, label: scrub, valueText: `${position}，${readout}`, onChange: setScrubValue }),
+          multiple ? null : h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': readings[0] }, readout),
+          renderRangeInput({ min: domainMin, max: domainMax, step: 'any', value: cursor, label: scrub, valueText: `${position}，${ariaValue}`, onChange: setScrubValue }),
         ) : null,
+        legend,
       )
     }
 
@@ -4043,13 +4134,20 @@ window.__ModuleLoader__.load({
           const xUnit = props.xScale === 'linear' ? textOf(resolveText(props.xUnit)).slice(0, 16) : ''
           const yUnit = textOf(resolveText(props.yUnit)).slice(0, 16)
           const rows = IUI_AST.chartMatrix(series, props.xScale, xUnit)
-          const cursor = resolve(props.cursor)
-          if (rows === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
+          const traces = rows === null && props.xScale === 'linear' ? IUI_AST.chartTraces(series, xUnit) : null
+          if (rows === null && traces === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
+          const chartOptions = { xScale: props.xScale, xUnit, yUnit, cursor: resolve(props.cursor), scrub: props.scrub }
+          const plot = traces === null
+            ? renderChart(rows, kind, chartSummary(rows, kind, xUnit, yUnit), chartOptions)
+            : h(IuiLineChart, {
+              traces, ...chartOptions,
+              label: `共享坐标折线图。${traces.map((trace) => `${trace.label}：${trace.rows.slice(0, 3).map(([x, y]) => `${x}${xUnit} ${y}${yUnit}`).join('，')}，共 ${trace.rows.length} 个数据点`).join('。')}`,
+            })
           const source = resolveText(props.source)
           return h(
             'div',
             { key, className: 'miopiik-enter miopiik-chart-frame', 'data-iui-chart': kind, 'data-iui-chart-scale': props.xScale },
-            renderChart(rows, kind, chartSummary(rows, kind, xUnit, yUnit), { xScale: props.xScale, xUnit, yUnit, cursor, scrub: props.scrub }),
+            plot,
             textOf(source) === '' ? null : h('div', { className: 'miopiik-chart-source' }, `来源：${textOf(source)}`),
           )
         }
@@ -4793,7 +4891,7 @@ function registerIuiSettings(ctx) {
           if (document.getElementById("miopiik-iui-chrome") === null) {
             chrome = document.createElement("style")
             chrome.id = "miopiik-iui-chrome"
-            chrome.textContent = "/* Standalone UI styles shared by IUI previews, live replies, and replay. */\n[data-iui-output] {\n  --iui-text: var(--dsw-alias-label-primary, light-dark(#182132, #e8ecf2));\n  --iui-muted: var(--dsw-alias-label-secondary, light-dark(#536074, #a9b3c2));\n  --iui-base: var(--dsw-alias-bg-layer-1, light-dark(#fff, #171c24));\n  --iui-accent: var(--dsw-static-deepseek-500, #4176e6);\n  --iui-line: color-mix(in srgb, var(--iui-text) 13%, transparent);\n  --iui-quiet: color-mix(in srgb, var(--iui-text) 4%, transparent);\n  --iui-selected: color-mix(in srgb, var(--iui-accent) 12%, var(--iui-base));\n  --iui-chart-surface: color-mix(in srgb, var(--iui-text) 2.5%, var(--iui-base));\n}\n\n@keyframes miopiik-enter {\n  from { opacity: 0; }\n}\n\n.miopiik-enter { animation: miopiik-enter .14s ease-out; }\n[data-iui-streaming] .miopiik-enter { animation: none; }\n\n.miopiik-ctl,\n.miopiik-range > input,\n[data-iui-input] input {\n  -webkit-tap-highlight-color: transparent;\n}\n\n.miopiik-ctl:focus-visible,\n.miopiik-range > input:focus-visible,\n[data-iui-input] input:focus-visible {\n  outline: 2px solid var(--iui-accent, #4176e6);\n  outline-offset: 2px;\n}\n\n.miopiik-sr {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  padding: 0;\n  margin: -1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n  border: 0;\n}\n\n[data-miopiik-segments=block] > [data-miopiik-block-wrap] { margin-block: 8px; }\n[data-miopiik-segments=block] > [data-miopiik-block-wrap]:has(> [data-iui-density=inline]) { margin-block: 5px; }\n\n.miopiik-control-label {\n  color: var(--iui-muted);\n  font-size: 12px;\n  line-height: 1.5;\n  min-inline-size: 0;\n}\n\n.miopiik-choices {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 4px;\n  min-inline-size: 0;\n}\n\n.miopiik-choice {\n  appearance: none;\n  max-inline-size: 100%;\n  min-block-size: 28px;\n  padding: 3px 9px;\n  border: 1px solid transparent;\n  border-radius: 6px;\n  background: var(--iui-quiet);\n  color: var(--iui-muted);\n  font: inherit;\n  font-size: 12px;\n  font-weight: 500;\n  line-height: 1.4;\n  overflow-wrap: anywhere;\n  cursor: pointer;\n}\n\n.miopiik-choice[aria-pressed=true],\n.miopiik-choice[aria-selected=true] {\n  border-color: color-mix(in srgb, var(--iui-accent) 32%, transparent);\n  background: var(--iui-selected);\n  color: var(--iui-text);\n}\n\n.miopiik-choice:disabled { opacity: .65; cursor: default; }\n.miopiik-choices[role=tablist] {\n  padding-block-end: 7px;\n  border-block-end: 1px solid var(--iui-line);\n}\n\n[data-iui-slider],\n[data-iui-chart-scrub] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  grid-template-rows: auto auto;\n  align-items: center;\n  column-gap: 8px;\n  min-inline-size: 0;\n}\n\n.miopiik-range-value {\n  grid-area: 1 / 2;\n  color: var(--iui-text);\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.5;\n  font-variant-numeric: tabular-nums;\n  text-align: end;\n  max-inline-size: min(22ch, 45vi);\n  overflow-wrap: anywhere;\n}\n\n.miopiik-range {\n  --iui-thumb: 14px;\n  --iui-half-thumb: 7px;\n  --iui-track: 4px;\n  position: relative;\n  display: block;\n  grid-column: 1 / -1;\n  min-inline-size: 0;\n}\n\n.miopiik-range::before,\n.miopiik-range-fill {\n  position: absolute;\n  pointer-events: none;\n  inset-inline: var(--iui-half-thumb);\n  inset-block-start: 50%;\n  block-size: var(--iui-track);\n  border-radius: 999px;\n}\n\n.miopiik-range::before {\n  content: \"\";\n  background: var(--iui-line);\n  transform: translateY(-50%);\n}\n\n.miopiik-range-fill {\n  background: var(--iui-accent);\n  transform-origin: left center;\n}\n\n.miopiik-range:dir(rtl) > .miopiik-range-fill { transform-origin: right center; }\n\n.miopiik-range > input {\n  appearance: none;\n  position: relative;\n  display: block;\n  box-sizing: border-box;\n  inline-size: 100%;\n  block-size: 24px;\n  padding: 0;\n  margin: 0;\n  border: 0;\n  border-radius: 6px;\n  background: transparent;\n  accent-color: var(--iui-accent);\n  cursor: pointer;\n  z-index: 1;\n}\n\n.miopiik-range > input::-webkit-slider-runnable-track {\n  height: var(--iui-track);\n  background: transparent;\n}\n\n.miopiik-range > input::-moz-range-track {\n  height: var(--iui-track);\n  background: transparent;\n}\n\n.miopiik-range > input::-webkit-slider-thumb {\n  appearance: none;\n  box-sizing: border-box;\n  width: var(--iui-thumb);\n  height: var(--iui-thumb);\n  margin-top: calc((var(--iui-track) - var(--iui-thumb)) / 2);\n  border: 2px solid var(--iui-base);\n  border-radius: 50%;\n  background: var(--iui-accent);\n  box-shadow: 0 0 0 1px var(--iui-accent);\n}\n\n.miopiik-range > input::-moz-range-thumb {\n  box-sizing: border-box;\n  width: var(--iui-thumb);\n  height: var(--iui-thumb);\n  border: 2px solid var(--iui-base);\n  border-radius: 50%;\n  background: var(--iui-accent);\n  box-shadow: 0 0 0 1px var(--iui-accent);\n}\n\n.miopiik-switch {\n  appearance: none;\n  box-sizing: border-box;\n  flex: none;\n  position: relative;\n  inline-size: 32px;\n  block-size: 20px;\n  padding: 2px;\n  border: 1px solid var(--iui-line);\n  border-radius: 999px;\n  background: var(--iui-quiet);\n  cursor: pointer;\n}\n\n.miopiik-switch[aria-checked=true] {\n  border-color: var(--iui-accent);\n  background: var(--iui-accent);\n}\n\n.miopiik-switch > span {\n  display: block;\n  inline-size: 14px;\n  block-size: 14px;\n  border-radius: 50%;\n  background: var(--iui-muted);\n}\n\n.miopiik-switch[aria-checked=true] > span {\n  background: white;\n  transform: translateX(12px);\n}\n\n.miopiik-switch[aria-checked=true]:dir(rtl) > span { transform: translateX(-12px); }\n\n[data-iui-input] > input {\n  appearance: none;\n  box-sizing: border-box;\n  flex: 1 1 140px;\n  min-inline-size: min(140px, 100%);\n  min-block-size: 30px;\n  padding: 4px 9px;\n  border: 1px solid var(--iui-line);\n  border-radius: 6px;\n  background: var(--iui-quiet);\n  color: var(--iui-text);\n  font: inherit;\n  font-size: 13px;\n  line-height: 1.4;\n}\n\n[data-iui-metric] { flex: 1 1 0; padding-block: 2px; }\n.miopiik-metric-row > [data-iui-metric] { flex-basis: 104px; }\n.miopiik-metric-row > [data-iui-metric-narrative] { flex-basis: 100%; }\n.miopiik-metric-value { line-height: 1.25; }\n.miopiik-metric-unit {\n  margin-inline-start: .35em;\n  color: var(--iui-muted);\n  font-size: .64em;\n  font-weight: 500;\n}\n\n.miopiik-chart-frame {\n  display: flex;\n  flex-direction: column;\n  gap: 5px;\n  min-inline-size: 0;\n  padding: 10px clamp(10px, 1.5vi, 16px) 9px;\n  border: 1px solid var(--iui-line);\n  border-radius: 10px;\n  background: var(--iui-chart-surface);\n}\n\n:where([data-iui-container=card]) .miopiik-chart-frame {\n  --iui-chart-surface: var(--iui-base);\n  padding-inline: 0;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n}\n\n.miopiik-chart-source {\n  color: var(--iui-muted);\n  font-size: 11px;\n  line-height: 1.5;\n}\n\n[data-iui-chart-scrub] {\n  margin-block-start: 2px;\n  padding-block-start: 5px;\n  border-block-start: 1px solid var(--iui-line);\n}\n\n.miopiik-scrub-position {\n  color: var(--iui-text);\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-chart-guide { stroke: var(--iui-line); }\n.miopiik-chart-area { fill: color-mix(in srgb, var(--iui-accent) 8%, var(--iui-chart-surface)); }\n.miopiik-chart-marker { fill: var(--iui-chart-surface); }\n\n@media (hover: hover) {\n  .miopiik-choice:not(:disabled):hover {\n    border-color: var(--iui-line);\n    color: var(--iui-text);\n  }\n\n  .miopiik-choice[aria-pressed=true]:not(:disabled):hover,\n  .miopiik-choice[aria-selected=true]:not(:disabled):hover {\n    border-color: color-mix(in srgb, var(--iui-accent) 42%, transparent);\n  }\n\n  .miopiik-ctl:not(.miopiik-choice):not(.miopiik-switch):not(:disabled):hover { filter: brightness(1.12); }\n  .miopiik-ctl:not(:disabled):active { filter: brightness(.95); }\n}\n\n@media (prefers-reduced-motion: no-preference) {\n  .miopiik-choice { transition: background-color .12s ease, border-color .12s ease, color .12s ease; }\n  .miopiik-switch { transition: background-color .12s ease; }\n  .miopiik-switch > span { transition: transform .12s ease; }\n  .miopiik-shape-motion {\n    transition-property: x, y, cx, cy, r, width, height, opacity, fill, stroke;\n    transition-duration: .12s;\n    transition-timing-function: ease-out;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .miopiik-enter { animation: none; }\n  .miopiik-ctl:hover,\n  .miopiik-ctl:active { filter: none; }\n}\n\n@media (pointer: coarse) {\n  .miopiik-ctl { min-block-size: 32px; }\n  .miopiik-choice { padding-inline: 12px; }\n  .miopiik-range > input { block-size: 32px; }\n  [data-iui-input] > input { min-block-size: 32px; }\n  .miopiik-switch {\n    inline-size: 44px;\n    block-size: 32px;\n    padding: 2px 4px;\n  }\n  .miopiik-switch[aria-checked=true] > span { transform: translateX(20px); }\n  .miopiik-switch[aria-checked=true]:dir(rtl) > span { transform: translateX(-20px); }\n}\n\n@media (forced-colors: active) {\n  .miopiik-ctl { border: 1px solid ButtonBorder; forced-color-adjust: auto; }\n  .miopiik-choice[aria-pressed=true],\n  .miopiik-choice[aria-selected=true] { background: Highlight; color: HighlightText; }\n  .miopiik-ctl:focus-visible,\n  .miopiik-range > input:focus-visible,\n  [data-iui-input] input:focus-visible { outline: 2px solid Highlight; }\n  .miopiik-switch > span { background: ButtonText; }\n  .miopiik-switch[aria-checked=true] { background: Highlight; }\n  .miopiik-switch[aria-checked=true] > span { background: HighlightText; }\n  .miopiik-chart-guide { stroke: GrayText; }\n  .miopiik-chart-area { fill: none; }\n  .miopiik-range > input,\n  .miopiik-range::before,\n  .miopiik-range-fill { forced-color-adjust: none; }\n  .miopiik-range::before { background: GrayText; }\n  .miopiik-range-fill { background: Highlight; }\n  .miopiik-range > input::-webkit-slider-thumb {\n    border-color: Canvas;\n    background: Highlight;\n    box-shadow: 0 0 0 1px Highlight;\n  }\n  .miopiik-range > input::-moz-range-thumb {\n    border-color: Canvas;\n    background: Highlight;\n    box-shadow: 0 0 0 1px Highlight;\n  }\n}"
+            chrome.textContent = "/* Standalone UI styles shared by IUI previews, live replies, and replay. */\n[data-iui-output] {\n  --iui-text: var(--dsw-alias-label-primary, light-dark(#182132, #e8ecf2));\n  --iui-muted: var(--dsw-alias-label-secondary, light-dark(#536074, #a9b3c2));\n  --iui-base: var(--dsw-alias-bg-layer-1, light-dark(#fff, #171c24));\n  --iui-accent: var(--dsw-static-deepseek-500, #4176e6);\n  --iui-line: color-mix(in srgb, var(--iui-text) 13%, transparent);\n  --iui-quiet: color-mix(in srgb, var(--iui-text) 4%, transparent);\n  --iui-selected: color-mix(in srgb, var(--iui-accent) 12%, var(--iui-base));\n  --iui-chart-surface: color-mix(in srgb, var(--iui-text) 2.5%, var(--iui-base));\n}\n\n@keyframes miopiik-enter {\n  from { opacity: 0; }\n}\n\n.miopiik-enter { animation: miopiik-enter .14s ease-out; }\n[data-iui-streaming] .miopiik-enter { animation: none; }\n\n.miopiik-ctl,\n.miopiik-range > input,\n[data-iui-input] input {\n  -webkit-tap-highlight-color: transparent;\n}\n\n.miopiik-ctl:focus-visible,\n.miopiik-range > input:focus-visible,\n[data-iui-input] input:focus-visible {\n  outline: 2px solid var(--iui-accent, #4176e6);\n  outline-offset: 2px;\n}\n\n.miopiik-sr {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  padding: 0;\n  margin: -1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n  border: 0;\n}\n\n[data-miopiik-segments=block] > [data-miopiik-block-wrap] { margin-block: 8px; }\n[data-miopiik-segments=block] > [data-miopiik-block-wrap]:has(> [data-iui-density=inline]) { margin-block: 5px; }\n\n.miopiik-control-label {\n  color: var(--iui-muted);\n  font-size: 12px;\n  line-height: 1.5;\n  min-inline-size: 0;\n}\n\n.miopiik-choices {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 4px;\n  min-inline-size: 0;\n}\n\n.miopiik-choice {\n  appearance: none;\n  max-inline-size: 100%;\n  min-block-size: 28px;\n  padding: 3px 9px;\n  border: 1px solid transparent;\n  border-radius: 6px;\n  background: var(--iui-quiet);\n  color: var(--iui-muted);\n  font: inherit;\n  font-size: 12px;\n  font-weight: 500;\n  line-height: 1.4;\n  overflow-wrap: anywhere;\n  cursor: pointer;\n}\n\n.miopiik-choice[aria-pressed=true],\n.miopiik-choice[aria-selected=true] {\n  border-color: color-mix(in srgb, var(--iui-accent) 32%, transparent);\n  background: var(--iui-selected);\n  color: var(--iui-text);\n}\n\n.miopiik-choice:disabled { opacity: .65; cursor: default; }\n.miopiik-choices[role=tablist] {\n  padding-block-end: 7px;\n  border-block-end: 1px solid var(--iui-line);\n}\n\n[data-iui-slider],\n[data-iui-chart-scrub] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  grid-template-rows: auto auto;\n  align-items: center;\n  column-gap: 8px;\n  min-inline-size: 0;\n}\n\n.miopiik-range-value {\n  grid-area: 1 / 2;\n  color: var(--iui-text);\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.5;\n  font-variant-numeric: tabular-nums;\n  text-align: end;\n  max-inline-size: min(22ch, 45vi);\n  overflow-wrap: anywhere;\n}\n\n.miopiik-range {\n  --iui-thumb: 14px;\n  --iui-half-thumb: 7px;\n  --iui-track: 4px;\n  position: relative;\n  display: block;\n  grid-column: 1 / -1;\n  min-inline-size: 0;\n}\n\n.miopiik-range::before,\n.miopiik-range-fill {\n  position: absolute;\n  pointer-events: none;\n  inset-inline: var(--iui-half-thumb);\n  inset-block-start: 50%;\n  block-size: var(--iui-track);\n  border-radius: 999px;\n}\n\n.miopiik-range::before {\n  content: \"\";\n  background: var(--iui-line);\n  transform: translateY(-50%);\n}\n\n.miopiik-range-fill {\n  background: var(--iui-accent);\n  transform-origin: left center;\n}\n\n.miopiik-range:dir(rtl) > .miopiik-range-fill { transform-origin: right center; }\n\n.miopiik-range > input {\n  appearance: none;\n  position: relative;\n  display: block;\n  box-sizing: border-box;\n  inline-size: 100%;\n  block-size: 24px;\n  padding: 0;\n  margin: 0;\n  border: 0;\n  border-radius: 6px;\n  background: transparent;\n  accent-color: var(--iui-accent);\n  cursor: pointer;\n  z-index: 1;\n}\n\n.miopiik-range > input::-webkit-slider-runnable-track {\n  height: var(--iui-track);\n  background: transparent;\n}\n\n.miopiik-range > input::-moz-range-track {\n  height: var(--iui-track);\n  background: transparent;\n}\n\n.miopiik-range > input::-webkit-slider-thumb {\n  appearance: none;\n  box-sizing: border-box;\n  width: var(--iui-thumb);\n  height: var(--iui-thumb);\n  margin-top: calc((var(--iui-track) - var(--iui-thumb)) / 2);\n  border: 2px solid var(--iui-base);\n  border-radius: 50%;\n  background: var(--iui-accent);\n  box-shadow: 0 0 0 1px var(--iui-accent);\n}\n\n.miopiik-range > input::-moz-range-thumb {\n  box-sizing: border-box;\n  width: var(--iui-thumb);\n  height: var(--iui-thumb);\n  border: 2px solid var(--iui-base);\n  border-radius: 50%;\n  background: var(--iui-accent);\n  box-shadow: 0 0 0 1px var(--iui-accent);\n}\n\n.miopiik-switch {\n  appearance: none;\n  box-sizing: border-box;\n  flex: none;\n  position: relative;\n  inline-size: 32px;\n  block-size: 20px;\n  padding: 2px;\n  border: 1px solid var(--iui-line);\n  border-radius: 999px;\n  background: var(--iui-quiet);\n  cursor: pointer;\n}\n\n.miopiik-switch[aria-checked=true] {\n  border-color: var(--iui-accent);\n  background: var(--iui-accent);\n}\n\n.miopiik-switch > span {\n  display: block;\n  inline-size: 14px;\n  block-size: 14px;\n  border-radius: 50%;\n  background: var(--iui-muted);\n}\n\n.miopiik-switch[aria-checked=true] > span {\n  background: white;\n  transform: translateX(12px);\n}\n\n.miopiik-switch[aria-checked=true]:dir(rtl) > span { transform: translateX(-12px); }\n\n[data-iui-input] > input {\n  appearance: none;\n  box-sizing: border-box;\n  flex: 1 1 140px;\n  min-inline-size: min(140px, 100%);\n  min-block-size: 30px;\n  padding: 4px 9px;\n  border: 1px solid var(--iui-line);\n  border-radius: 6px;\n  background: var(--iui-quiet);\n  color: var(--iui-text);\n  font: inherit;\n  font-size: 13px;\n  line-height: 1.4;\n}\n\n[data-iui-metric] { flex: 1 1 0; padding-block: 2px; }\n.miopiik-metric-row > [data-iui-metric] { flex-basis: 104px; }\n.miopiik-metric-row > [data-iui-metric-narrative] { flex-basis: 100%; }\n.miopiik-metric-value { line-height: 1.25; }\n.miopiik-metric-unit {\n  margin-inline-start: .35em;\n  color: var(--iui-muted);\n  font-size: .64em;\n  font-weight: 500;\n}\n\n.miopiik-chart-frame {\n  display: flex;\n  flex-direction: column;\n  gap: 5px;\n  min-inline-size: 0;\n  padding: 10px clamp(10px, 1.5vi, 16px) 9px;\n  border: 1px solid var(--iui-line);\n  border-radius: 10px;\n  background: var(--iui-chart-surface);\n}\n\n:where([data-iui-container=card]) .miopiik-chart-frame {\n  --iui-chart-surface: var(--iui-base);\n  padding-inline: 0;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n}\n\n.miopiik-chart-source {\n  color: var(--iui-muted);\n  font-size: 11px;\n  line-height: 1.5;\n}\n\n[data-iui-chart-scrub] {\n  margin-block-start: 2px;\n  padding-block-start: 5px;\n  border-block-start: 1px solid var(--iui-line);\n}\n\n.miopiik-scrub-position {\n  color: var(--iui-text);\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-trace-legend {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(min(100%, 6.5rem), 1fr));\n  gap: 7px 10px;\n  padding-block: 3px;\n}\n\n.miopiik-trace-legend-item {\n  min-inline-size: 0;\n  font-size: 12px;\n  line-height: 1.4;\n}\n\n.miopiik-trace-label {\n  display: flex;\n  align-items: baseline;\n  gap: 5px;\n  color: var(--iui-muted);\n  overflow-wrap: anywhere;\n}\n\n.miopiik-trace-label svg { flex: 0 0 18px; }\n\n.miopiik-trace-value {\n  display: block;\n  margin-inline-start: 23px;\n  color: var(--iui-text);\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  overflow-wrap: anywhere;\n}\n\n[data-iui-trace-tone=\"0\"] { --iui-trace-color: light-dark(#275ac2, #72a3ff); }\n[data-iui-trace-tone=\"1\"] { --iui-trace-color: light-dark(#147660, #53cbb0); }\n[data-iui-trace-tone=\"2\"] { --iui-trace-color: light-dark(#995011, #f0a966); }\n[data-iui-trace-tone=\"3\"] { --iui-trace-color: light-dark(#833aa7, #d29cf4); }\n.miopiik-trace-stroke { stroke: var(--iui-trace-color, var(--iui-accent)); }\n\n@media (forced-colors: active) {\n  .miopiik-trace-stroke { stroke: CanvasText; }\n}\n\n.miopiik-chart-guide { stroke: var(--iui-line); }\n.miopiik-chart-area { fill: color-mix(in srgb, var(--iui-accent) 8%, var(--iui-chart-surface)); }\n.miopiik-chart-marker { fill: var(--iui-chart-surface); }\n\n@media (hover: hover) {\n  .miopiik-choice:not(:disabled):hover {\n    border-color: var(--iui-line);\n    color: var(--iui-text);\n  }\n\n  .miopiik-choice[aria-pressed=true]:not(:disabled):hover,\n  .miopiik-choice[aria-selected=true]:not(:disabled):hover {\n    border-color: color-mix(in srgb, var(--iui-accent) 42%, transparent);\n  }\n\n  .miopiik-ctl:not(.miopiik-choice):not(.miopiik-switch):not(:disabled):hover { filter: brightness(1.12); }\n  .miopiik-ctl:not(:disabled):active { filter: brightness(.95); }\n}\n\n@media (prefers-reduced-motion: no-preference) {\n  .miopiik-choice { transition: background-color .12s ease, border-color .12s ease, color .12s ease; }\n  .miopiik-switch { transition: background-color .12s ease; }\n  .miopiik-switch > span { transition: transform .12s ease; }\n  .miopiik-shape-motion {\n    transition-property: x, y, cx, cy, r, width, height, opacity, fill, stroke;\n    transition-duration: .12s;\n    transition-timing-function: ease-out;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .miopiik-enter { animation: none; }\n  .miopiik-ctl:hover,\n  .miopiik-ctl:active { filter: none; }\n}\n\n@media (pointer: coarse) {\n  .miopiik-ctl { min-block-size: 32px; }\n  .miopiik-choice { padding-inline: 12px; }\n  .miopiik-range > input { block-size: 32px; }\n  [data-iui-input] > input { min-block-size: 32px; }\n  .miopiik-switch {\n    inline-size: 44px;\n    block-size: 32px;\n    padding: 2px 4px;\n  }\n  .miopiik-switch[aria-checked=true] > span { transform: translateX(20px); }\n  .miopiik-switch[aria-checked=true]:dir(rtl) > span { transform: translateX(-20px); }\n}\n\n@media (forced-colors: active) {\n  .miopiik-ctl { border: 1px solid ButtonBorder; forced-color-adjust: auto; }\n  .miopiik-choice[aria-pressed=true],\n  .miopiik-choice[aria-selected=true] { background: Highlight; color: HighlightText; }\n  .miopiik-ctl:focus-visible,\n  .miopiik-range > input:focus-visible,\n  [data-iui-input] input:focus-visible { outline: 2px solid Highlight; }\n  .miopiik-switch > span { background: ButtonText; }\n  .miopiik-switch[aria-checked=true] { background: Highlight; }\n  .miopiik-switch[aria-checked=true] > span { background: HighlightText; }\n  .miopiik-chart-guide { stroke: GrayText; }\n  .miopiik-chart-area { fill: none; }\n  .miopiik-range > input,\n  .miopiik-range::before,\n  .miopiik-range-fill { forced-color-adjust: none; }\n  .miopiik-range::before { background: GrayText; }\n  .miopiik-range-fill { background: Highlight; }\n  .miopiik-range > input::-webkit-slider-thumb {\n    border-color: Canvas;\n    background: Highlight;\n    box-shadow: 0 0 0 1px Highlight;\n  }\n  .miopiik-range > input::-moz-range-thumb {\n    border-color: Canvas;\n    background: Highlight;\n    box-shadow: 0 0 0 1px Highlight;\n  }\n}"
             document.head.appendChild(chrome)
           }
         }

@@ -249,16 +249,126 @@
       )
     }
 
-    function IuiLineChart({ rows, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub }) {
+    const traceDashes = [undefined, '7 4', '2 3', '8 3 2 3']
+
+    function lineValueAt(rows, x) {
+      if (x < rows[0][0] || x > rows.at(-1)[0]) return null
+      const next = rows.findIndex(([coordinate]) => coordinate > x)
+      if (next === -1) return rows.at(-1)[1]
+      const [fromX, fromY] = rows[next - 1]
+      const [toX, toY] = rows[next]
+      if (x === fromX) return fromY
+      const span = toX - fromX
+      const fraction = Number.isFinite(span) ? (x - fromX) / span : (x / 2 - fromX / 2) / (toX / 2 - fromX / 2)
+      return fromY * (1 - fraction) + toY * fraction
+    }
+
+    function prepareLineChart(rows, traces, width, linear, xUnit, yUnit) {
+      const multiple = traces !== null
+      const height = multiple ? 182 : 152
+      const top = 22
+      const bottom = height - 29
+      const values = multiple ? traces.flatMap((trace) => trace.rows.map(([, value]) => value)) : rows.map(([, value]) => value)
+      const magnitude = Math.max(...values.map(Math.abs)) || 1
+      const scaled = values.map((value) => value / magnitude)
+      const min = Math.min(0, ...scaled)
+      const max = Math.max(0, ...scaled)
+      const y = (value) => bottom - ((value - min) / (max - min || 1)) * (bottom - top)
+      const toY = (value) => y(value / magnitude)
+      const axisLabels = [min, max].map((value) => formatChartValue(value * magnitude))
+      const left = multiple ? Math.min(66, 10 + Math.max(...axisLabels.map((value) => value.length)) * 7) : 9
+      const right = Math.max(left, width - 9)
+      const domain = multiple
+        ? [...new Set(traces.flatMap((trace) => trace.rows.map(([x]) => x)))].sort((a, b) => a - b)
+        : rows.map(([x], index) => linear ? x : index)
+      const last = domain.length - 1
+      const domainMin = domain[0]
+      const domainMax = domain[last]
+      const xMagnitude = Math.max(Math.abs(domainMin), Math.abs(domainMax)) || 1
+      const firstX = domainMin / xMagnitude
+      const span = domainMax / xMagnitude - firstX
+      const toX = (value) => span === 0 ? width / 2 : left + (value / xMagnitude - firstX) / span * (right - left)
+      const intervals = Math.min(last, Math.max(1, Math.floor((right - left) / 96)))
+      const ticks = new Set(Array.from({ length: intervals + 1 }, (_, i) => Math.round(i * last / (intervals || 1))))
+      if (linear) {
+        ticks.clear()
+        ticks.add(last)
+        if (multiple) ticks.add(0)
+        let priorX = toX(domainMax)
+        const startX = toX(domainMin)
+        for (let index = last - 1; index >= 0; index -= 1) {
+          const x = toX(domain[index])
+          if (priorX - x < 72 || (multiple && x - startX < 72)) continue
+          ticks.add(index)
+          priorX = x
+        }
+      }
+      const labelLimit = Math.max(3, Math.min(15, Math.floor(width / (intervals + 1) / 11)))
+      const baseline = y(0)
+      const parts = []
+      const guides = max === min ? [0] : [min, (min + max) / 2, max]
+      if (multiple) {
+        guides.forEach((value, index) => {
+          const guide = y(value)
+          parts.push(
+            h('line', { key: `guide-${index}`, className: 'miopiik-chart-guide', x1: left, y1: guide, x2: right, y2: guide, strokeWidth: 1 }),
+            h('text', { key: `scale-${index}`, x: left - 6, y: guide + 4, textAnchor: 'end', fontSize: 11, fill: C.muted, fontFamily: SANS }, formatChartValue(value * magnitude)),
+          )
+        })
+        if (yUnit !== '') parts.push(h('text', { key: 'unit', x: left, y: 11, fontSize: 10, fill: C.muted, fontFamily: SANS }, yUnit.trim()))
+      } else if (max !== min) {
+        for (const division of [0, 1, 2, 3]) {
+          const guide = y(min + (max - min) * division / 3)
+          if (Math.abs(guide - baseline) < 2) continue
+          parts.push(h('line', { key: `guide-${division}`, className: 'miopiik-chart-guide', x1: left, y1: guide, x2: right, y2: guide, strokeWidth: 1 }))
+        }
+      }
+      parts.push(h('line', { key: 'axis', className: 'miopiik-chart-guide', x1: left, y1: baseline, x2: right, y2: baseline, stroke: C.border, strokeWidth: 1 }))
+      const chartSeries = traces ?? [{ rows }]
+      chartSeries.forEach((trace, traceIndex) => {
+        const points = trace.rows.map(([x, value], index) => ({ x: toX(linear ? x : index), y: toY(value) }))
+        const xy = points.map((point) => `${point.x},${point.y}`).join(' ')
+        if (!multiple && span > 0) parts.push(h('polygon', { key: 'area', className: 'miopiik-chart-area', points: `${points[0].x},${baseline} ${xy} ${points.at(-1).x},${baseline}`, fill: 'none' }))
+        parts.push(h('polyline', {
+          key: `line-${traceIndex}`, points: xy, fill: 'none', stroke: C.brand, strokeWidth: 2,
+          strokeDasharray: traceDashes[traceIndex], strokeLinecap: 'round', strokeLinejoin: 'round',
+          'data-iui-chart-trace': trace.label, 'data-iui-trace-tone': multiple ? traceIndex : undefined,
+          className: multiple ? 'miopiik-trace-stroke' : undefined,
+        }))
+        if (multiple) return
+        points.forEach((point, index) => {
+          const [x, value] = rows[index]
+          const pointLabel = linear ? `${formatChartValue(x)}${xUnit}` : x
+          parts.push(h('circle', { key: `dot-${index}`, cx: point.x, cy: point.y, r: 3, fill: C.brand }, h('title', null, `${pointLabel}：${value}`)))
+          if (!ticks.has(index)) return
+          const textAnchor = span === 0 ? 'middle' : index === 0 ? 'start' : index === last ? 'end' : 'middle'
+          parts.push(h('text', { key: `val-${index}`, x: point.x, y: point.y - 8, fontSize: 11, fill: C.text, fontFamily: SANS, textAnchor }, formatChartValue(value)))
+        })
+      })
+      for (const index of ticks) {
+        const x = domain[index]
+        const textAnchor = span === 0 ? 'middle' : index === 0 ? 'start' : index === last ? 'end' : 'middle'
+        const pointLabel = linear ? `${formatChartValue(x)}${xUnit}` : rows[index][0]
+        const chars = [...pointLabel]
+        const tick = chars.length > labelLimit ? `${chars.slice(0, labelLimit - 1).join('')}…` : pointLabel
+        parts.push(h('text', { key: `lab-${index}`, x: toX(x), y: height - 9, fontSize: 11, fill: C.muted, fontFamily: SANS, textAnchor }, tick))
+      }
+      return { parts, chartSeries, domainMin, domainMax, toX, toY, height, top, bottom }
+    }
+
+    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub }) {
       const containerRef = React.useRef(null)
       const [width, setWidth] = React.useState(360)
       const [scrubValue, setScrubValue] = React.useState(undefined)
       React.useLayoutEffect(() => {
         const container = containerRef.current
         if (container === null) return
+        let previousWidth
         const measure = () => {
           const measured = container.clientWidth
-          if (measured > 0) setWidth(measured)
+          if (measured <= 0 || measured === previousWidth) return
+          previousWidth = measured
+          setWidth(measured)
         }
         measure()
         if (typeof ResizeObserver === 'undefined') return
@@ -267,96 +377,52 @@
         return () => observer.disconnect()
       }, [])
 
-      const height = 152
-      const pad = 9
-      const top = 22
-      const bottom = height - 29
-      const values = rows.map(([, value]) => value)
-      const magnitude = Math.max(...values.map(Math.abs)) || 1
-      const scaled = values.map((value) => value / magnitude)
-      const min = Math.min(0, ...scaled)
-      const max = Math.max(0, ...scaled)
-      const y = (value) => bottom - ((value - min) / (max - min || 1)) * (bottom - top)
-      const last = rows.length - 1
       const linear = xScale === 'linear'
-      const domain = rows.map(([x], index) => linear ? x : index)
-      const xMagnitude = Math.max(...domain.map(Math.abs)) || 1
-      const firstX = domain[0] / xMagnitude
-      const span = domain[last] / xMagnitude - firstX
-      const scrubMin = domain[0]
-      const scrubMax = domain[last]
-      const scrubbable = scrub !== undefined && scrubMax > scrubMin && Number.isFinite(scrubMax - scrubMin)
-      const cursor = scrubbable ? Math.min(scrubMax, Math.max(scrubMin, scrubValue ?? scrubMin)) : externalCursor
-      const toX = (value) => span === 0 ? width / 2 : pad + (value / xMagnitude - firstX) / span * (width - 2 * pad)
-      const intervals = Math.min(last, Math.max(1, Math.floor((width - 2 * pad) / 96)))
-      const ticks = new Set(Array.from({ length: intervals + 1 }, (_, i) => Math.round(i * last / (intervals || 1))))
-      const points = scaled.map((value, index) => ({
-        x: toX(domain[index]),
-        y: y(value),
-      }))
-      if (linear) {
-        ticks.clear()
-        ticks.add(last)
-        let priorX = points[last].x
-        for (let index = last - 1; index >= 0; index -= 1) {
-          if (priorX - points[index].x < 72) continue
-          ticks.add(index)
-          priorX = points[index].x
-        }
-      }
-      const labelLimit = Math.max(3, Math.min(15, Math.floor(width / (intervals + 1) / 11)))
-      const baseline = y(0)
-      const coordinates = points.map((point) => `${point.x},${point.y}`).join(' ')
-      const parts = []
-      // A quiet reference grid and fill use the same zero line as the curve.
-      if (max !== min) {
-        for (const division of [0, 1, 2, 3]) {
-          const guide = y(min + (max - min) * division / 3)
-          if (Math.abs(guide - baseline) < 2) continue
-          parts.push(h('line', { key: `guide-${division}`, className: 'miopiik-chart-guide', x1: pad, y1: guide, x2: width - pad, y2: guide, strokeWidth: 1 }))
-        }
-      }
-      if (span > 0) parts.push(h('polygon', { key: 'area', className: 'miopiik-chart-area', points: `${points[0].x},${baseline} ${coordinates} ${points[last].x},${baseline}`, fill: 'none' }))
-      parts.push(h('line', { key: 'axis', className: 'miopiik-chart-guide', x1: pad, y1: baseline, x2: width - pad, y2: baseline, stroke: C.border, strokeWidth: 1 }))
-      parts.push(h('polyline', { key: 'line', points: coordinates, fill: 'none', stroke: C.brand, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }))
-      let marker = null
-      let sampledValue = null
-      if (linear && Number.isFinite(cursor) && cursor >= domain[0] && cursor <= domain[last]) {
+      const layout = React.useMemo(() => prepareLineChart(rows, traces, width, linear, xUnit, yUnit), [rows, traces, width, linear, xUnit, yUnit])
+      const { chartSeries, domainMin, domainMax, parts, toX, toY, height, top, bottom } = layout
+      const multiple = traces !== null
+      const scrubbable = scrub !== undefined && domainMax > domainMin && Number.isFinite(domainMax - domainMin)
+      const cursor = scrubbable ? Math.min(domainMax, Math.max(domainMin, scrubValue ?? domainMin)) : externalCursor
+      const active = linear && Number.isFinite(cursor) && cursor >= domainMin && cursor <= domainMax
+      const cursorParts = []
+      const readings = active ? chartSeries.map((trace) => lineValueAt(trace.rows, cursor)) : []
+      if (active) {
         const x = toX(cursor)
-        const next = domain.findIndex((coordinate) => coordinate > cursor)
-        const before = next === -1 ? last : next - 1
-        const after = next === -1 ? last : next
-        const distance = domain[after] - domain[before]
-        const fraction = before === after ? 0 : Number.isFinite(distance) ? (cursor - domain[before]) / distance
-          : (x - points[before].x) / (points[after].x - points[before].x)
-        const sampled = scaled[before] * (1 - fraction) + scaled[after] * fraction
-        marker = { x, y: y(sampled) }
-        if (scrubbable) sampledValue = values[before] * (1 - fraction) + values[after] * fraction
-        parts.push(h('line', { key: 'cursor', 'data-iui-chart-cursor': cursor, x1: x, x2: x, y1: top, y2: bottom, stroke: C.muted, strokeDasharray: '3 4' }))
+        cursorParts.push(h('line', { key: 'cursor', 'data-iui-chart-cursor': cursor, x1: x, x2: x, y1: top, y2: bottom, stroke: C.muted, strokeDasharray: '3 4' }))
+        readings.forEach((value, index) => {
+          if (value === null) return
+          cursorParts.push(h('circle', {
+            key: `marker-${index}`, 'data-iui-chart-marker': '1', 'data-iui-trace-tone': multiple ? index : undefined,
+            className: multiple ? 'miopiik-chart-marker miopiik-trace-stroke' : 'miopiik-chart-marker',
+            cx: x, cy: toY(value), r: 4.5, stroke: C.brand, strokeWidth: 2,
+          }))
+        })
       }
-      points.forEach((point, index) => {
-        const [x, value] = rows[index]
-        const pointLabel = linear ? `${formatChartValue(x)}${xUnit}` : x
-        parts.push(h('circle', { key: `dot-${index}`, cx: point.x, cy: point.y, r: 3, fill: C.brand }, h('title', null, `${pointLabel}：${value}`)))
-        if (!ticks.has(index)) return
-        const textAnchor = span === 0 ? 'middle' : index === 0 ? 'start' : index === last ? 'end' : 'middle'
-        const chars = [...pointLabel]
-        const tick = chars.length > labelLimit ? `${chars.slice(0, labelLimit - 1).join('')}…` : pointLabel
-        parts.push(
-          h('text', { key: `val-${index}`, x: point.x, y: point.y - 8, fontSize: 11, fill: C.text, fontFamily: SANS, textAnchor }, formatChartValue(value)),
-          h('text', { key: `lab-${index}`, x: point.x, y: height - 9, fontSize: 11, fill: C.muted, fontFamily: SANS, textAnchor }, tick),
-        )
-      })
-      if (marker !== null) parts.push(h('circle', { key: 'marker', 'data-iui-chart-marker': '1', className: 'miopiik-chart-marker', cx: marker.x, cy: marker.y, r: 4.5, stroke: C.brand, strokeWidth: 2 }))
-      const position = scrubbable ? `${formatChartValue(cursor)}${xUnit}` : ''
-      const readout = sampledValue === null ? '' : `${formatChartValue(sampledValue)}${yUnit}`
+      const position = active ? `${formatChartValue(cursor)}${xUnit}` : ''
+      const readingText = (value) => value === null ? '—' : `${formatChartValue(value)}${yUnit}`
+      const legend = multiple ? h('div', {
+        className: 'miopiik-trace-legend', role: 'list', 'aria-label': '曲线', 'data-iui-chart-readout': active ? 'multi' : undefined,
+      }, ...traces.map((trace, index) => h('div', {
+        key: trace.label, className: 'miopiik-trace-legend-item', role: 'listitem', 'data-iui-trace-tone': index,
+      },
+      h('span', { className: 'miopiik-trace-label' },
+        h('svg', { width: 18, height: 8, 'aria-hidden': true }, h('line', { className: 'miopiik-trace-stroke', x1: 1, y1: 4, x2: 17, y2: 4, strokeWidth: 2, strokeDasharray: traceDashes[index] })),
+        h('span', null, trace.label),
+      ),
+      active ? h('span', { className: 'miopiik-trace-value', 'data-iui-trace-value': trace.label, 'aria-label': readings[index] === null ? '无数据' : undefined }, readings[index] === null ? '—' : formatChartValue(readings[index])) : null,
+      ))) : null
+      const readout = scrubbable && !multiple ? readingText(readings[0]) : ''
+      const ariaValue = multiple && active
+        ? traces.map((trace, index) => `${trace.label} ${readings[index] === null ? '无数据' : readingText(readings[index])}`).join('，')
+        : readout
       return h('div', { ref: containerRef, style: { width: '100%', minWidth: 0 } },
-        svgCanvas(width, height, parts, label, { fluid: true }),
+        svgCanvas(width, height, [...parts, ...cursorParts], label, { fluid: true }),
         scrubbable ? h('div', { 'data-iui-chart-scrub': '1' },
           h('span', { className: 'miopiik-control-label' }, scrub, ' ', h('span', { className: 'miopiik-scrub-position' }, position)),
-          h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': sampledValue }, readout),
-          renderRangeInput({ min: scrubMin, max: scrubMax, step: 'any', value: cursor, label: scrub, valueText: `${position}，${readout}`, onChange: setScrubValue }),
+          multiple ? null : h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': readings[0] }, readout),
+          renderRangeInput({ min: domainMin, max: domainMax, step: 'any', value: cursor, label: scrub, valueText: `${position}，${ariaValue}`, onChange: setScrubValue }),
         ) : null,
+        legend,
       )
     }
 
@@ -1230,13 +1296,20 @@
           const xUnit = props.xScale === 'linear' ? textOf(resolveText(props.xUnit)).slice(0, 16) : ''
           const yUnit = textOf(resolveText(props.yUnit)).slice(0, 16)
           const rows = IUI_AST.chartMatrix(series, props.xScale, xUnit)
-          const cursor = resolve(props.cursor)
-          if (rows === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
+          const traces = rows === null && props.xScale === 'linear' ? IUI_AST.chartTraces(series, xUnit) : null
+          if (rows === null && traces === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
+          const chartOptions = { xScale: props.xScale, xUnit, yUnit, cursor: resolve(props.cursor), scrub: props.scrub }
+          const plot = traces === null
+            ? renderChart(rows, kind, chartSummary(rows, kind, xUnit, yUnit), chartOptions)
+            : h(IuiLineChart, {
+              traces, ...chartOptions,
+              label: `共享坐标折线图。${traces.map((trace) => `${trace.label}：${trace.rows.slice(0, 3).map(([x, y]) => `${x}${xUnit} ${y}${yUnit}`).join('，')}，共 ${trace.rows.length} 个数据点`).join('。')}`,
+            })
           const source = resolveText(props.source)
           return h(
             'div',
             { key, className: 'miopiik-enter miopiik-chart-frame', 'data-iui-chart': kind, 'data-iui-chart-scale': props.xScale },
-            renderChart(rows, kind, chartSummary(rows, kind, xUnit, yUnit), { xScale: props.xScale, xUnit, yUnit, cursor, scrub: props.scrub }),
+            plot,
             textOf(source) === '' ? null : h('div', { className: 'miopiik-chart-source' }, `来源：${textOf(source)}`),
           )
         }

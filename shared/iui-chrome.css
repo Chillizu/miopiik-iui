@@ -291,6 +291,48 @@
   font-variant-numeric: tabular-nums;
 }
 
+.miopiik-trace-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 6.5rem), 1fr));
+  gap: 7px 10px;
+  padding-block: 3px;
+}
+
+.miopiik-trace-legend-item {
+  min-inline-size: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.miopiik-trace-label {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--iui-muted);
+  overflow-wrap: anywhere;
+}
+
+.miopiik-trace-label svg { flex: 0 0 18px; }
+
+.miopiik-trace-value {
+  display: block;
+  margin-inline-start: 23px;
+  color: var(--iui-text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+[data-iui-trace-tone="0"] { --iui-trace-color: light-dark(#275ac2, #72a3ff); }
+[data-iui-trace-tone="1"] { --iui-trace-color: light-dark(#147660, #53cbb0); }
+[data-iui-trace-tone="2"] { --iui-trace-color: light-dark(#995011, #f0a966); }
+[data-iui-trace-tone="3"] { --iui-trace-color: light-dark(#833aa7, #d29cf4); }
+.miopiik-trace-stroke { stroke: var(--iui-trace-color, var(--iui-accent)); }
+
+@media (forced-colors: active) {
+  .miopiik-trace-stroke { stroke: CanvasText; }
+}
+
 .miopiik-chart-guide { stroke: var(--iui-line); }
 .miopiik-chart-area { fill: color-mix(in srgb, var(--iui-accent) 8%, var(--iui-chart-surface)); }
 .miopiik-chart-marker { fill: var(--iui-chart-surface); }

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { IUI_VERSION, readBinding, resolveValue, validateAst } from '../shared/iui-ast.js'
+import { IUI_VERSION, chartTraces, readBinding, resolveValue, validateAst } from '../shared/iui-ast.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 
 const good = () => ({
@@ -164,6 +164,55 @@ test('折线图 scrub 使用线性横轴，保留单位绑定并拒绝冲突控�
   ]
   for (const overrides of invalid) assert.equal(chart(overrides).ok, false, JSON.stringify(overrides))
   assert.equal(chart({ scrub: undefined, cursor: 0, xScale: 'linear' }).ok, true)
+})
+
+test('多条曲线共享数值轴，可绑定本地数据或直接使用字面量', () => {
+  const curves = [
+    [' 铸铁锅 ', [['0秒', 100], ['10秒', 80], ['10秒', 76]]],
+    ['薄铝锅', [[2, 100], [7, 70], [12, 60]]],
+  ]
+  const series = JSON.stringify(curves)
+  for (const axis of ['scrub="关火后经过时间"', 'x-scale="linear"', '']) {
+    const ml = parseMiopiikMl(`<ui><chart kind="line" ${axis} x-unit="秒" series='${series}'/></ui>`)
+    assert.equal(ml.ok, true)
+    const checked = validateAst(ml.doc)
+    assert.equal(checked.ok, true)
+    assert.deepEqual(chartTraces(checked.ast.root.props.series, '秒'), [
+      { label: '铸铁锅', rows: [[0, 100], [10, 80], [10, 76]] },
+      { label: '薄铝锅', rows: [[2, 100], [7, 70], [12, 60]] },
+    ])
+    assert.deepEqual(checked.ast.root.props.series, curves)
+  }
+  const compile = (props) => validateAst({ state: { curves }, root: { type: 'chart', props } })
+  assert.equal(compile({ kind: 'line', xScale: 'linear', series: '$state.curves' }).ok, true)
+  assert.equal(compile({ kind: 'line', xUnit: '秒', series: curves.slice(0, 1) }).ok, true)
+  for (const kind of ['donut', 'bar']) {
+    assert.equal(compile({ kind, series: curves }).ok, false)
+  }
+})
+
+test('多条曲线拒绝无跨度的时间、重复标签、无效点和超预算输入', () => {
+  const valid = [[0, 1], [5, 2]]
+  const large = Array.from({ length: 30 }, (_, x) => [x, 2])
+  assert.equal(chartTraces([['A', large], ['B', large]]).length, 2)
+  const invalid = [
+    [],
+    ['A', 'B', 'C', 'D', 'E'].map((label) => [label, valid]),
+    [['A', large], ['B', [...large, [30, 2]]]],
+    [['A', valid], [' A ', valid]],
+    [[' ', valid], ['B', valid]],
+    [['字'.repeat(101), valid], ['B', valid]],
+    [['A', valid], ['B', [[0, 1]]]],
+    [['A', valid], ['B', [[0, 1], [0, 2]]]],
+    [['A', valid], ['B', [[5, 1], [0, 2]]]],
+    [['A', valid], ['B', [[0, 1], [5, '2']]]],
+    [['A', valid], ['B', [[0, 1], [5, 2, 3]]]],
+  ]
+  for (const series of invalid) {
+    assert.equal(chartTraces(series), null, JSON.stringify(series))
+    const checked = validateAst({ root: { type: 'chart', props: { kind: 'line', xScale: 'linear', series } } })
+    assert.equal(checked.ok, false, JSON.stringify(series))
+  }
 })
 
 test('when / table.filter：只接受 $state 绑定，坏值只降级自身、兄弟保留', () => {
