@@ -187,8 +187,18 @@ const DRAWING_COMPARISON_ML = `<ui density="auto" fallback="蓝色圆点仅出�
     <rect x="4" y="4" width="232" height="104"/>
     <view label="之前" caption="共同结构。"/>
     <line x1="16" y1="20" x2="16" y2="48" stroke="muted" stroke-dasharray="3 4"/>
-    <view label="之后" caption="新增一个圆点。" when="$state.showLater == true"><circle cx="40" cy="40" r="9" fill="accent"/></view>
+    <view label="之后" caption="新增一个圆点。" when="$state.showLater == true"><circle cx="234" cy="40" r="9" fill="accent"/></view>
     <label x="120" y="97" align="center" text="共用标注"/>
+  </drawing>
+</ui>`
+
+const STATIC_DRAWING_ML = `<ui density="auto" fallback="剖面中可以看到密封内衬。">
+  <drawing width="300" height="146" label="密封结构">
+    <view label="剖面" caption="剖面中可以看到密封内衬。">
+      <!-- 图层注释 -->
+      <rect x="-8" y="22" width="326" height="90" rx="4" fill="surface" stroke="accent"/>
+      <text x="150" y="74" align="middle" size="14">密封内衬</text>
+    </view>
   </drawing>
 </ui>`
 
@@ -555,6 +565,7 @@ const MAIN_RUN = `
       autoLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML)}),
       legacyLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML.replace(' density="auto"', ''))}),
       comparison:mountBlock(${JSON.stringify(DRAWING_COMPARISON_ML)}),
+      staticDrawing:mountBlock(${JSON.stringify(STATIC_DRAWING_ML)}),
       boundViews:mountBlock(${JSON.stringify(BOUND_VIEWS_ML)}),
       numericAxis:mountBlock(${JSON.stringify(NUMERIC_AXIS_ML)}),
       chartScrub:mountBlock(${JSON.stringify(CHART_SCRUB_ML)}),
@@ -573,6 +584,7 @@ const MAIN_RUN = `
       deriveFail:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_FAIL_AST))}),
       deriveCycle:mountBlock(${JSON.stringify(JSON.stringify(R3_DERIVE_CYCLE_AST))}),
     };
+    r3Hosts.staticDrawing.style.maxWidth = '320px';
     r3Hosts.chartScrub.style.maxWidth = '320px';
     r3Hosts.multiChartScrub.style.maxWidth = '320px';
     r3Hosts.sharedChartScrub.style.maxWidth = '320px';
@@ -924,19 +936,37 @@ const MAIN_RUN = `
           const aligned = Math.abs(buttons[0].getBoundingClientRect().left - graphicLeft) < 1
             && Math.abs(compareCaption().getBoundingClientRect().left - graphicLeft) < 1;
           return (buttons.length === 2 && buttons[0].type === 'button' && buttons[0].getAttribute('aria-pressed') === 'true'
-            && compareCaption().textContent === '共同结构。' && named && aligned && shapeOrder() === 'rect,line,text') ? true : '初值、对齐或图层顺序错误';
+            && compareCaption().textContent === '共同结构。' && named && aligned && shapeOrder() === 'rect,line,text'
+            && compareGraph().getAttribute('viewBox') === '0 0 244 112') ? true : '初值、对齐或图层顺序错误';
         });
         compareButtons()[1].click();
         await wait(25);
         const laterActive = () => compareButtons()[1]?.getAttribute('aria-pressed') === 'true'
-          && compareCaption().textContent === '新增一个圆点。' && shapeOrder() === 'rect,line,circle,text';
+          && compareCaption().textContent === '新增一个圆点。' && shapeOrder() === 'rect,line,circle,text'
+          && compareGraph().getAttribute('viewBox') === '0 0 244 112';
         check('comparisonChoice', () => laterActive() ? true : '切换未更新图层和图注');
         compare.querySelector('button[role="switch"]').click();
         await wait(25);
-        check('comparisonFallback', () => (compareButtons().length === 0 && compareCaption().textContent === '共同结构。' && shapeOrder() === 'rect,line,text') ? true : '无后项时没有回到首个图层');
+        check('comparisonFallback', () => (compareButtons().length === 0 && compareCaption().textContent === '共同结构。' && shapeOrder() === 'rect,line,text'
+          && compareGraph().getAttribute('viewBox') === '0 0 244 112') ? true : '无后项时没有回到首个图层');
         compare.querySelector('button[role="switch"]').click();
         await wait(25);
         check('comparisonRestored', () => laterActive() ? true : '重新显示后项时没有保留选择');
+        check('staticDrawingView', () => {
+          const host = r3.staticDrawing;
+          const graph = host.querySelector('svg[data-iui-drawing]');
+          const caption = host.querySelector('figcaption[data-iui-drawing-caption]');
+          return host.querySelector('[data-iui-output="ok"][data-iui-degraded="0"]') !== null
+            && graph?.getAttribute('viewBox') === '-9 0 328 146'
+            && graph.querySelector('rect')?.getAttribute('x') === '-8' && graph.querySelector('text')?.textContent === '密封内衬'
+            && graph.getAttribute('aria-label')?.includes('剖面')
+            && caption?.textContent === '剖面中可以看到密封内衬。' && caption.id !== ''
+            && graph.getAttribute('aria-describedby') === caption.id
+            && host.querySelector('button, [role="tablist"], [role="switch"]') === null
+            && !host.textContent.includes('图层注释')
+            && host.scrollWidth <= host.clientWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth
+            ? true : '单视图的图元、图注、可访问关系或窄列布局错误';
+        });
         const boundViews = r3.boundViews;
         const tabs = () => [...boundViews.querySelectorAll('[role=tab]')];
         tabs()[1]?.click();
@@ -1429,6 +1459,7 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-comparison-choice="ok"/u,'对照切换应同步图元、按钮和可访问图注')
   assert.match(html,/data-comparison-fallback="ok"/u,'选中条件隐藏时应回退到第一个可用条件')
   assert.match(html,/data-comparison-restored="ok"/u,'普通重渲染应保留显式选择')
+  assert.match(html,/data-static-drawing-view="ok"/u,'单个绘图视图应呈现静态标签与关联图注、无切换控件和横溢')
   assert.match(html,/data-comparison-live="ok"/u,'尚未定稿的流式对照选项应禁用')
   assert.match(html,/data-bound-views="ok"/u,'切换完整视图应更新共享状态')
   assert.match(html,/data-bound-views-reset="ok"/u,'外部动作应切换完整视图')

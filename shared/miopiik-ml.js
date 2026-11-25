@@ -171,16 +171,40 @@ function parseDocument(source) {
   const text = String(source ?? '')
   const root = { name: '#root', attrs: {}, children: [], unclosed: false }
   const stack = [root]
-  const stepBody = /[^<]*<\/step\s*>/uy
+  const stepClose = /<\/step\s*>/uy
+  const commentEnd = (start) => text.indexOf('-->', start + 4)
+  const hasStepBody = (start) => {
+    let next = text.indexOf('<', start)
+    while (next !== -1 && text.startsWith('<!--', next)) {
+      const end = commentEnd(next)
+      if (end === -1) return false
+      next = text.indexOf('<', end + 3)
+    }
+    stepClose.lastIndex = next
+    return next !== -1 && stepClose.test(text)
+  }
+  const pendingText = []
+  let noFurtherCommentEnd = false
   let cursor = 0
   let index = 0
   const pushText = (raw) => {
-    if (raw.trim() === '') return
-    stack[stack.length - 1].children.push({ name: '#text', text: decodeEntities(raw) })
+    const content = pendingText.length === 0 ? raw : pendingText.join('') + raw
+    pendingText.length = 0
+    if (content.trim() === '') return
+    stack[stack.length - 1].children.push({ name: '#text', text: decodeEntities(content) })
   }
   while (index < text.length) {
     const lt = text.indexOf('<', index)
     if (lt < 0) break
+    if (!noFurtherCommentEnd && text.startsWith('<!--', lt)) {
+      const end = commentEnd(lt)
+      if (end !== -1) {
+        if (lt > cursor) pendingText.push(text.slice(cursor, lt))
+        cursor = index = end + 3
+        continue
+      }
+      noFurtherCommentEnd = true
+    }
     const next = text[lt + 1] ?? ''
     if (!/[A-Za-z/]/u.test(next)) {
       index = lt + 1
@@ -209,9 +233,8 @@ function parseDocument(source) {
     stack[stack.length - 1].children.push(element)
     if (tag.selfClosing) continue
     if (VOID_TAGS[tag.name] === true) {
-      stepBody.lastIndex = tag.end
       // Only explicit text bodies opt a step out of legacy implicit closing.
-      if (tag.name !== 'step' || !stepBody.test(text)) continue
+      if (tag.name !== 'step' || !hasStepBody(tag.end)) continue
     }
     stack.push(element)
   }
@@ -421,14 +444,17 @@ export function parseMiopiikMl(source, { streaming = false } = {}) {
     id, type: 'text', props: { text: item.text }, children: [],
     ...(item.kind === 'degraded' ? { degraded: true } : {}),
   })
-  const compile = (element) => {
+  const compile = (element, parentType) => {
     if (element.name === '#text') return { kind: 'text', text: String(element.text ?? '') }
-    const type = Object.hasOwn(ML_TAGS, element.name) ? ML_TAGS[element.name] : undefined
     const attrs = normalizeAttrs(element)
+    const drawingLabel = element.name === 'text' && (parentType === 'drawing' || parentType === 'drawing-view')
+      && attrs.x !== undefined && attrs.y !== undefined
+    const tagName = drawingLabel ? 'label' : element.name
+    const type = Object.hasOwn(ML_TAGS, tagName) ? ML_TAGS[tagName] : undefined
     const control = readProps(attrs, ['when', 'is', 'weight'])
     const fallbackText = typeof attrs.fallback === 'string' ? attrs.fallback : ''
     const innerText = textOf(element)
-    const compiled = (props, children = [], tag = element.name) => ({
+    const compiled = (props, children = [], tag = tagName) => ({
       kind: 'node',
       node: {
         id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${tag}`,
@@ -475,7 +501,9 @@ export function parseMiopiikMl(source, { streaming = false } = {}) {
     }
     if (element.name === 'text') {
       const text = typeof element.attrs.text === 'string' ? element.attrs.text : innerText
-      return text === '' ? degrade('没有内容') : compiled({ ...control, text })
+      if (text === '') return degrade('没有内容')
+      const geometry = drawingLabel ? readProps(attrs, TEXT_PROPS.label, RAW_PROPS.label) : {}
+      return compiled({ ...control, ...geometry, text })
     }
     if (element.name === 'diagram') {
       // 结构图形：lane 是显式列；散落的 node 按出现顺序汇成最前一列；
@@ -513,7 +541,8 @@ export function parseMiopiikMl(source, { streaming = false } = {}) {
       return compiled({ ...control, ...readProps(attrs, ['gap']) }, children, 'p')
     }
     if (CONTAINERS[element.name] === true) {
-      const nodes = element.children.map((child) => compile(child))
+      const childParent = type === 'view' && parentType === 'drawing' ? 'drawing-view' : type
+      const nodes = element.children.map((child) => compile(child, childParent))
       // 降级片段作为 text 节点保留在父布局里（局部降级，不整段丢弃）
       const children = nodes.map((item, index) =>
         item.kind === 'node' ? item.node : textNode(item, `ml-fallback-${index}`),

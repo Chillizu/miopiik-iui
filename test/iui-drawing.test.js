@@ -130,13 +130,20 @@ test('drawing view declarations preserve source order and revalidate label and c
   assert.deepEqual(drawingProps('view', after.props, (value) => resolveValue(value, { state })), { label: '改变后', caption: '出现新的圆形。' })
   assert.deepEqual(drawingProps('view', after.props, (value) => resolveValue(value, { state: { later: { label: '改变后' } } })), { label: '改变后' })
   assert.equal(drawingProps('label', label.props).align, 'middle')
+  assert.equal(drawingProps('label', { ...label.props, align: 'left' }).align, 'start')
+  assert.equal(drawingProps('label', { ...label.props, align: 'right' }).align, 'end')
 })
 
 test('view counts and all declared shapes share the drawing budget', () => {
   const place = (content) => `<ui fallback="无图对照"><drawing width="240" height="120" label="对照">${content}</drawing></ui>`
   const shape = '<circle cx="10" cy="20" r="2"/>'
   const view = (index, content = shape) => `<view label="选项 ${index}">${content}</view>`
-  assert.equal(check(place(view(1))).ok, false)
+  const single = check(place(view(1)))
+  assert.equal(single.ok, true)
+  assert.equal(single.degraded, 0)
+  assert.equal(single.ast.root.children[0].children[0].type, 'circle')
+  assert.equal(check(place(view(1, ''))).ok, false)
+  assert.equal(check(place(view(1, '<button label="不能放在图里" action="copy" value="示例"/>'))).ok, false)
   assert.equal(check(place(Array.from({ length: 7 }, (_, index) => view(index)).join(''))).ok, false)
   assert.equal(check(place('<view label="甲"/><view label="乙"/>')).ok, false)
   assert.equal(check(place('<view label="甲"><script>alert(1)</script></view><view label="乙"/>')).ok, false)

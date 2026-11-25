@@ -248,7 +248,7 @@ const DRAWING_SHAPES = new Set(['rect', 'circle', 'line', 'path', 'label'])
 const DRAWING_MAX_SHAPES = 64
 const DRAWING_MAX_VIEWS = 6
 const DRAWING_COLOR = new Set(['text', 'muted', 'border', 'surface', 'accent', 'neutral', 'success', 'warning', 'danger', 'info', 'none'])
-const DRAWING_ALIGN = new Set(['start', 'middle', 'end'])
+const DRAWING_ALIGN = new Map([['start', 'start'], ['middle', 'middle'], ['end', 'end'], ['left', 'start'], ['center', 'middle'], ['right', 'end']])
 const DRAWING_STATIC = new Set(['d', 'align', 'strokeDasharray'])
 const DRAWING_AXIS = [-2048, 2048]
 const DRAWING_VIEWPORT = [24, 1024]
@@ -303,7 +303,7 @@ function normalizeDrawingPath(value) {
 function drawingAttribute(type, key, value) {
   if (key === 'd') return normalizeDrawingPath(value)
   if (key === 'fill' || key === 'stroke') return DRAWING_COLOR.has(value) ? value : null
-  if (key === 'align') return value === 'center' ? 'middle' : DRAWING_ALIGN.has(value) ? value : null
+  if (key === 'align') return DRAWING_ALIGN.get(value) ?? null
   if (key === 'strokeDasharray') {
     if (typeof value !== 'string' || value.length > 80) return null
     const lengths = value.trim().split(/[\s,]+/u)
@@ -730,13 +730,11 @@ export function validateAst(input) {
         if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')
       }
     }
-    let comparison = false
     if (node.type === 'drawing') {
       const children = Array.isArray(node.children) ? node.children : []
       const views = children.filter((child) => child?.type === 'view')
-      comparison = views.length > 0
       const count = children.length - views.length + views.reduce((sum, child) => sum + (Array.isArray(child.children) ? child.children.length : 0), 0)
-      if (views.length === 1 || views.length > DRAWING_MAX_VIEWS) return failNode(node, path, `drawing 需要 2–${DRAWING_MAX_VIEWS} 个 view 来展示对照`)
+      if (views.length > DRAWING_MAX_VIEWS) return failNode(node, path, `drawing 最多支持 ${DRAWING_MAX_VIEWS} 个 view`)
       if (count === 0 || count > DRAWING_MAX_SHAPES) return failNode(node, path, `drawing 需要 1–${DRAWING_MAX_SHAPES} 个图形原语`)
     }
     const geometryExpressions = {}
@@ -831,8 +829,8 @@ export function validateAst(input) {
       }
     }
     if (node.type === 'views' && children.length === 0) return failNode(node, path, 'views 没有可用视图')
-    if (comparison && !children.some((child) => DRAWING_SHAPES.has(child.type) || child.type === 'view' && child.children.some((part) => DRAWING_SHAPES.has(part.type)))) {
-      return failNode(node, path, 'drawing 对照需要至少一个可验证的图形原语')
+    if (node.type === 'drawing' && !children.some((child) => DRAWING_SHAPES.has(child.type) || child.type === 'view' && child.children.some((part) => DRAWING_SHAPES.has(part.type)))) {
+      return failNode(node, path, 'drawing 需要至少一个可验证的图形原语')
     }
     // 属性白名单：只保留组件 REGISTRY 声明的 props + 通用属性，未知属性（onClick/style/…）一律剥离
     const allowed = new Set([...Object.keys(spec.props), ...UNIVERSAL_PROPS])

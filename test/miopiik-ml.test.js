@@ -124,6 +124,70 @@ test('miopiik-ml：只归并相邻正文视图，不修改绘图图层、周边�
   assert.equal(orphan.degraded, true)
 })
 
+test('miopiik-ml：绘图及其视图内带坐标的 text 按 label 解析', () => {
+  const parsed = parseMiopiikMl(`<ui>
+    <text x="5" y="10">图外正文</text>
+    <drawing width="200" height="100" label="低音位置">
+      <text x="12" y="16" size="12" fill="muted">最低音</text>
+      <view label="原位"><text x="$state.x" y="58" size="22" fill="accent">$state.low</text></view>
+      <view label="转位"><text x="120" y="58" text="2026" align="end" opacity="0.5">备用文字</text></view>
+    </drawing>
+    <views><view label="正文甲"><text x="5" y="10">甲</text></view><view label="正文乙" caption="乙"/></views>
+  </ui>`)
+  assert.equal(parsed.ok, true)
+  assert.deepEqual(parsed.degraded, [])
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 0)
+  const [prose, drawing, views] = checked.ast.root.children
+  assert.equal(prose.type, 'text')
+  assert.deepEqual(prose.props, { text: '图外正文' })
+  const labels = [drawing.children[0], ...drawing.children.slice(1).map((pane) => pane.children[0])]
+  assert.deepEqual(labels.map((label) => label.type), ['label', 'label', 'label'])
+  assert.deepEqual(labels.map((label) => label.props), [
+    { x: 12, y: 16, size: 12, fill: 'muted', text: '最低音' },
+    { x: '$state.x', y: 58, size: 22, fill: 'accent', text: '$state.low' },
+    { x: 120, y: 58, align: 'end', opacity: 0.5, text: '2026' },
+  ])
+  assert.equal(views.children[0].children[0].type, 'text')
+})
+
+test('miopiik-ml：绘图文本别名沿用坐标、标签和图元预算', () => {
+  const parseDrawing = (content) => parseMiopiikMl(`<ui><drawing width="80" height="60" label="图">${content}</drawing></ui>`)
+  const prose = parseDrawing(`一行正文<text>无坐标</text><text x="5">缺纵坐标</text>`)
+  assert.deepEqual(prose.doc.root.children.map((child) => child.type), ['text', 'text', 'text'])
+  const invalid = parseDrawing(`<text x="9999" y="0">越界</text><text x="0" y="0">${'字'.repeat(181)}</text><text x="0" y="0">保留</text>`)
+  assert.deepEqual(invalid.doc.root.children.map((child) => child.type), ['label', 'label', 'label'])
+  const checked = validateAst(invalid.doc)
+  assert.equal(checked.degraded, 2)
+  assert.equal(checked.ast.root.children[2].props.text, '保留')
+  const overBudget = parseDrawing('<text x="0" y="0">字</text>'.repeat(65))
+  assert.equal(validateAst(overBudget.doc).ok, false)
+})
+
+test('miopiik-ml：完整 XML 注释跳过，流式未闭合注释保留后续组件', () => {
+  const parsed = parseMiopiikMl(`<!-- before <ui/> --><ui>
+    <text>前<!-- <script>alert(1)</script> -->后</text>
+    <drawing width="80" height="60" label="图"><!-- x < y，忽略 <rect/> -->
+      <rect x="0" y="0" width="20" height="10"/>
+    </drawing>
+    <steps><step title="注释夹在文字中间">说<!-- <step/> -->明</step></steps>
+  </ui>`)
+  assert.deepEqual(parsed.degraded, [])
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 0)
+  const [prose, drawing, steps] = checked.ast.root.children
+  assert.equal(prose.props.text, '前后')
+  assert.deepEqual(drawing.children.map((child) => child.type), ['rect'])
+  assert.equal(steps.children[0].props.note, '说明')
+
+  const partial = parseMiopiikMl('<ui><column><metric label="先" value="1"/><!-- 未闭合<metric label="后" value="2"/>', { streaming: true })
+  assert.equal(partial.ok, true)
+  const metrics = partial.doc.root.children.filter((child) => child.type === 'metric')
+  assert.deepEqual(metrics.map((metric) => metric.props.label), ['先', '后'])
+})
+
 test('miopiik-ml：可切换视图遵守状态写入约束、容量与内容类型', () => {
   const valid = '<view label="第一" value="one" caption="第一段"/><view label="第二" value="two" caption="第二段"/>'
   const check = (attrs, children = valid) => validateAst(parseMiopiikMl(`<ui><views ${attrs}>${children}</views></ui>`).doc)

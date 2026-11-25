@@ -1022,7 +1022,7 @@ window.__ModuleLoader__.load({
       const DRAWING_MAX_SHAPES = 64
       const DRAWING_MAX_VIEWS = 6
       const DRAWING_COLOR = new Set(['text', 'muted', 'border', 'surface', 'accent', 'neutral', 'success', 'warning', 'danger', 'info', 'none'])
-      const DRAWING_ALIGN = new Set(['start', 'middle', 'end'])
+      const DRAWING_ALIGN = new Map([['start', 'start'], ['middle', 'middle'], ['end', 'end'], ['left', 'start'], ['center', 'middle'], ['right', 'end']])
       const DRAWING_STATIC = new Set(['d', 'align', 'strokeDasharray'])
       const DRAWING_AXIS = [-2048, 2048]
       const DRAWING_VIEWPORT = [24, 1024]
@@ -1077,7 +1077,7 @@ window.__ModuleLoader__.load({
       function drawingAttribute(type, key, value) {
         if (key === 'd') return normalizeDrawingPath(value)
         if (key === 'fill' || key === 'stroke') return DRAWING_COLOR.has(value) ? value : null
-        if (key === 'align') return value === 'center' ? 'middle' : DRAWING_ALIGN.has(value) ? value : null
+        if (key === 'align') return DRAWING_ALIGN.get(value) ?? null
         if (key === 'strokeDasharray') {
           if (typeof value !== 'string' || value.length > 80) return null
           const lengths = value.trim().split(/[\s,]+/u)
@@ -1504,13 +1504,11 @@ window.__ModuleLoader__.load({
               if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')
             }
           }
-          let comparison = false
           if (node.type === 'drawing') {
             const children = Array.isArray(node.children) ? node.children : []
             const views = children.filter((child) => child?.type === 'view')
-            comparison = views.length > 0
             const count = children.length - views.length + views.reduce((sum, child) => sum + (Array.isArray(child.children) ? child.children.length : 0), 0)
-            if (views.length === 1 || views.length > DRAWING_MAX_VIEWS) return failNode(node, path, `drawing 需要 2–${DRAWING_MAX_VIEWS} 个 view 来展示对照`)
+            if (views.length > DRAWING_MAX_VIEWS) return failNode(node, path, `drawing 最多支持 ${DRAWING_MAX_VIEWS} 个 view`)
             if (count === 0 || count > DRAWING_MAX_SHAPES) return failNode(node, path, `drawing 需要 1–${DRAWING_MAX_SHAPES} 个图形原语`)
           }
           const geometryExpressions = {}
@@ -1605,8 +1603,8 @@ window.__ModuleLoader__.load({
             }
           }
           if (node.type === 'views' && children.length === 0) return failNode(node, path, 'views 没有可用视图')
-          if (comparison && !children.some((child) => DRAWING_SHAPES.has(child.type) || child.type === 'view' && child.children.some((part) => DRAWING_SHAPES.has(part.type)))) {
-            return failNode(node, path, 'drawing 对照需要至少一个可验证的图形原语')
+          if (node.type === 'drawing' && !children.some((child) => DRAWING_SHAPES.has(child.type) || child.type === 'view' && child.children.some((part) => DRAWING_SHAPES.has(part.type)))) {
+            return failNode(node, path, 'drawing 需要至少一个可验证的图形原语')
           }
           // 属性白名单：只保留组件 REGISTRY 声明的 props + 通用属性，未知属性（onClick/style/…）一律剥离
           const allowed = new Set([...Object.keys(spec.props), ...UNIVERSAL_PROPS])
@@ -1855,16 +1853,40 @@ window.__ModuleLoader__.load({
         const text = String(source ?? '')
         const root = { name: '#root', attrs: {}, children: [], unclosed: false }
         const stack = [root]
-        const stepBody = /[^<]*<\/step\s*>/uy
+        const stepClose = /<\/step\s*>/uy
+        const commentEnd = (start) => text.indexOf('-->', start + 4)
+        const hasStepBody = (start) => {
+          let next = text.indexOf('<', start)
+          while (next !== -1 && text.startsWith('<!--', next)) {
+            const end = commentEnd(next)
+            if (end === -1) return false
+            next = text.indexOf('<', end + 3)
+          }
+          stepClose.lastIndex = next
+          return next !== -1 && stepClose.test(text)
+        }
+        const pendingText = []
+        let noFurtherCommentEnd = false
         let cursor = 0
         let index = 0
         const pushText = (raw) => {
-          if (raw.trim() === '') return
-          stack[stack.length - 1].children.push({ name: '#text', text: decodeEntities(raw) })
+          const content = pendingText.length === 0 ? raw : pendingText.join('') + raw
+          pendingText.length = 0
+          if (content.trim() === '') return
+          stack[stack.length - 1].children.push({ name: '#text', text: decodeEntities(content) })
         }
         while (index < text.length) {
           const lt = text.indexOf('<', index)
           if (lt < 0) break
+          if (!noFurtherCommentEnd && text.startsWith('<!--', lt)) {
+            const end = commentEnd(lt)
+            if (end !== -1) {
+              if (lt > cursor) pendingText.push(text.slice(cursor, lt))
+              cursor = index = end + 3
+              continue
+            }
+            noFurtherCommentEnd = true
+          }
           const next = text[lt + 1] ?? ''
           if (!/[A-Za-z/]/u.test(next)) {
             index = lt + 1
@@ -1893,9 +1915,8 @@ window.__ModuleLoader__.load({
           stack[stack.length - 1].children.push(element)
           if (tag.selfClosing) continue
           if (VOID_TAGS[tag.name] === true) {
-            stepBody.lastIndex = tag.end
             // Only explicit text bodies opt a step out of legacy implicit closing.
-            if (tag.name !== 'step' || !stepBody.test(text)) continue
+            if (tag.name !== 'step' || !hasStepBody(tag.end)) continue
           }
           stack.push(element)
         }
@@ -2105,14 +2126,17 @@ window.__ModuleLoader__.load({
           id, type: 'text', props: { text: item.text }, children: [],
           ...(item.kind === 'degraded' ? { degraded: true } : {}),
         })
-        const compile = (element) => {
+        const compile = (element, parentType) => {
           if (element.name === '#text') return { kind: 'text', text: String(element.text ?? '') }
-          const type = Object.hasOwn(ML_TAGS, element.name) ? ML_TAGS[element.name] : undefined
           const attrs = normalizeAttrs(element)
+          const drawingLabel = element.name === 'text' && (parentType === 'drawing' || parentType === 'drawing-view')
+            && attrs.x !== undefined && attrs.y !== undefined
+          const tagName = drawingLabel ? 'label' : element.name
+          const type = Object.hasOwn(ML_TAGS, tagName) ? ML_TAGS[tagName] : undefined
           const control = readProps(attrs, ['when', 'is', 'weight'])
           const fallbackText = typeof attrs.fallback === 'string' ? attrs.fallback : ''
           const innerText = textOf(element)
-          const compiled = (props, children = [], tag = element.name) => ({
+          const compiled = (props, children = [], tag = tagName) => ({
             kind: 'node',
             node: {
               id: typeof attrs.id === 'string' && attrs.id !== '' ? attrs.id : `ml-${tag}`,
@@ -2159,7 +2183,9 @@ window.__ModuleLoader__.load({
           }
           if (element.name === 'text') {
             const text = typeof element.attrs.text === 'string' ? element.attrs.text : innerText
-            return text === '' ? degrade('没有内容') : compiled({ ...control, text })
+            if (text === '') return degrade('没有内容')
+            const geometry = drawingLabel ? readProps(attrs, TEXT_PROPS.label, RAW_PROPS.label) : {}
+            return compiled({ ...control, ...geometry, text })
           }
           if (element.name === 'diagram') {
             // 结构图形：lane 是显式列；散落的 node 按出现顺序汇成最前一列；
@@ -2197,7 +2223,8 @@ window.__ModuleLoader__.load({
             return compiled({ ...control, ...readProps(attrs, ['gap']) }, children, 'p')
           }
           if (CONTAINERS[element.name] === true) {
-            const nodes = element.children.map((child) => compile(child))
+            const childParent = type === 'view' && parentType === 'drawing' ? 'drawing-view' : type
+            const nodes = element.children.map((child) => compile(child, childParent))
             // 降级片段作为 text 节点保留在父布局里（局部降级，不整段丢弃）
             const children = nodes.map((item, index) =>
               item.kind === 'node' ? item.node : textNode(item, `ml-fallback-${index}`),
@@ -2871,11 +2898,11 @@ window.__ModuleLoader__.load({
  * Scope: React h/React, IUI_AST, MIOPIIK_ML, C, SANS. No legacy Widget/Ink deps.
  * This source is bundled verbatim into client.js by tools/build.mjs.
  */
-    function svgCanvas(width, height, children, label, { drawing = false, describedBy, fluid = false } = {}) {
+    function svgCanvas(width, height, children, label, { drawing = false, describedBy, fluid = false, x = 0, y = 0 } = {}) {
       return h(
         'svg',
         {
-          viewBox: `0 0 ${width} ${height}`,
+          viewBox: `${x} ${y} ${width} ${height}`,
           width,
           height,
           preserveAspectRatio: 'xMidYMid meet',
@@ -2926,7 +2953,31 @@ window.__ModuleLoader__.load({
       return plan
     }
 
-    function renderDrawingShape(child, key, { resolve, scope, visible, streaming, canvasWidth }) {
+    function fitDrawingFrame(children, width, height) {
+      const frame = { x: 0, y: 0, right: width, bottom: height }
+      // Fit modest overhangs across every view. A stray distant coordinate should not shrink the scene.
+      const extraX = width / 4
+      const extraY = height / 4
+      for (const child of children.flatMap((part) => part.type === 'view' ? part.children : [part])) {
+        if (child.type !== 'rect' && child.type !== 'circle' && child.type !== 'line') continue
+        const shape = getDrawingShapePlan(child).props
+        if (shape == null) continue
+        let bounds
+        if (child.type === 'rect') bounds = [shape.x, shape.y, shape.x + shape.width, shape.y + shape.height]
+        else if (child.type === 'circle') bounds = [shape.cx - shape.r, shape.cy - shape.r, shape.cx + shape.r, shape.cy + shape.r]
+        else bounds = [Math.min(shape.x1, shape.x2), Math.min(shape.y1, shape.y2), Math.max(shape.x1, shape.x2), Math.max(shape.y1, shape.y2)]
+        const [left, top, right, bottom] = bounds
+        if (left < -extraX || top < -extraY || right > width + extraX || bottom > height + extraY) continue
+        const inset = Math.ceil((shape.strokeWidth ?? 1.5) / 2)
+        if (left < 0) frame.x = Math.min(frame.x, left - inset)
+        if (top < 0) frame.y = Math.min(frame.y, top - inset)
+        if (right > width) frame.right = Math.max(frame.right, right + inset)
+        if (bottom > height) frame.bottom = Math.max(frame.bottom, bottom + inset)
+      }
+      return frame
+    }
+
+    function renderDrawingShape(child, key, { resolve, scope, visible, streaming, frame }) {
       if (!Object.hasOwn(DRAWING_TAGS, child.type) || !visible(child)) return null
       const plan = streaming === true ? null : getDrawingShapePlan(child)
       const props = plan?.props !== undefined ? plan.props : IUI_AST.drawingProps(child.type, child.props, resolve, (attribute) => {
@@ -2941,11 +2992,11 @@ window.__ModuleLoader__.load({
         const fontSize = size ?? 13
         let textAnchor = align ?? 'start'
         const x = geometry.x
-        if (canvasWidth !== undefined && x >= 0 && x <= canvasWidth && textAnchor !== 'middle') {
+        if (frame !== null && x >= frame.x && x <= frame.right && textAnchor !== 'middle') {
           // Keep near-edge labels readable using a conservative advance estimate.
           const advance = [...text].reduce((width, char) => width + (char.charCodeAt(0) < 128 ? 0.62 : 1), 0) * fontSize
-          if (textAnchor === 'start' && x + advance > canvasWidth && x >= advance) textAnchor = 'end'
-          else if (textAnchor === 'end' && x < advance && x + advance <= canvasWidth) textAnchor = 'start'
+          if (textAnchor === 'start' && x + advance > frame.right && x - advance >= frame.x) textAnchor = 'end'
+          else if (textAnchor === 'end' && x - advance < frame.x && x + advance <= frame.right) textAnchor = 'start'
         }
         return h('text', { key, ...geometry, fill: DRAWING_COLORS[fill ?? 'text'], fontSize, fontFamily: SANS, textAnchor }, text)
       }
@@ -2969,6 +3020,11 @@ window.__ModuleLoader__.load({
       const captionId = React.useId()
       const weightStyle = weight === undefined ? {} : WEIGHT_STYLE[weight]
       const viewport = IUI_AST.drawingProps('drawing', item.props, resolve)
+      const frame = React.useMemo(() => {
+        if (!adaptive || viewport === null) return null
+        if (streaming === true) return { x: 0, y: 0, right: viewport.width, bottom: viewport.height }
+        return fitDrawingFrame(item.children, viewport.width, viewport.height)
+      }, [adaptive, item.children, streaming, viewport?.width, viewport?.height])
       if (viewport === null) return h('div', { 'data-iui-drawing-invalid': '1', 'data-iui-weight': weight, style: { color: C.muted, ...weightStyle } }, '示意图暂不可用')
 
       const options = []
@@ -2982,7 +3038,7 @@ window.__ModuleLoader__.load({
       }
       const selected = options.find(({ index }) => index === choice) ?? options[0]
       const caption = selected?.caption
-      const shapeContext = { resolve, scope, visible, streaming, canvasWidth: adaptive ? viewport.width : undefined }
+      const shapeContext = { resolve, scope, visible, streaming, frame }
       const shapes = item.children.flatMap((child, index) => {
         if (child.type !== 'view') return renderDrawingShape(child, index, shapeContext)
         if (selected?.index !== index) return []
@@ -2990,13 +3046,15 @@ window.__ModuleLoader__.load({
       }).filter(Boolean)
 
       const graphLabel = selected === undefined ? viewport.label : `${viewport.label} · ${selected.label}`
-      const aspect = viewport.width / viewport.height
+      const width = frame === null ? viewport.width : frame.right - frame.x
+      const height = frame === null ? viewport.height : frame.bottom - frame.y
+      const aspect = width / height
       // ViewBox dimensions describe geometry. A wide drawing can grow with its column.
       const fluid = adaptive && aspect >= 1.5
-      const visualWidth = fluid ? Math.max(viewport.width, Math.round(aspect * 340)) : viewport.width
+      const visualWidth = fluid ? Math.max(width, Math.round(aspect * 340)) : width
       const graph = shapes.length === 0
         ? h('div', { 'data-iui-drawing-invalid': '1', style: { color: C.muted } }, graphLabel)
-        : svgCanvas(viewport.width, viewport.height, shapes, graphLabel, { drawing: true, fluid, describedBy: caption === undefined ? undefined : captionId })
+        : svgCanvas(width, height, shapes, graphLabel, { drawing: true, fluid, x: frame?.x, y: frame?.y, describedBy: caption === undefined ? undefined : captionId })
       const layout = { minWidth: 0, maxWidth: '100%', ...weightStyle }
       const visualLayout = { width: visualWidth, margin: '0 auto' }
       if (!hasViews) return h('div', { 'data-iui-weight': weight, style: fluid ? { ...layout, ...visualLayout } : layout }, graph)

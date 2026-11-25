@@ -3,11 +3,11 @@
  * Scope: React h/React, IUI_AST, MIOPIIK_ML, C, SANS. No legacy Widget/Ink deps.
  * This source is bundled verbatim into client.js by tools/build.mjs.
  */
-    function svgCanvas(width, height, children, label, { drawing = false, describedBy, fluid = false } = {}) {
+    function svgCanvas(width, height, children, label, { drawing = false, describedBy, fluid = false, x = 0, y = 0 } = {}) {
       return h(
         'svg',
         {
-          viewBox: `0 0 ${width} ${height}`,
+          viewBox: `${x} ${y} ${width} ${height}`,
           width,
           height,
           preserveAspectRatio: 'xMidYMid meet',
@@ -58,7 +58,31 @@
       return plan
     }
 
-    function renderDrawingShape(child, key, { resolve, scope, visible, streaming, canvasWidth }) {
+    function fitDrawingFrame(children, width, height) {
+      const frame = { x: 0, y: 0, right: width, bottom: height }
+      // Fit modest overhangs across every view. A stray distant coordinate should not shrink the scene.
+      const extraX = width / 4
+      const extraY = height / 4
+      for (const child of children.flatMap((part) => part.type === 'view' ? part.children : [part])) {
+        if (child.type !== 'rect' && child.type !== 'circle' && child.type !== 'line') continue
+        const shape = getDrawingShapePlan(child).props
+        if (shape == null) continue
+        let bounds
+        if (child.type === 'rect') bounds = [shape.x, shape.y, shape.x + shape.width, shape.y + shape.height]
+        else if (child.type === 'circle') bounds = [shape.cx - shape.r, shape.cy - shape.r, shape.cx + shape.r, shape.cy + shape.r]
+        else bounds = [Math.min(shape.x1, shape.x2), Math.min(shape.y1, shape.y2), Math.max(shape.x1, shape.x2), Math.max(shape.y1, shape.y2)]
+        const [left, top, right, bottom] = bounds
+        if (left < -extraX || top < -extraY || right > width + extraX || bottom > height + extraY) continue
+        const inset = Math.ceil((shape.strokeWidth ?? 1.5) / 2)
+        if (left < 0) frame.x = Math.min(frame.x, left - inset)
+        if (top < 0) frame.y = Math.min(frame.y, top - inset)
+        if (right > width) frame.right = Math.max(frame.right, right + inset)
+        if (bottom > height) frame.bottom = Math.max(frame.bottom, bottom + inset)
+      }
+      return frame
+    }
+
+    function renderDrawingShape(child, key, { resolve, scope, visible, streaming, frame }) {
       if (!Object.hasOwn(DRAWING_TAGS, child.type) || !visible(child)) return null
       const plan = streaming === true ? null : getDrawingShapePlan(child)
       const props = plan?.props !== undefined ? plan.props : IUI_AST.drawingProps(child.type, child.props, resolve, (attribute) => {
@@ -73,11 +97,11 @@
         const fontSize = size ?? 13
         let textAnchor = align ?? 'start'
         const x = geometry.x
-        if (canvasWidth !== undefined && x >= 0 && x <= canvasWidth && textAnchor !== 'middle') {
+        if (frame !== null && x >= frame.x && x <= frame.right && textAnchor !== 'middle') {
           // Keep near-edge labels readable using a conservative advance estimate.
           const advance = [...text].reduce((width, char) => width + (char.charCodeAt(0) < 128 ? 0.62 : 1), 0) * fontSize
-          if (textAnchor === 'start' && x + advance > canvasWidth && x >= advance) textAnchor = 'end'
-          else if (textAnchor === 'end' && x < advance && x + advance <= canvasWidth) textAnchor = 'start'
+          if (textAnchor === 'start' && x + advance > frame.right && x - advance >= frame.x) textAnchor = 'end'
+          else if (textAnchor === 'end' && x - advance < frame.x && x + advance <= frame.right) textAnchor = 'start'
         }
         return h('text', { key, ...geometry, fill: DRAWING_COLORS[fill ?? 'text'], fontSize, fontFamily: SANS, textAnchor }, text)
       }
@@ -101,6 +125,11 @@
       const captionId = React.useId()
       const weightStyle = weight === undefined ? {} : WEIGHT_STYLE[weight]
       const viewport = IUI_AST.drawingProps('drawing', item.props, resolve)
+      const frame = React.useMemo(() => {
+        if (!adaptive || viewport === null) return null
+        if (streaming === true) return { x: 0, y: 0, right: viewport.width, bottom: viewport.height }
+        return fitDrawingFrame(item.children, viewport.width, viewport.height)
+      }, [adaptive, item.children, streaming, viewport?.width, viewport?.height])
       if (viewport === null) return h('div', { 'data-iui-drawing-invalid': '1', 'data-iui-weight': weight, style: { color: C.muted, ...weightStyle } }, '示意图暂不可用')
 
       const options = []
@@ -114,7 +143,7 @@
       }
       const selected = options.find(({ index }) => index === choice) ?? options[0]
       const caption = selected?.caption
-      const shapeContext = { resolve, scope, visible, streaming, canvasWidth: adaptive ? viewport.width : undefined }
+      const shapeContext = { resolve, scope, visible, streaming, frame }
       const shapes = item.children.flatMap((child, index) => {
         if (child.type !== 'view') return renderDrawingShape(child, index, shapeContext)
         if (selected?.index !== index) return []
@@ -122,13 +151,15 @@
       }).filter(Boolean)
 
       const graphLabel = selected === undefined ? viewport.label : `${viewport.label} · ${selected.label}`
-      const aspect = viewport.width / viewport.height
+      const width = frame === null ? viewport.width : frame.right - frame.x
+      const height = frame === null ? viewport.height : frame.bottom - frame.y
+      const aspect = width / height
       // ViewBox dimensions describe geometry. A wide drawing can grow with its column.
       const fluid = adaptive && aspect >= 1.5
-      const visualWidth = fluid ? Math.max(viewport.width, Math.round(aspect * 340)) : viewport.width
+      const visualWidth = fluid ? Math.max(width, Math.round(aspect * 340)) : width
       const graph = shapes.length === 0
         ? h('div', { 'data-iui-drawing-invalid': '1', style: { color: C.muted } }, graphLabel)
-        : svgCanvas(viewport.width, viewport.height, shapes, graphLabel, { drawing: true, fluid, describedBy: caption === undefined ? undefined : captionId })
+        : svgCanvas(width, height, shapes, graphLabel, { drawing: true, fluid, x: frame?.x, y: frame?.y, describedBy: caption === undefined ? undefined : captionId })
       const layout = { minWidth: 0, maxWidth: '100%', ...weightStyle }
       const visualLayout = { width: visualWidth, margin: '0 auto' }
       if (!hasViews) return h('div', { 'data-iui-weight': weight, style: fluid ? { ...layout, ...visualLayout } : layout }, graph)
