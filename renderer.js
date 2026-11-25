@@ -250,6 +250,18 @@
     }
 
     const traceDashes = [undefined, '7 4', '2 3', '8 3 2 3']
+    const normalizedCharts = new WeakMap()
+
+    function normalizeChart(series, xScale, xUnit) {
+      if (!Array.isArray(series)) return { rows: null, traces: null }
+      const existing = normalizedCharts.get(series)
+      if (existing !== undefined && existing.xScale === xScale && existing.xUnit === xUnit) return existing
+      const rows = IUI_AST.chartMatrix(series, xScale, xUnit)
+      const traces = rows === null && xScale === 'linear' ? IUI_AST.chartTraces(series, xUnit) : null
+      const normalized = { xScale, xUnit, rows, traces }
+      normalizedCharts.set(series, normalized)
+      return normalized
+    }
 
     function lineValueAt(rows, x) {
       if (x < rows[0][0] || x > rows.at(-1)[0]) return null
@@ -263,7 +275,7 @@
       return fromY * (1 - fraction) + toY * fraction
     }
 
-    function prepareLineChart(rows, traces, width, linear, xUnit, yUnit) {
+    function prepareLineChart(rows, traces, width, linear, xUnit, yUnit, rawMarks) {
       const multiple = traces !== null
       const height = multiple ? 182 : 152
       const top = 22
@@ -353,10 +365,15 @@
         const tick = chars.length > labelLimit ? `${chars.slice(0, labelLimit - 1).join('')}…` : pointLabel
         parts.push(h('text', { key: `lab-${index}`, x: toX(x), y: height - 9, fontSize: 11, fill: C.muted, fontFamily: SANS, textAnchor }, tick))
       }
-      return { parts, chartSeries, domainMin, domainMax, toX, toY, height, top, bottom }
+      const marks = (IUI_AST.chartMarks(rawMarks) ?? []).filter(([x]) => x >= domainMin && x <= domainMax)
+      for (const [time] of marks) {
+        const x = toX(time)
+        parts.push(h('line', { key: `mark-${time}`, className: 'miopiik-chart-mark-tick', 'aria-hidden': true, x1: x, x2: x, y1: bottom + 1, y2: bottom + 7, strokeWidth: 2 }))
+      }
+      return { parts, chartSeries, domainMin, domainMax, toX, toY, height, top, bottom, marks }
     }
 
-    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub }) {
+    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub, onScrub, marks: rawMarks }) {
       const containerRef = React.useRef(null)
       const [width, setWidth] = React.useState(360)
       const [scrubValue, setScrubValue] = React.useState(undefined)
@@ -378,11 +395,14 @@
       }, [])
 
       const linear = xScale === 'linear'
-      const layout = React.useMemo(() => prepareLineChart(rows, traces, width, linear, xUnit, yUnit), [rows, traces, width, linear, xUnit, yUnit])
-      const { chartSeries, domainMin, domainMax, parts, toX, toY, height, top, bottom } = layout
+      const layout = React.useMemo(() => prepareLineChart(rows, traces, width, linear, xUnit, yUnit, rawMarks), [rows, traces, width, linear, xUnit, yUnit, rawMarks])
+      const { chartSeries, domainMin, domainMax, parts, toX, toY, height, top, bottom, marks } = layout
       const multiple = traces !== null
       const scrubbable = scrub !== undefined && domainMax > domainMin && Number.isFinite(domainMax - domainMin)
-      const cursor = scrubbable ? Math.min(domainMax, Math.max(domainMin, scrubValue ?? domainMin)) : externalCursor
+      const chosen = onScrub === undefined ? scrubValue : externalCursor
+      const controlValue = Math.min(domainMax, Math.max(domainMin, Number.isFinite(chosen) ? chosen : domainMin))
+      const cursor = scrubbable && onScrub === undefined ? controlValue : externalCursor
+      const chooseCursor = onScrub ?? setScrubValue
       const active = linear && Number.isFinite(cursor) && cursor >= domainMin && cursor <= domainMax
       const cursorParts = []
       const readings = active ? chartSeries.map((trace) => lineValueAt(trace.rows, cursor)) : []
@@ -398,7 +418,7 @@
           }))
         })
       }
-      const position = active ? `${formatChartValue(cursor)}${xUnit}` : ''
+      const position = Number.isFinite(cursor) ? `${formatChartValue(cursor)}${xUnit}` : '未选择'
       const readingText = (value) => value === null ? '—' : `${formatChartValue(value)}${yUnit}`
       const legend = multiple ? h('div', {
         className: 'miopiik-trace-legend', role: 'list', 'aria-label': '曲线', 'data-iui-chart-readout': active ? 'multi' : undefined,
@@ -411,8 +431,9 @@
       ),
       active ? h('span', { className: 'miopiik-trace-value', 'data-iui-trace-value': trace.label, 'aria-label': readings[index] === null ? '无数据' : undefined }, readings[index] === null ? '—' : formatChartValue(readings[index])) : null,
       ))) : null
-      const readout = scrubbable && !multiple ? readingText(readings[0]) : ''
-      const ariaValue = multiple && active
+      const readout = scrubbable && !multiple ? readingText(readings[0] ?? null) : ''
+      const currentMark = marks.find(([time]) => time === cursor)?.[1]
+      const ariaValue = !active ? '图表未覆盖此时刻' : multiple
         ? traces.map((trace, index) => `${trace.label} ${readings[index] === null ? '无数据' : readingText(readings[index])}`).join('，')
         : readout
       return h('div', { ref: containerRef, style: { width: '100%', minWidth: 0 } },
@@ -420,14 +441,24 @@
         scrubbable ? h('div', { 'data-iui-chart-scrub': '1' },
           h('span', { className: 'miopiik-control-label' }, scrub, ' ', h('span', { className: 'miopiik-scrub-position' }, position)),
           multiple ? null : h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': readings[0] }, readout),
-          renderRangeInput({ min: domainMin, max: domainMax, step: 'any', value: cursor, label: scrub, valueText: `${position}，${ariaValue}`, onChange: setScrubValue }),
+          renderRangeInput({ min: domainMin, max: domainMax, step: 'any', value: controlValue, label: scrub, valueText: [position, currentMark, ariaValue].filter(Boolean).join('，'), onChange: chooseCursor }),
         ) : null,
+        marks.length === 0 ? null : h('div', { className: 'miopiik-chart-marks', role: 'group', 'aria-label': '时间标记' },
+          ...marks.map(([time, title]) => {
+            const timestamp = h('span', { className: 'miopiik-chart-mark-time' }, `${formatChartValue(time)}${xUnit}`)
+            return scrubbable ? h('button', {
+              key: time, type: 'button', className: 'miopiik-ctl miopiik-choice miopiik-chart-mark',
+              'data-iui-chart-mark': time, 'aria-current': time === cursor ? 'time' : undefined,
+              onClick: () => chooseCursor(time),
+            }, title, ' ', timestamp) : h('span', { key: time, className: 'miopiik-control-label' }, title, ' ', timestamp)
+          }),
+        ),
         legend,
       )
     }
 
-    function renderChart(rows, kind, label, { xScale, xUnit, yUnit, cursor, scrub }) {
-      if (kind === 'line') return h(IuiLineChart, { rows, label, xScale, xUnit, yUnit, cursor, scrub })
+    function renderChart(rows, kind, label, options) {
+      if (kind === 'line') return h(IuiLineChart, { rows, label, ...options })
       const values = rows.map((row) => row[1])
       const max = Math.max(1, ...values)
       const labels = rows.map((row) => row[0])
@@ -1295,10 +1326,14 @@
           const kind = String(props.kind ?? 'bar')
           const xUnit = props.xScale === 'linear' ? textOf(resolveText(props.xUnit)).slice(0, 16) : ''
           const yUnit = textOf(resolveText(props.yUnit)).slice(0, 16)
-          const rows = IUI_AST.chartMatrix(series, props.xScale, xUnit)
-          const traces = rows === null && props.xScale === 'linear' ? IUI_AST.chartTraces(series, xUnit) : null
+          const { rows, traces } = normalizeChart(series, props.xScale, xUnit)
           if (rows === null && traces === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
-          const chartOptions = { xScale: props.xScale, xUnit, yUnit, cursor: resolve(props.cursor), scrub: props.scrub }
+          const binding = IUI_AST.readBinding(props.bind)
+          const linked = binding.scope === 'state'
+          const chartOptions = {
+            xScale: props.xScale, xUnit, yUnit, cursor: resolve(linked ? props.bind : props.cursor), scrub: props.scrub, marks: resolve(props.marks),
+            onScrub: linked ? (value) => setState((prev) => writeStatePath(prev, binding.key, value)) : undefined,
+          }
           const plot = traces === null
             ? renderChart(rows, kind, chartSummary(rows, kind, xUnit, yUnit), chartOptions)
             : h(IuiLineChart, {

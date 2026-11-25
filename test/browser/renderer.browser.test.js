@@ -216,6 +216,15 @@ const MULTI_CHART_SCRUB_ML = `<ui density="auto">
   <chart kind="line" scrub="经过时间" x-unit="秒" y-unit="件" series='[["乙",[[2,10],[12,2]]],["甲",[[0,0],[4,8],[12,0]]]]'/>
 </ui>`
 
+const SHARED_CHART_SCRUB_ML = `<ui density="auto">
+  <state name="time" value="0"/>
+  <derive name="trajectory" expr="accumulate([[0,3],[4,-2],[10,0]],0)"/>
+  <derive name="water" expr="round(sample($state.trajectory,$state.time),1)"/>
+  <chart kind="line" scrub="观察时刻" bind="$state.time" marks='[[4,"停雨"],[10,"排空"]]' x-unit="秒" y-unit="升" series="$state.trajectory"/>
+  <chart kind="line" x-scale="linear" x-unit="秒" y-unit="升" cursor="$state.time" series='[[0,0],[4,0],[10,12]]'/>
+  <metric label="积水量" value="$state.water" unit="升"/>
+</ui>`
+
 const R3_WEIGHT_AST = {
   title: '语义权重',
   root: {
@@ -550,6 +559,7 @@ const MAIN_RUN = `
       numericAxis:mountBlock(${JSON.stringify(NUMERIC_AXIS_ML)}),
       chartScrub:mountBlock(${JSON.stringify(CHART_SCRUB_ML)}),
       multiChartScrub:mountBlock(${JSON.stringify(MULTI_CHART_SCRUB_ML)}),
+      sharedChartScrub:mountBlock(${JSON.stringify(SHARED_CHART_SCRUB_ML)}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
       copy:mountBlock(${JSON.stringify(JSON.stringify(R3_COPY_AST))}),
@@ -565,6 +575,7 @@ const MAIN_RUN = `
     };
     r3Hosts.chartScrub.style.maxWidth = '320px';
     r3Hosts.multiChartScrub.style.maxWidth = '320px';
+    r3Hosts.sharedChartScrub.style.maxWidth = '320px';
     window.__r3Hosts=r3Hosts;
     // L-11 基础：DOM 级行内嫁接——原生先渲染（加粗跨 token 保留），再原位替换受信 token
     const graftHost=document.createElement('div');
@@ -959,11 +970,11 @@ const MAIN_RUN = `
           r3.numericAxis.querySelector('[data-iui-chart-cursor="8"]') !== null
           && r3.numericAxis.querySelector('[data-iui-chart-scrub], [data-iui-chart-readout]') === null
         ) || '外部滑轨未同步旧式图表游标');
-        const scrubInput = (host) => host.querySelector('[data-iui-chart-scrub] input[type="range"][aria-label="经过时间"]');
+        const scrubInput = (host, label = '经过时间') => host.querySelector('[data-iui-chart-scrub] input[type="range"][aria-label="' + label + '"]');
         const scrubFits = (host) => host.scrollWidth <= host.clientWidth + 1
           && document.documentElement.scrollWidth <= window.innerWidth;
-        const setScrubTime = async (host, time) => {
-          const input = scrubInput(host);
+        const setScrubTime = async (host, time, label) => {
+          const input = scrubInput(host, label);
           if (input === null) throw new Error('时间轴滑轨缺失');
           input.value = String(time);
           input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1041,6 +1052,33 @@ const MAIN_RUN = `
           check('multiChartScrubSamples', () => scrubFits(multiScrub)
             && multiScrub.querySelectorAll('[data-iui-chart-cursor]').length === 1
             && JSON.stringify(samples) === '[[1,1,2,null],[4,4,8,8.4],[12,12,0,2]]'
+            ? true : JSON.stringify(samples));
+        }
+        const sharedScrub = r3.sharedChartScrub;
+        const phaseMark = (time) => sharedScrub.querySelector('button[data-iui-chart-mark="' + time + '"]');
+        const sharedSample = () => [
+          scrubInput(sharedScrub, '观察时刻')?.valueAsNumber,
+          [...sharedScrub.querySelectorAll('[data-iui-chart-cursor]')]
+            .map((cursor) => Number(cursor.getAttribute('data-iui-chart-cursor'))),
+          Number.parseFloat(sharedScrub.querySelector('[data-iui-metric="积水量"] .miopiik-metric-value')?.textContent),
+        ];
+        check('sharedChartScrubInitial', () => sharedScrub.querySelectorAll('input[type="range"]').length === 1
+          && sharedScrub.querySelectorAll('button[data-iui-chart-mark]').length === 2
+          && phaseMark(4) !== null && phaseMark(10) !== null && scrubFits(sharedScrub)
+          && JSON.stringify(sharedSample()) === '[0,[0,0],0]'
+          ? true : JSON.stringify(sharedSample()));
+        if (phaseMark(4) !== null && phaseMark(10) !== null && scrubInput(sharedScrub, '观察时刻') !== null) {
+          const samples = [];
+          phaseMark(4).click();
+          await wait(25);
+          samples.push(sharedSample());
+          await setScrubTime(sharedScrub, 6.5, '观察时刻');
+          samples.push(sharedSample());
+          phaseMark(10)?.click();
+          await wait(25);
+          samples.push(sharedSample());
+          check('sharedChartScrubSamples', () => scrubFits(sharedScrub)
+            && JSON.stringify(samples) === '[[4,[4,4],12],[6.5,[6.5,6.5],7],[10,[10,10],0]]'
             ? true : JSON.stringify(samples));
         }
         check('r3Weight', () => {
@@ -1401,6 +1439,8 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-multi-chart-scrub-initial="ok"/u,'两条曲线应共用滑轨，起点按两条曲线的联合范围确定')
   assert.match(html,/data-multi-chart-scrub-scale="ok"/u,'同一时刻应在两条曲线上共享横坐标')
   assert.match(html,/data-multi-chart-scrub-samples="ok"/u,'各曲线应独立插值，范围外不显示读数，窄列无横溢')
+  assert.match(html,/data-shared-chart-scrub-initial="ok"/u,'共享滑轨应在窄列显示两个可点击阶段标记')
+  assert.match(html,/data-shared-chart-scrub-samples="ok"/u,'阶段按钮与滑轨应双向更新共享时刻、两图游标和派生数量')
   assert.match(html,/data-r3-weight="ok"/u,'weight 三态应输出 data-iui-weight 并给出强弱视觉（primary 加粗 / secondary·optional 弱化）')
   assert.match(html,/data-r3-details-closed="ok"/u,'details 初始应收起并带 aria-expanded=false')
   assert.match(html,/data-r3-details-open="ok"/u,'details 由 IuiSheet 受控展开（aria-controls 指向内容）')

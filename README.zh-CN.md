@@ -178,6 +178,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 | 数值折线横轴 | `chart kind="line" x-scale="linear"` | `series` 为按横坐标排序的 `[x,y]` 数值点列。`x-unit` 标注横轴单位，`cursor="$state.time"` 标记当前横坐标。`accumulate([[时间,净速率], …], 初值)` 生成非负存量曲线，最后一点指定结束时间。`sample(series, time)` 从同一曲线读取当前值。 |
 | 探索曲线 | `chart kind="line" scrub="经过时间" x-unit="秒" y-unit="升"` | 从数值 `series` 生成滑杆与插值读数，游标从第一个点起步。需要和其他组件共享位置时，另用 `slider` 配合 `cursor="$state.time"`。 |
 | 同轴对照 | `chart kind="line" scrub="经过时间"` | `series='[["甲",[[0,12],[10,7]]],["乙",[[0,12],[10,4]]]]'` 让曲线共用坐标。一个游标读取同一时刻的各条曲线，数据覆盖范围外留空。最多四条曲线，合计 60 个点。 |
+| 联动时间轴 | `chart kind="line" scrub="经过时间" bind="$state.time"` | 用数值初始化 `time`，其他图表通过 `cursor="$state.time"` 跟随。`marks='[[4,"停止供电"],[10,"冷却完成"]]'` 标注最多六个按时刻排序的事件，带滑杆的折线图可以用按钮直达。 |
 
 任何组件都可写 `when="$state.*"`（可配 `is="值"` 做等值切换），按本地状态控制自身显隐。组件白名单由 [shared/iui-ast.js](shared/iui-ast.js) 的 `REGISTRY` 强制执行，未知标签会局部降级。
 

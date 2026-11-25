@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { IUI_VERSION, chartTraces, readBinding, resolveValue, validateAst } from '../shared/iui-ast.js'
+import { IUI_VERSION, chartMarks, chartTraces, readBinding, resolveValue, validateAst } from '../shared/iui-ast.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 
 const good = () => ({
@@ -164,6 +164,53 @@ test('折线图 scrub 使用线性横轴，保留单位绑定并拒绝冲突控�
   ]
   for (const overrides of invalid) assert.equal(chart(overrides).ok, false, JSON.stringify(overrides))
   assert.equal(chart({ scrub: undefined, cursor: 0, xScale: 'linear' }).ok, true)
+})
+
+test('时间轴支持状态联动、节点标签和派生写入保护', () => {
+  const ml = parseMiopiikMl(`<ui><column>
+    <chart kind="line" scrub="观察时刻" bind="$state.time" marks='[[4," 停雨 "],[10,"排空"]]' series='[[0,0],[12,2]]'/>
+    <derive name="time" expr="1"/>
+    <derive name="elapsed" expr="$state.time * 2"/>
+  </column></ui>`)
+  assert.equal(ml.ok, true)
+  const checked = validateAst(ml.doc)
+  assert.equal(checked.ok, true)
+  const chart = checked.ast.root.children[0]
+  assert.equal(chart.props.bind, '$state.time')
+  assert.deepEqual(chartMarks(chart.props.marks), [[4, '停雨'], [10, '排空']])
+  assert.deepEqual(checked.ast.state, {})
+  assert.deepEqual(checked.derivePlan.map(({ name }) => name), ['elapsed'])
+  assert.match(checked.diagnostics[0], /derive\.name 与控件绑定冲突：time/u)
+})
+
+test('时间轴只接受可写的 scrub 绑定、升序节点和完整的节点数据绑定', () => {
+  const state = { time: 0, times: [0], marks: [[4, '停雨']] }
+  const chart = (overrides) => validateAst({ state, root: { type: 'chart', props: {
+    kind: 'line', xScale: 'linear', scrub: '时刻', series: [[0, 0], [12, 2]], ...overrides,
+  } } })
+  for (const binding of ['$state.marks', '$data.marks']) {
+    const checked = chart({ bind: '$state.time', marks: binding })
+    assert.equal(checked.ok, true)
+    assert.deepEqual(chartMarks(resolveValue(checked.ast.root.props.marks, { state, data: state })), [[4, '停雨']])
+  }
+  assert.equal(chart({ bind: '$state.times.1' }).ok, true)
+  assert.equal(chart({ scrub: undefined, marks: [[4, '停雨']] }).ok, true)
+  for (const overrides of [
+    { bind: '$state.time', scrub: undefined }, { bind: '$data.time' }, { bind: '$state.__proto__' },
+    { bind: '$state.times.2' }, { bind: '$state.times.foo' }, { bind: `$state.${'x'.repeat(65)}` },
+    { kind: 'bar', xScale: undefined, scrub: undefined, marks: '$state.marks' },
+  ]) assert.equal(chart(overrides).ok, false, JSON.stringify(overrides))
+  assert.deepEqual(chartMarks([[0, '字'.repeat(64)]]), [[0, '字'.repeat(64)]])
+  const maxMarks = Array.from({ length: 6 }, (_, x) => [x, String(x)])
+  assert.deepEqual(chartMarks(maxMarks), maxMarks)
+  for (const marks of [
+    [], [...maxMarks, [6, '6']], [[1, '停雨'], [1, '排空']], [[2, '停雨'], [1, '排空']],
+    [[Infinity, '停雨']], [['1', '停雨']], [[1, 2]], [[1, '  ']], [[1, '字'.repeat(65)]],
+    [[1, '停雨', 'extra']], '$state.marks || []',
+  ]) {
+    assert.equal(chartMarks(marks), null, JSON.stringify(marks))
+    assert.equal(chart({ marks }).ok, false, JSON.stringify(marks))
+  }
 })
 
 test('多条曲线共享数值轴，可绑定本地数据或直接使用字面量', () => {

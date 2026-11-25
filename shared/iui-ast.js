@@ -33,7 +33,7 @@ export const REGISTRY = Object.freeze({
   callout: { props: { tone: 'string?', title: 'string?', text: 'string?' }, children: true },
   progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
   empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
-  chart: { props: { kind: 'string', series: 'value', source: 'string?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?' }, children: false },
+  chart: { props: { kind: 'string', series: 'value', source: 'string?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', bind: 'string?', marks: 'value?' }, children: false },
   views: { props: { label: 'string?', bind: 'string?' }, children: true },
   drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
   view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
@@ -161,6 +161,23 @@ export function chartTraces(series, xUnit) {
     traces.push({ label, rows })
   }
   return traces
+}
+
+/** 归一化数值横轴上的时间节点。 */
+export function chartMarks(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 6) return null
+  const marks = []
+  let previous = -Infinity
+  for (const mark of value) {
+    if (!Array.isArray(mark) || mark.length !== 2) return null
+    const [x, rawLabel] = mark
+    if (!Number.isFinite(x) || x <= previous || typeof rawLabel !== 'string' || rawLabel.length > 64) return null
+    const label = rawLabel.trim()
+    if (label === '') return null
+    marks.push([x, label])
+    previous = x
+  }
+  return marks
 }
 
 /** Inline datasets use the same bounded expression grammar as derive. */
@@ -508,7 +525,7 @@ export function validateAst(input) {
     }
     let writesState = Object.hasOwn(spec.props, 'bind')
     if (node.type === 'button') writesState = LOCAL_BUTTON_ACTIONS.includes(props.action)
-    if (node.type === 'views') writesState = props.bind !== undefined
+    if (node.type === 'views' || node.type === 'chart') writesState = props.bind !== undefined
     const binding = writesState ? readBinding(props.bind) : null
     if (binding !== null && binding.scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
     if (node.type === 'views') {
@@ -687,16 +704,29 @@ export function validateAst(input) {
         }
         props = { ...props, xScale: 'linear', scrub: label }
       }
+      if (binding !== null) {
+        if (props.scrub === undefined) return failNode(node, path, 'chart.bind 需要 chart.scrub')
+        const current = resolveValue(props.bind, { state })
+        if (writeStatePath(state, binding.key, Object.is(current, 0) ? 1 : 0) === state) {
+          return failNode(node, path, 'chart.bind 需要可写的 $state.* 路径')
+        }
+      }
       if (props.cursor !== undefined && (props.xScale !== 'linear'
         || (!Number.isFinite(props.cursor) && readBinding(props.cursor).scope !== 'state'))) {
         return failNode(node, path, 'chart.cursor 需要数值横轴，以及数值或 $state.* 绑定')
       }
-      const binding = readBinding(props.series)
-      const namedTraces = props.kind === 'line' && binding.scope === undefined ? chartTraces(binding.literal, props.xUnit) : null
+      const seriesBinding = readBinding(props.series)
+      const namedTraces = props.kind === 'line' && seriesBinding.scope === undefined ? chartTraces(seriesBinding.literal, props.xUnit) : null
       if (namedTraces !== null && props.xScale === undefined) props = { ...props, xScale: 'linear' }
-      if (binding.scope === undefined && chartMatrix(binding.literal, props.xScale, props.xUnit) === null
+      if (props.marks !== undefined) {
+        const marksBinding = readBinding(props.marks)
+        if (props.xScale !== 'linear' || (marksBinding.scope === undefined && chartMarks(marksBinding.literal) === null)) {
+          return failNode(node, path, 'chart.marks 需要数值横轴，以及 1–6 个升序时间节点或本地数据绑定')
+        }
+      }
+      if (seriesBinding.scope === undefined && chartMatrix(seriesBinding.literal, props.xScale, props.xUnit) === null
         && namedTraces === null) {
-        datasetExpression = compileDataset(binding.literal)
+        datasetExpression = compileDataset(seriesBinding.literal)
         if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')
       }
     }

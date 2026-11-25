@@ -291,6 +291,36 @@
   font-variant-numeric: tabular-nums;
 }
 
+.miopiik-chart-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-block: 3px;
+  min-inline-size: 0;
+}
+
+.miopiik-chart-mark-time {
+  color: var(--iui-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.miopiik-chart-mark[aria-current=time] {
+  border-color: color-mix(in srgb, var(--iui-accent) 38%, transparent);
+  background: var(--iui-selected);
+  color: var(--iui-text);
+}
+
+.miopiik-chart-mark-tick { stroke: var(--iui-accent); }
+
+@media (pointer: coarse) {
+  .miopiik-ctl.miopiik-chart-mark { min-block-size: 40px; }
+}
+
+@media (forced-colors: active) {
+  .miopiik-chart-mark[aria-current=time] { border-color: Highlight; }
+  .miopiik-chart-mark-tick { stroke: Highlight; }
+}
+
 .miopiik-trace-legend {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 6.5rem), 1fr));
