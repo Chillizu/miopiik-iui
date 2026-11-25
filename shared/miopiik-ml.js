@@ -368,7 +368,7 @@ const TEXT_PROPS = Object.freeze({
   input: ['label', 'bind', 'placeholder'],
   steps: [],
   step: ['title', 'note', 'tone'],
-  diagram: ['title', 'source'],
+  diagram: ['title', 'label', 'source'],
   lane: ['label'],
   node: ['id', 'label', 'tone', 'note'],
   edge: ['from', 'to', 'label', 'kind'],
@@ -511,22 +511,44 @@ export function parseMiopiikMl(source, { streaming = false } = {}) {
       const lanes = []
       const implicit = []
       const rest = []
+      const edges = []
       for (const child of element.children) {
         if (child.name === '#text') {
           const raw = String(child.text ?? '').trim()
           if (raw !== '') rest.push({ id: 'ml-diagram-note', type: 'text', props: { text: raw }, children: [] })
           continue
         }
+        if (child.name === 'lane') {
+          // Edges describe graph relationships and may be declared inside a
+          // lane for readability. Remove only those edges before lane
+          // validation, then hoist them to the diagram in declaration order.
+          const laneChildren = child.children.filter((nested) => nested.name !== 'edge')
+          const laneEdges = child.children.filter((nested) => nested.name === 'edge')
+          const item = compile({ ...child, children: laneChildren })
+          if (item.kind === 'node' && item.node.type === 'lane') lanes.push(item.node)
+          else if (item.kind === 'node') rest.push(item.node)
+          else rest.push(textNode(item, 'ml-diagram-degraded'))
+          for (const edge of laneEdges) {
+            const compiledEdge = compile(edge)
+            if (compiledEdge.kind === 'node') edges.push(compiledEdge.node)
+            else edges.push(textNode(compiledEdge, 'ml-diagram-degraded'))
+          }
+          continue
+        }
         const item = compile(child)
         if (item.kind === 'node' && item.node.type === 'lane') lanes.push(item.node)
         else if (item.kind === 'node' && item.node.type === 'node') implicit.push(item.node)
+        else if (item.kind === 'node' && item.node.type === 'edge') edges.push(item.node)
         else if (item.kind === 'node') rest.push(item.node)
         else rest.push(textNode(item, 'ml-diagram-degraded'))
       }
       if (implicit.length > 0) lanes.unshift({ id: 'ml-lane-auto', type: 'lane', props: {}, children: implicit })
-      const children = [...lanes, ...rest]
+      const children = [...lanes, ...rest, ...edges]
       if (children.length === 0) return degrade('diagram 内没有可渲染内容')
-      return compiled({ ...control, ...readProps(attrs, TEXT_PROPS.diagram) }, children)
+      const props = readProps(attrs, TEXT_PROPS.diagram)
+      if (props.title === undefined && props.label !== undefined) props.title = props.label
+      delete props.label
+      return compiled({ ...control, ...props }, children)
     }
     if (element.name === 'p' || element.name === 'paragraph') {
       const children = element.children.map((child) => {

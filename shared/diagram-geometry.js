@@ -39,7 +39,7 @@ export function diagramEdges(edges, anchors, laneWidth) {
     const forward = b.cx > a.cx
     const dx = Math.sign(b.cx - a.cx)
     const sx = a.cx + dx * (a.halfW + gap)
-    const ex = b.cx - dx * (a.halfW + gap + 1)
+    const ex = b.cx - dx * (b.halfW + gap + 1)
     const sy = a.cy
     const ey = b.cy
     const sameRow = Math.abs(b.cy - a.cy) < 20
@@ -48,7 +48,8 @@ export function diagramEdges(edges, anchors, laneWidth) {
       // 正向且不需要绕行：行内缓曲线
       const c1x = sx + (ex - sx) * 0.25
       const c2x = sx + (ex - sx) * 0.75
-      arcs.push({ d: `M ${sx},${sy} C ${c1x},${sy} ${c2x},${ey} ${ex},${ey}`, dashed, label, labelX: (sx + ex) / 2, labelY: (sy + ey) / 2 - 7 })
+      const labelY = sameRow ? Math.min(a.cy - a.halfH, b.cy - b.halfH) - 7 : (sy + ey) / 2 - 7
+      arcs.push({ d: `M ${sx},${sy} C ${c1x},${sy} ${c2x},${ey} ${ex},${ey}`, dashed, label, labelX: (sx + ex) / 2, labelY })
       continue
     }
     // 反向边（或跨多列同行正向边）：统一走底部弧线。
@@ -60,6 +61,27 @@ export function diagramEdges(edges, anchors, laneWidth) {
     arcs.push({ d: `M ${sx},${sy} C ${c1x},${yc} ${c2x},${yc} ${ex},${ey}`, dashed, label, labelX: (sx + ex) / 2, labelY: yc + 13 })
   }
   return { arcs, backwardDrop }
+}
+
+/** Fit edge captions into the canvas and give nearby captions separate rows where space permits. */
+export function placeDiagramCaptions(arcs, width, height) {
+  const placed = []
+  const maxWidth = Math.max(1, Math.min(120, width * 0.33))
+  return arcs.map((arc) => {
+    if (arc.label === null) return arc
+    const textWidth = [...arc.label.slice(0, 160)].reduce((total, char) => total + (char.charCodeAt(0) < 128 ? 6 : 10), 0)
+    const halfWidth = Math.min(textWidth, maxWidth) / 2
+    const halfHeight = Math.min(height / 2, Math.ceil(textWidth / maxWidth) * 6.5)
+    const labelX = Math.min(width - halfWidth, Math.max(halfWidth, arc.labelX))
+    const limitY = (y) => Math.min(height - halfHeight, Math.max(halfHeight, y))
+    const step = 2 * halfHeight + 3
+    const choices = [0, -step, step, -2 * step, 2 * step].map((offset) => limitY(arc.labelY + offset))
+    const collision = (y) => placed.some((box) => Math.abs(box.x - labelX) < box.halfWidth + halfWidth + 2
+      && Math.abs(box.y - y) < box.halfHeight + halfHeight + 2)
+    const labelY = choices.find((y) => !collision(y)) ?? choices[0]
+    placed.push({ x: labelX, y: labelY, halfWidth, halfHeight })
+    return { ...arc, labelX, labelY }
+  })
 }
 
 /** 近似锚点（无实测环境用）：等宽列中心 + 定高药丸。 */

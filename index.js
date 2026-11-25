@@ -13,7 +13,7 @@ export const IUI_CHARTER = [
   '要探索可调的系统，先让读者看清当前发生什么。把最相关的控件和关键读数放在主图旁，沿用同一份 state 和 derive。让受影响的位置、范围、颜色或显隐真正在主图里变化。补充图表只回答主图没回答的问题，细节可放进 details。',
   '用 iui 围栏包住 miopiik-ml 的 <ui density="auto" fallback="一句话保留核心解释">…</ui>。drawing 用 width/height/label，内部可混用共享图形和 2–6 个 <view label="条件" caption="图上变化所说明的事">…</view>。每个 view 只放该条件下的图形。固定条件对照的选择器和图注由宿主生成；连续量或多控件联动时用共享 state。',
   '图形原语 rect(x,y,width,height,rx)、circle(cx,cy,r)、line(x1,y1,x2,y2)、path(d)、label(x,y,text,size,align)。fill/stroke 用主题色 text/muted/border/surface/accent/neutral/success/warning/danger/info/none，线宽 stroke-width。图元参数可用完整 $state 路径绑定。显隐写 when="$state.mode" is="short"，布尔值仅写 when。标签用 align="middle" 居中。',
-  `数据用 chart(kind=bar/line/donut)、table、metric、diagram(node/edge)、steps(step)。row 横向就近、column 纵向。chart.series 和 table.rows 可用数组、完整绑定或纯表达式。table 同时写 columns。state 的 value、segmented 的 options 用合法 JSON，如 <state name="mode" value='"short"'/> 和 options='[{"label":"短","value":"short"}]'。控件 bind="$state.名称"，slider 设 min/max/step，toggle 绑定布尔。button 支持 set/append/pop/reset（bind、value、max 或 min）和用户触发的 copy。`,
+  `对象之间的流向可用 diagram，由宿主布置。先写 <node id="a" label="起点"/> 和 <node id="b" label="下一站"/>，然后写 <edge from="a" to="b" label="作用"/>。可用 lane(label) 分组，node.note 补充短说明，node 和 edge 允许用 when="$state.名称" 显示对应状态。数字关系使用 chart(kind=bar/line/donut)、table、metric，步骤用 steps(step)。row 横向就近、column 纵向。chart.series 和 table.rows 可用数组、完整绑定或纯表达式。table 同时写 columns。state 的 value、segmented 的 options 用合法 JSON，如 <state name="mode" value='"short"'/> 和 options='[{"label":"短","value":"short"}]'。控件 bind="$state.名称"，slider 设 min/max/step，toggle 绑定布尔。button 支持 set/append/pop/reset（bind、value、max 或 min）和用户触发的 copy。`,
   '普通属性填字面量或完整 $state 路径，例如 metric value="$state.result"；图元数值允许 x="$state.x + 10" 等局部算式。共用公式放 derive，用 ==、!=、?:、round/min/max。图外的文字用 <text>，label 只在 drawing 内。数组用 len/at/gather/join/zip/dot/matvec/scale/softmax/roundEach，索引只用 at(a,i)。用两组输入检查图形和读数的变化是否与正文一致。',
   `例如讲影长时，把竖杆和地面画成共享图层，用两片光线对照。同一个物体的哪一处变化，直接看图：
 ${FENCE}iui
@@ -60,7 +60,7 @@ export const IUI_VISUAL_GUIDANCE = [
   '同一过程里的输入、图形和读数应能互相核对。若用户追问恢复后会怎样，用一条完整时间轴画出故障前、恢复当下和消退后。把恢复当下做成一个能直达的阶段点。一次讲清一条因果链即可。',
   '先选一组可复算的教学假设。积累量按每段的（流入减流出）乘持续时间得到，输入变了也要沿用已经累积的量。让正文、图和读数引用同一个基准。需要现场改变输入时写 accumulate([[起点,净速率],[改速时刻,新速率],[终点,0]], 初始存量)。固定假设时直接写小组已算过的 [时刻,存量] 点，不必额外写公式或控件。',
   '线性折线的 scrub 创建滑杆和读数。用 marks 属性写 [[4,"条件改变"],[10,"结束"]] 标出阶段。分流图、状态或读数也跟着变时，设一个 state time，在主曲线上写 scrub="观察时刻" bind="$state.time"，其他图用 cursor="$state.time"，纯数值或图元用同一个 state 计算。每个可调值都须改变图里的对应结果。',
-  '构图随问题变化。空间结构用剖面或叠层，分流用路径和瓶颈，多个情况用共享尺度。标注贴近对象，保留参照物。只在两种视角各自解释一个疑问时增加第二张图。',
+  '构图随问题变化。相对位置或形态重要时用剖面或叠层；对象之间传递、分流或依赖是重点时用带方向的关系图，状态切换保持共同对象和边界。多个数值情况用共享尺度。标注贴近对象，保留参照物。只在两种视角各自解释一个疑问时增加第二张图。',
   '同一量的多种情况要共用横、纵坐标，读数也要对齐到同一时刻。折线 series 可写成 [["情况甲",[[0,100],[10,80],[20,68]]],["情况乙",[[0,100],[10,60],[20,42]]]]，最多四条。每条写出名称和至少两个按横坐标顺序排列的点，范围外没有读数。图上比较变化速度时，优先让各条曲线用同一组横坐标。',
   '要切换整组正文、图和读数，用 <views label="对照主题"><view label="第一种情况" caption="变化的解释">…</view><view label="第二种情况">…</view></views>。需要和其他控件联动时，为 views 写 bind="$state.名称"，两项 view 用不同的 value。drawing 内的 view 只放图元，用于切换同一张图的图层。',
   '只使用约定中的语法和函数。角度用 sin(x)、cos(x)，参数是弧度。SVG 的 label.text 可写 $state.n + " 单位"；动态正文先用 derive 拼接整句，再使用 <text text="$state.sentence"/>。算式未知时用少数已验证的离散状态。定义统一的单位与假设，至少把一个题设值代入并核对图与正文是否一致。初值和边界的图元、标签都应留在画布内。一幅静态图足够时就直接呈现。教学示意与实测分开。',

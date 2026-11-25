@@ -168,8 +168,8 @@ Grammar rules:
 | Input | `input` | Text control writing `$state.*` (capped at the per-node text budget); `bind`, `placeholder`, `label`. |
 | Steps | `steps` | Ordered process list; accepts `step` children only. |
 | Step | `step` | `title` (required), `note`, `tone` (shared six-tone enum). |
-| Diagram | `diagram` | Lane-based structural graph; `title`, `source`. Lanes ≤ 6, nodes ≤ 24, edges ≤ 24. |
-| Lane | `lane` | One column; accepts `node` children only (1-8). |
+| Diagram | `diagram` | Lane-based structural graph; `title`, `source`. The graph scrolls within the reply when space is limited. Lanes ≤ 6, nodes ≤ 24, edges ≤ 24. |
+| Lane | `lane` | One column with 1–8 nodes. Edges declared within a lane still connect nodes across the whole diagram. |
 | Diagram node | `node` | `id` (required, unique per diagram, safe identifier), `label` (required), `tone`, `note`. May also sit directly in `diagram` (collected into the first lane). |
 | Diagram edge | `edge` | `from`/`to` (node ids), `label`, `kind` (`solid` default / `dashed`). Unknown ids degrade that edge only; plain text lines render as annotations. |
 | View switcher | `views` | Two to six `view` children with a `label`, optional `caption`, and display content. Optional `bind="$state.*"` shares the selection with other controls. Each bound view needs a distinct scalar `value`. |

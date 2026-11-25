@@ -367,6 +367,71 @@
 .miopiik-chart-area { fill: color-mix(in srgb, var(--iui-accent) 8%, var(--iui-chart-surface)); }
 .miopiik-chart-marker { fill: var(--iui-chart-surface); }
 
+.miopiik-diagram-title {
+  color: var(--iui-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.miopiik-diagram-scroll {
+  min-inline-size: 0;
+  inline-size: 100%;
+  overflow-x: auto;
+  padding-block: 2px;
+  scrollbar-width: thin;
+}
+
+.miopiik-diagram-scroll:focus-visible {
+  outline: 2px solid var(--iui-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.miopiik-diagram-lane {
+  display: flex;
+  min-inline-size: 0;
+  flex-direction: column;
+  text-align: center;
+}
+
+.miopiik-diagram-lane-title {
+  min-block-size: 16px;
+  color: var(--iui-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.miopiik-diagram-node {
+  display: flex;
+  min-inline-size: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  border-width: 1px;
+  border-radius: 8px;
+  background: var(--iui-chart-surface);
+  padding: 6px 9px;
+  overflow-wrap: anywhere;
+}
+
+.miopiik-diagram-node-title { font-size: 12px; line-height: 1.4; }
+.miopiik-diagram-node-note { color: var(--iui-muted); font-size: 11px; line-height: 1.4; }
+
+.miopiik-diagram-edge-caption {
+  max-inline-size: min(120px, 33%);
+  color: var(--iui-muted);
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
 @media (hover: hover) {
   .miopiik-choice:not(:disabled):hover {
     border-color: var(--iui-line);

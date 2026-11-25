@@ -655,8 +655,7 @@
     }
 
     function IuiDiagram({ item, resolve, resolveText, visible, weight }) {
-      // 泳道图：真实浏览器挂载后一次实测锚点（等比 1:1 坐标，箭头精确落在药丸边缘）；
-      // stub / 无 DOM 环境回落到近似几何（360 逻辑坐标），保住测试通道与降级路径。
+      // Measure the actual diagram canvas so connectors follow layout and text wrapping.
       const props = item.props ?? {}
       const str = (value) => (value === undefined || value === null ? '' : String(value))
       // 文本类属性走字面量回退解析；diagram 子树的 label/note 与主树同一套规则。
@@ -712,8 +711,10 @@
       const liveEdges = edges.filter((edge) => visibleIds.has(edge.props?.from) && visibleIds.has(edge.props?.to))
       const laneCount = Math.max(1, lanes.length)
       const PILL = 44
-      const GAP = 14
-      const HEAD = 30 // 列标签行 16 + 间距 14；此前 8px 行高曾把列标题裁成残影
+      const GAP = 20
+      const HEAD = 36
+      const LANE_GAP = 22
+      const minWidth = laneCount * 100 + (laneCount - 1) * LANE_GAP
       const slots = lanes.map((lane) => (Array.isArray(lane.children) ? lane.children.filter((child) => child.type === 'node') : []))
       const maxSlots = Math.max(1, ...slots.map((slot) => slot.length))
       const laneOf = {}
@@ -727,31 +728,47 @@
         if (f > t) return true
         return f < t && Math.abs(f - t) > 1 && rowOf[edge.props?.from] === rowOf[edge.props?.to]
       })
+      const viewportRef = React.useRef(null)
       const wrapRef = React.useRef(null)
+      const markerId = 'miopiik-arrow-' + React.useId().replace(/[^A-Za-z0-9_-]/gu, '')
       const [geo, setGeo] = React.useState(null)
+      const geometryKey = JSON.stringify([
+        lanes.map((lane) => [lane.props.label, lane.children.map(({ props: node }) => [node.id, node.label, node.note])]),
+        liveEdges.map(({ props: edge }) => [edge.from, edge.to, edge.label, edge.kind]),
+      ])
       React.useLayoutEffect(() => {
         const root = wrapRef.current
+        const viewport = viewportRef.current
         if (root === null || typeof root.querySelectorAll !== 'function') return
-        const rootRect = root.getBoundingClientRect()
-        if (rootRect.width === 0 || rootRect.height === 0) return
-        const anchors = {}
-        for (const el of root.querySelectorAll('[data-iui-diagram-node]')) {
-          const r = el.getBoundingClientRect()
-          anchors[el.getAttribute('data-iui-diagram-node')] = { cx: r.left - rootRect.left + r.width / 2, cy: r.top - rootRect.top + r.height / 2, halfW: r.width / 2, halfH: r.height / 2 }
+        const nodes = [...root.querySelectorAll('[data-iui-diagram-node]')]
+        const measure = () => {
+          const rootRect = root.getBoundingClientRect()
+          if (rootRect.width === 0 || rootRect.height === 0) return
+          const anchors = Object.create(null)
+          for (const el of nodes) {
+            const r = el.getBoundingClientRect()
+            anchors[el.getAttribute('data-iui-diagram-node')] = { cx: r.left - rootRect.left + r.width / 2, cy: r.top - rootRect.top + r.height / 2, halfW: r.width / 2, halfH: r.height / 2 }
+          }
+          const { arcs } = DIAGRAM_GEO.diagramEdges(liveEdges, anchors, rootRect.width / laneCount)
+          const overflow = viewport !== null && rootRect.width > viewport.clientWidth + 1
+          const next = { width: rootRect.width, height: rootRect.height, arcs: DIAGRAM_GEO.placeDiagramCaptions(arcs, rootRect.width, rootRect.height), overflow }
+          const signature = JSON.stringify(next)
+          setGeo((prev) => (prev !== null && prev.signature === signature ? prev : { ...next, signature }))
         }
-        const { arcs } = DIAGRAM_GEO.diagramEdges(liveEdges, anchors, rootRect.width / laneCount)
-        // spacer 已在流内，rootRect.height 自带底部弧线空间
-        const next = { width: rootRect.width, height: rootRect.height, arcs }
-        const signature = JSON.stringify(next)
-        setGeo((prev) => (prev !== null && prev.signature === signature ? prev : { ...next, signature }))
-      })
+        measure()
+        if (typeof ResizeObserver === 'undefined') return
+        const observer = new ResizeObserver(measure)
+        observer.observe(root)
+        if (viewport !== null) observer.observe(viewport)
+        for (const node of nodes) observer.observe(node)
+        return () => observer.disconnect()
+      }, [geometryKey])
       const rowsHeight = HEAD + maxSlots * PILL + Math.max(0, maxSlots - 1) * GAP + (needsDrop ? 48 : 0)
       const measured = geo !== null
       const anchors = measured ? null : DIAGRAM_GEO.diagramFallbackAnchors(slots, laneCount, HEAD, PILL, GAP)
       const layout = measured ? { arcs: geo.arcs } : DIAGRAM_GEO.diagramEdges(liveEdges, anchors, 360 / laneCount)
       const svgWidth = measured ? geo.width : 360
       const svgHeight = measured ? geo.height : rowsHeight
-      const markerId = 'miopiik-arrow-' + String(item.id ?? 'diagram').replace(/[^A-Za-z0-9_-]/gu, '')
       const markerSize = measured ? 7 : 6
       const titleText = read(props.title)
       const sourceText = read(props.source)
@@ -759,7 +776,14 @@
       return h(
         'div',
         { className: 'miopiik-enter', 'data-iui-diagram': String(lanes.length), 'data-iui-weight': weightStyle === undefined ? undefined : weight, style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, ...(weightStyle ?? {}) } },
-        h('div', { ref: wrapRef, style: { position: 'relative', width: '100%' } },
+        titleText === '' ? null : h('div', { className: 'miopiik-diagram-title' }, titleText),
+        h('div', {
+          ref: viewportRef, className: 'miopiik-diagram-scroll',
+          'data-iui-diagram-overflow': geo?.overflow === true ? 'true' : undefined,
+          tabIndex: geo?.overflow === true ? 0 : undefined,
+          role: geo?.overflow === true ? 'region' : undefined,
+          'aria-label': geo?.overflow === true ? `${titleText || '关系图'}，可横向滚动` : undefined,
+        }, h('div', { ref: wrapRef, style: { position: 'relative', width: '100%', minWidth } },
           h('svg', {
             viewBox: `0 0 ${svgWidth} ${svgHeight}`,
             preserveAspectRatio: measured ? undefined : 'none',
@@ -775,34 +799,31 @@
           ...layout.arcs.map((arc, index) => arc.label === null ? null : h('div', {
             key: `edge-label-${index}`,
             'data-iui-diagram-edge-label': '1',
+            className: 'miopiik-diagram-edge-caption',
             style: {
               position: 'absolute',
               left: measured ? `${arc.labelX}px` : `${Math.min(88, Math.max(12, (arc.labelX / 360) * 100))}%`,
               top: `${arc.labelY}px`,
               transform: 'translate(-50%, -50%)',
-              fontSize: 9.5,
-              color: C.muted,
-              whiteSpace: 'nowrap',
-              pointerEvents: 'none',
             },
           }, arc.label)),
-          h('div', { style: { position: 'relative', display: 'grid', gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))`, gap: 10, minWidth: 0 } },
-            ...lanes.map((lane, li) => h('div', { key: `lane-${li}`, 'data-iui-diagram-lane': String(li), style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: GAP, minWidth: 0 } },
-              h('div', { key: 'head', style: { height: 16, display: 'flex', alignItems: 'flex-end', fontSize: 11, lineHeight: '16px', color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(lane.props?.label ?? '')),
+          h('div', { style: { position: 'relative', display: 'grid', gridTemplateColumns: `repeat(${laneCount}, minmax(0, 1fr))`, gap: LANE_GAP, minWidth: 0 } },
+            ...lanes.map((lane, li) => h('div', { key: `lane-${li}`, 'data-iui-diagram-lane': String(li), className: 'miopiik-diagram-lane', style: { gap: GAP } },
+              h('div', { key: 'head', className: 'miopiik-diagram-lane-title' }, String(lane.props?.label ?? '')),
               ...slots[li].map((child, si) => {
                 const cp = child.props ?? {}
                 const toneColor = (TONE_COLORS[cp.tone] ?? [null, C.text])[1]
                 const nodeWeight = weightOf(cp)
                 const nodeWeightStyle = nodeWeight === undefined ? undefined : WEIGHT_STYLE[nodeWeight]
-                return h('div', { key: `node-${si}`, 'data-iui-diagram-node': String(cp.id ?? ''), 'data-iui-weight': nodeWeightStyle === undefined ? undefined : nodeWeight, style: { height: PILL, minWidth: 56, maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, border: `1px ${cp.tone === 'accent' ? 'dashed' : 'solid'} ${cp.tone ? toneColor : C.border}`, borderRadius: 8, padding: '2px 8px', boxSizing: 'border-box', textAlign: 'center', color: cp.tone ? toneColor : C.text, ...(nodeWeightStyle ?? {}) } },
-                  h('div', { style: { fontSize: 11, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.label ?? '')),
-                  String(cp.note ?? '') !== '' ? h('div', { style: { fontSize: 9, lineHeight: '11px', color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' } }, String(cp.note)) : null)
+                return h('div', { key: `node-${si}`, 'data-iui-diagram-node': String(cp.id ?? ''), 'data-iui-weight': nodeWeightStyle === undefined ? undefined : nodeWeight, className: 'miopiik-diagram-node', style: { minHeight: PILL, borderStyle: cp.tone === 'accent' ? 'dashed' : 'solid', borderColor: cp.tone ? toneColor : C.border, color: cp.tone ? toneColor : C.text, ...(nodeWeightStyle ?? {}) } },
+                  h('div', { className: 'miopiik-diagram-node-title' }, String(cp.label ?? '')),
+                  String(cp.note ?? '') !== '' ? h('div', { className: 'miopiik-diagram-node-note' }, String(cp.note)) : null)
               }),
             )),
           ),
           needsDrop ? h('div', { key: 'drop', style: { height: 48 } }) : null,
-        ),
-        titleText !== '' || sourceText !== '' ? h('div', { style: { fontSize: 10, color: C.muted } }, [titleText, sourceText !== '' ? `来源：${sourceText}` : ''].filter((part) => part !== '').join(' · ')) : null,
+        )),
+        sourceText !== '' ? h('div', { className: 'miopiik-chart-source' }, `来源：${sourceText}`) : null,
         ...notes.map((note, index) => h('div', { key: `note-${index}`, style: { fontSize: 10, color: C.muted } }, read(note.props?.text))),
       )
     }

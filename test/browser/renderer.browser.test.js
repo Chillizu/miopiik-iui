@@ -55,6 +55,19 @@ const DEMO_DIAGRAM_ML = `<ui title="派发链路" fallback="Mind 界定 → Oper
   </diagram>
 </ui>`
 
+/** 四泳道长标签的图内滚动和完整语义。 */
+const RESPONSIVE_DIAGRAM_ML = `<ui title="响应式关系图">
+  <diagram title="跨团队交付与验收关系">
+    <lane label="平台基础设施与安全治理"><node id="p1" label="完成运行环境与访问策略的联合评审"/><node id="p2" label="发布经过安全验证的稳定运行基线"/></lane>
+    <lane label="产品设计与用户体验研究"><node id="d1" label="根据访谈记录整理完整用户旅程"/><node id="d2" label="确认所有关键状态和边界文案"/></lane>
+    <lane label="前端工程实现与质量保障"><node id="e1" label="实现适配不同屏幕尺寸的交互界面"/><node id="e2" label="完成真实浏览器中的回归验证"/></lane>
+    <lane label="上线运营与反馈跟踪"><node id="o1" label="分阶段开放功能并持续观察指标"/><node id="o2" label="汇总用户反馈并安排后续改进"/></lane>
+    <edge from="p1" to="d1" label="输入审查结论"/><edge from="d1" to="e1" label="交付设计规范"/>
+    <edge from="e1" to="e2" label="验证实现"/><edge from="e2" to="o1" label="批准上线"/>
+    <edge from="o1" to="o2" label="收集反馈"/><edge from="o2" to="d2" label="回传改进项"/>
+  </diagram>
+</ui>`
+
 /**
  * M·O·T 机制验证（JSON AST，不依赖 ml 解析器）：
  * 覆盖 derive 链/跨组件同源、绑定表格/图表、details 本地开合、copy 按钮两条状态路径、
@@ -1518,4 +1531,61 @@ test('M·O·T 演示块（miopiik-ml）在真实 Chromium DOM 中完成派生/�
   assert.match(html,/data-mot-fixture-copy-button="ok"/u,'copy 按钮应存在')
   assert.match(html,/data-mot-fixture-copy="ok"/u,'copy 应写入九个契约键的派生 config JSON')
   assert.doesNotMatch(html,/data-mot-fixture-fatal=/u,'M·O·T 演示块交互不应抛异常')
+})
+
+test('真实 Chromium 中关系图保留长标签，窄屏仅图内横向滚动', (t) => {
+  const chromium = visibleChromium ?? findChromium()
+  if (chromium === null) {
+    t.skip('未找到 Chromium（可用 CHROMIUM_PATH / MIOPIIK_CHROMIUM 指定）：跳过关系图响应式回归')
+    return
+  }
+  visibleChromium = chromium
+  const run = `
+    const module=plugin.factory(name => {if(name==='react')return React;if(name==='@deepseek-ai/dsh-client-ui-primitives')return primitives;throw Error('unexpected module '+name)});
+    module.apply({effect(){},slots:{inject(name,callback){callback()},register(){}}});
+    const host=document.createElement('div');
+    host.style.width='320px';
+    host.style.maxWidth='none';
+    document.getElementById('root').appendChild(host);
+    mountElement(globalThis.__miopiikMarkdownEmbeds.renderBlock(${JSON.stringify(RESPONSIVE_DIAGRAM_ML)}),host);
+    (async()=>{
+      const wait=(ms)=>new Promise(resolve=>setTimeout(resolve,ms));
+      const diagram=()=>host.querySelector('[data-iui-diagram]');
+      const viewport=()=>host.querySelector('.miopiik-diagram-scroll');
+      const viewportState=()=>{const el=viewport();return {client:el?.clientWidth||0,scroll:el?.scrollWidth||0,overflow:el?.getAttribute('data-iui-diagram-overflow'),tab:el?.tabIndex??-1}};
+      const paths=()=>[...host.querySelectorAll('[data-iui-diagram] svg > path')].map(el=>el.getAttribute('d')||'');
+      const semantic=()=>JSON.stringify({lanes:[...host.querySelectorAll('[data-iui-diagram-lane]')].map(el=>el.textContent),nodes:[...host.querySelectorAll('[data-iui-diagram-node]')].map(el=>[el.getAttribute('data-iui-diagram-node'),el.textContent]),edges:[...host.querySelectorAll('[data-iui-diagram-edge-label]')].map(el=>el.textContent)});
+      try {
+        await wait(120);
+        const initialSemantic=semantic();
+        const initialPaths=paths().join('|');
+        const requiredLabels=['平台基础设施与安全治理','完成运行环境与访问策略的联合评审','产品设计与用户体验研究','根据访谈记录整理完整用户旅程','前端工程实现与质量保障','实现适配不同屏幕尺寸的交互界面','上线运营与反馈跟踪','汇总用户反馈并安排后续改进'];
+        const narrow=viewportState();
+        host.style.width='620px';
+        await wait(300);
+        const wide=viewportState();
+        const flags={
+          responsiveInitial:diagram()?.getAttribute('data-iui-diagram')==='4'&&host.querySelectorAll('[data-iui-diagram-node]').length===8&&initialPaths!==''&&requiredLabels.every(label=>initialSemantic.includes(label))?'ok':'failed:泳道、连线或节点标签丢失',
+          responsiveNarrow:narrow.overflow==='true'&&narrow.scroll>narrow.client&&narrow.tab>=0?'ok':'failed:'+JSON.stringify(narrow),
+          responsiveWide:wide.scroll<=wide.client?'ok':'failed:'+JSON.stringify(wide),
+          responsiveSemantics:semantic()===initialSemantic?'ok':'failed:尺寸变化改动了语义内容',
+          responsivePageOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth?'ok':'failed:'+document.documentElement.scrollWidth+'/'+document.documentElement.clientWidth
+        };
+        Object.assign(document.body.dataset,flags);
+      } catch(error) { document.body.dataset.responsiveFatal=String(error&&error.stack||error); }
+    })();
+  `
+  let html
+  try {
+    html = dumpDom(page(run), 'responsive-diagram')
+  } catch (error) {
+    t.skip(`Chromium 不可用（${error.code ?? error.message}）：跳过关系图响应式回归`)
+    return
+  }
+  assert.match(html,/data-responsive-initial="ok"/u,'长标签四泳道图应完整渲染')
+  assert.match(html,/data-responsive-narrow="ok"/u,'窄容器应只在可聚焦的图内 viewport 横向滚动')
+  assert.match(html,/data-responsive-wide="ok"/u,'父容器扩宽至 620px 后内容应完整容纳')
+  assert.match(html,/data-responsive-semantics="ok"/u,'容器变宽不得修改节点、泳道和连线语义内容')
+  assert.match(html,/data-responsive-page-overflow="ok"/u,'页面本身不得出现横向溢出')
+  assert.doesNotMatch(html,/data-responsive-fatal=/u,'关系图响应式场景不应抛异常')
 })

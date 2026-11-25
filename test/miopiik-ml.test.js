@@ -299,6 +299,46 @@ test('miopiik-ml：diagram/lane/node/edge 解析，散装 node 汇成首列，�
   assert.equal(diagram.children[3].props.kind, 'dashed')
 })
 
+test('miopiik-ml：diagram 将 lane 内 edge 提升到图级，并把 label 规范为 title', () => {
+  const parsed = parseMiopiikMl(`<ui density="auto" fallback="消息先存到服务器并排好序，离线期间保存着，联网后按序号补发">
+    <diagram label="两条消息从发送到补发的路径">
+      <lane label="在线">
+        <node id="s" label="发送方"/>
+        <node id="srv" label="服务器" note="落库 + 分配序号"/>
+        <node id="r" label="接收方"/>
+        <edge from="s" to="srv" label="消息 1"/>
+        <edge from="srv" to="r" label="推送 1"/>
+      </lane>
+      <lane label="离线期间">
+        <node id="buf" label="消息 1 暂存" note="服务器排队中"/>
+        <node id="buf2" label="消息 2 暂存" note="序号更大"/>
+        <edge from="srv" to="buf" label="无法推送"/>
+        <edge from="srv" to="buf2" label="无法推送"/>
+      </lane>
+      <lane label="重新联网">
+        <node id="ack" label="上报最大序号"/>
+        <node id="fill" label="按序号补发" note="消息 1 然后消息 2"/>
+        <node id="done" label="接收方看到"/>
+        <edge from="r" to="ack" label="sync"/>
+        <edge from="ack" to="fill"/>
+        <edge from="buf" to="fill"/>
+        <edge from="buf2" to="fill"/>
+        <edge from="fill" to="done"/>
+      </lane>
+    </diagram>
+  </ui>`)
+  assert.equal(parsed.ok, true)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 0)
+  const diagram = checked.ast.root
+  assert.equal(diagram.props.title, '两条消息从发送到补发的路径')
+  assert.equal(diagram.props.label, undefined)
+  assert.deepEqual(diagram.children.map((child) => child.type), ['lane', 'lane', 'lane', ...Array(9).fill('edge')])
+  assert.deepEqual(diagram.children.slice(3).map((edge) => edge.props.from), ['s', 'srv', 'srv', 'srv', 'r', 'ack', 'buf', 'buf2', 'fill'])
+  assert.equal(diagram.children[0].children.length, 3, 'lane 中只保留节点')
+})
+
 test('miopiik-ml：lane 混入非 node 子节点整体降级，diagram 保留其余 lane', () => {
   const parsed = parseMiopiikMl(`<ui fallback="f"><diagram><lane label="坏列"><node id="a" label="甲"/><text>混入</text></lane><lane label="好列"><node id="b" label="乙"/></lane></diagram></ui>`)
   assert.equal(parsed.ok, true)

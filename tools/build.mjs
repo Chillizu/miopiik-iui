@@ -45,7 +45,7 @@ export function build() {
     closure('iui-ast.js', 'IUI_AST', ['IUI_VERSION', 'REGISTRY', 'LIMITS', 'INLINE_TYPES', 'TONES', 'ICONS', 'readBinding', 'resolveValue', 'validateAst', 'writeStatePath', 'localActionValue', 'drawingProps', 'positionalTableColumns', 'tableMatrix', 'chartMatrix', 'chartTraces', 'chartMarks', 'degradeToText'], 'const { EXPR_LIMITS, compileExpr } = IUI_EXPR'),
     closure('miopiik-ml.js', 'MIOPIIK_ML', ['ML_VERSION', 'ML_TAGS', 'parseMiopiikMl']),
     closure('markdown-segments.js', 'MARKDOWN_SEGMENTS', ['INLINE_TOKEN', 'BLOCK_FENCE', 'splitTrustedMarkdown', 'hasTrustedMarkup', 'splitTrustedBlocks', 'splitStreamingFence', 'graftTrustedInline']),
-    closure('diagram-geometry.js', 'DIAGRAM_GEO', ['diagramEdges', 'diagramFallbackAnchors']),
+    closure('diagram-geometry.js', 'DIAGRAM_GEO', ['diagramEdges', 'diagramFallbackAnchors', 'placeDiagramCaptions']),
     closure('frame-theme.js', 'FRAME_THEME', ['FRAME_PRESET_ATTR', 'readHostTheme', 'framePresetCss', 'framePresetStyle']),
     closure('legacy-widgets.js', 'LEGACY_WIDGETS', ['adoptLegacySpec']),
     read('renderer.js'),
