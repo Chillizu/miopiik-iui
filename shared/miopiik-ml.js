@@ -53,6 +53,7 @@ export const ML_TAGS = Object.freeze({
   views: 'views',
   drawing: 'drawing',
   view: 'view',
+  repeat: 'repeat',
   rect: 'rect',
   circle: 'circle',
   line: 'line',
@@ -74,9 +75,9 @@ export const ML_TAGS = Object.freeze({
   button: 'button',
 })
 
-const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, views: true, drawing: true, view: true })
+const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, views: true, drawing: true, view: true, repeat: true })
 const VIEW_LAYOUTS = new Set(['row', 'column', 'grid', 'card', 'details'])
-const DRAWING_CONTENT = new Set(['rect', 'circle', 'line', 'path', 'label', 'view'])
+const DRAWING_CONTENT = new Set(['rect', 'circle', 'line', 'path', 'label', 'view', 'repeat'])
 // 交互控件和图形原语隐式闭合。step 也保留旧的无闭合写法。
 const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true, rect: true, circle: true, line: true, path: true, label: true })
 
@@ -356,6 +357,7 @@ const TEXT_PROPS = Object.freeze({
   views: ['label', 'bind'],
   drawing: ['width', 'height', 'label'],
   view: ['label', 'caption'],
+  repeat: ['items'],
   rect: ['x', 'y', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],
   circle: ['cx', 'cy', 'r', 'fill', 'stroke', 'strokeWidth', 'opacity'],
   line: ['x1', 'y1', 'x2', 'y2', 'stroke', 'strokeWidth', 'strokeDasharray', 'opacity'],
@@ -447,7 +449,7 @@ export function parseMiopiikMl(source, { streaming = false } = {}) {
   const compile = (element, parentType) => {
     if (element.name === '#text') return { kind: 'text', text: String(element.text ?? '') }
     const attrs = normalizeAttrs(element)
-    const drawingLabel = element.name === 'text' && (parentType === 'drawing' || parentType === 'drawing-view')
+    const drawingLabel = element.name === 'text' && (parentType === 'drawing' || parentType === 'drawing-view' || parentType === 'repeat')
       && attrs.x !== undefined && attrs.y !== undefined
     const tagName = drawingLabel ? 'label' : element.name
     const type = Object.hasOwn(ML_TAGS, tagName) ? ML_TAGS[tagName] : undefined

@@ -811,6 +811,7 @@ window.__ModuleLoader__.load({
         views: { props: { label: 'string?', bind: 'string?' }, children: true },
         drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
         view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
+        repeat: { props: { items: 'value' }, children: true },
         rect: { props: { x: 'number', y: 'number', width: 'number', height: 'number', rx: 'number?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
         circle: { props: { cx: 'number', cy: 'number', r: 'number', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
         line: { props: { x1: 'number', y1: 'number', x2: 'number', y2: 'number', stroke: 'string?', strokeWidth: 'number?', strokeDasharray: 'string?', opacity: 'number?' }, children: false },
@@ -836,7 +837,7 @@ window.__ModuleLoader__.load({
         edge: { props: { from: 'string', to: 'string', label: 'string?', kind: 'string?' }, children: false },
       })
 
-      const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384, diagramLanes: 6, diagramNodes: 24, diagramEdges: 24, derive: 64 })
+      const LIMITS = Object.freeze({ nodes: 120, depth: 6, series: 60, options: 6, text: 2000, stateBytes: 16384, diagramLanes: 6, diagramNodes: 24, diagramEdges: 24, derive: 64, drawingShapes: 64 })
 
       /** 行内原语：paragraph 只接受这些子节点，保证"同一行文字混排"的语义。 */
       const INLINE_TYPES = Object.freeze(['text', 'badge', 'icon', 'emphasis', 'code', 'link'])
@@ -1019,7 +1020,7 @@ window.__ModuleLoader__.load({
       const MAX_COPY_BUTTONS = 4
 
       const DRAWING_SHAPES = new Set(['rect', 'circle', 'line', 'path', 'label'])
-      const DRAWING_MAX_SHAPES = 64
+      const DRAWING_MAX_SHAPES = LIMITS.drawingShapes
       const DRAWING_MAX_VIEWS = 6
       const DRAWING_COLOR = new Set(['text', 'muted', 'border', 'surface', 'accent', 'neutral', 'success', 'warning', 'danger', 'info', 'none'])
       const DRAWING_ALIGN = new Map([['start', 'start'], ['middle', 'middle'], ['end', 'end'], ['left', 'start'], ['center', 'middle'], ['right', 'end']])
@@ -1284,10 +1285,11 @@ window.__ModuleLoader__.load({
           if (typeof node.type !== 'string') return failNode(node, path, '组件类型需要字符串')
           if (!Object.hasOwn(REGISTRY, node.type)) return failNode(node, path, `未知组件类型 ${node.type}`)
           const shape = DRAWING_SHAPES.has(node.type)
-          if (parentType === 'drawing' && !shape && node.type !== 'view') return failNode(node, path, 'drawing 只接受图形原语与 view')
+          if (parentType === 'drawing' && !shape && node.type !== 'view' && node.type !== 'repeat') return failNode(node, path, 'drawing 只接受图形原语、view 与 repeat')
           if (node.type === 'view' && parentType !== 'drawing' && parentType !== 'views') return failNode(node, path, 'view 需要直接放在 drawing 或 views 里')
-          if (parentType === 'drawing-view' && !shape) return failNode(node, path, 'drawing 的 view 只接受图形原语')
-          if (shape && parentType !== 'drawing' && parentType !== 'drawing-view') return failNode(node, path, '图形原语需要放在 drawing 或其 view 里')
+          if (parentType === 'drawing-view' && !shape && node.type !== 'repeat') return failNode(node, path, 'drawing 的 view 只接受图形原语与 repeat')
+          if (node.type === 'repeat' && parentType !== 'drawing' && parentType !== 'drawing-view') return failNode(node, path, 'repeat 需要直接放在 drawing 或其 view 里')
+          if (shape && parentType !== 'drawing' && parentType !== 'drawing-view' && parentType !== 'repeat') return failNode(node, path, '图形原语需要放在 drawing、view 或 repeat 模板里')
           const spec = REGISTRY[node.type]
           if (spec.children && Array.isArray(node.children) && node.children.length > LIMITS.nodes - nodes) {
             fatal.push(`节点数超过 ${LIMITS.nodes}`)
@@ -1461,11 +1463,28 @@ window.__ModuleLoader__.load({
             return failNode(node, path, 'table.filter 只能绑定 $state.*')
           }
           let conditionExpression = null
-          if (props.when !== undefined && typeof props.when !== 'boolean' && readBinding(props.when).scope !== 'state') {
-            if (typeof props.when === 'string' && props.when.includes('$state.')) conditionExpression = compileDataset(props.when)
+          const inRepeatTemplate = parentType === 'repeat'
+          if (props.when !== undefined && typeof props.when !== 'boolean'
+            && readBinding(props.when).scope !== 'state' && !(inRepeatTemplate && readBinding(props.when).scope === 'data')) {
+            if (typeof props.when === 'string' && (props.when.includes('$state.') || inRepeatTemplate && props.when.includes('$data.'))) conditionExpression = compileDataset(props.when)
             if (conditionExpression === null) return failNode(node, path, 'when 需要布尔值、$state.* 绑定或局部条件')
           }
           let datasetExpression = null
+          if (node.type === 'repeat') {
+            const items = readBinding(props.items)
+            if (items.scope === undefined) {
+              if (Array.isArray(items.literal)) {
+                if (!fitsStateBudget(items.literal)) return failNode(node, path, 'repeat.items 数组超出安全预算')
+              } else {
+                datasetExpression = compileDataset(items.literal)
+                if (datasetExpression === null) return failNode(node, path, 'repeat.items 需要 JSON 数组、完整绑定或纯表达式')
+              }
+            }
+            const template = Array.isArray(node.children) ? node.children : []
+            if (template.length === 0 || template.some((child) => !DRAWING_SHAPES.has(child?.type))) {
+              return failNode(node, path, 'repeat 需要至少一个图形原语模板，且不允许其他子项')
+            }
+          }
           if (node.type === 'chart') {
             if (!['bar', 'line', 'donut'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut')
             if (props.xScale !== undefined && (props.kind !== 'line' || props.xScale !== 'linear')) return failNode(node, path, '数值横轴只用于折线图')
@@ -1507,13 +1526,16 @@ window.__ModuleLoader__.load({
           if (node.type === 'drawing') {
             const children = Array.isArray(node.children) ? node.children : []
             const views = children.filter((child) => child?.type === 'view')
-            const count = children.length - views.length + views.reduce((sum, child) => sum + (Array.isArray(child.children) ? child.children.length : 0), 0)
+            const declarations = children.flatMap((child) => child?.type === 'view' && Array.isArray(child.children) ? child.children : [child])
+            const count = declarations.reduce((sum, child) => sum + (child?.type === 'repeat'
+              ? (Array.isArray(child.children) ? child.children.length : 0)
+              : 1), 0)
             if (views.length > DRAWING_MAX_VIEWS) return failNode(node, path, `drawing 最多支持 ${DRAWING_MAX_VIEWS} 个 view`)
             if (count === 0 || count > DRAWING_MAX_SHAPES) return failNode(node, path, `drawing 需要 1–${DRAWING_MAX_SHAPES} 个图形原语`)
           }
           const geometryExpressions = {}
           const compileGeometry = (key, source) => {
-            if (!source.includes('$state.')) return undefined
+            if (!source.includes('$state.') && !(inRepeatTemplate && source.includes('$data.'))) return undefined
             const expression = compileDataset(source)
             if (expression === null) return undefined
             geometryExpressions[key] = expression
@@ -1603,7 +1625,10 @@ window.__ModuleLoader__.load({
             }
           }
           if (node.type === 'views' && children.length === 0) return failNode(node, path, 'views 没有可用视图')
-          if (node.type === 'drawing' && !children.some((child) => DRAWING_SHAPES.has(child.type) || child.type === 'view' && child.children.some((part) => DRAWING_SHAPES.has(part.type)))) {
+          const hasGraphic = (child) => DRAWING_SHAPES.has(child?.type)
+            || child?.type === 'repeat' && child.children.some((part) => DRAWING_SHAPES.has(part.type))
+            || child?.type === 'view' && child.children.some((part) => hasGraphic(part))
+          if (node.type === 'drawing' && !children.some(hasGraphic)) {
             return failNode(node, path, 'drawing 需要至少一个可验证的图形原语')
           }
           // 属性白名单：只保留组件 REGISTRY 声明的 props + 通用属性，未知属性（onClick/style/…）一律剥离
@@ -1735,6 +1760,7 @@ window.__ModuleLoader__.load({
         views: 'views',
         drawing: 'drawing',
         view: 'view',
+        repeat: 'repeat',
         rect: 'rect',
         circle: 'circle',
         line: 'line',
@@ -1756,9 +1782,9 @@ window.__ModuleLoader__.load({
         button: 'button',
       })
 
-      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, views: true, drawing: true, view: true })
+      const CONTAINERS = Object.freeze({ row: true, column: true, grid: true, card: true, steps: true, lane: true, details: true, views: true, drawing: true, view: true, repeat: true })
       const VIEW_LAYOUTS = new Set(['row', 'column', 'grid', 'card', 'details'])
-      const DRAWING_CONTENT = new Set(['rect', 'circle', 'line', 'path', 'label', 'view'])
+      const DRAWING_CONTENT = new Set(['rect', 'circle', 'line', 'path', 'label', 'view', 'repeat'])
       // 交互控件和图形原语隐式闭合。step 也保留旧的无闭合写法。
       const VOID_TAGS = Object.freeze({ metric: true, divider: true, chart: true, segmented: true, table: true, toggle: true, slider: true, input: true, step: true, node: true, edge: true, derive: true, button: true, rect: true, circle: true, line: true, path: true, label: true })
 
@@ -2038,6 +2064,7 @@ window.__ModuleLoader__.load({
         views: ['label', 'bind'],
         drawing: ['width', 'height', 'label'],
         view: ['label', 'caption'],
+        repeat: ['items'],
         rect: ['x', 'y', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],
         circle: ['cx', 'cy', 'r', 'fill', 'stroke', 'strokeWidth', 'opacity'],
         line: ['x1', 'y1', 'x2', 'y2', 'stroke', 'strokeWidth', 'strokeDasharray', 'opacity'],
@@ -2129,7 +2156,7 @@ window.__ModuleLoader__.load({
         const compile = (element, parentType) => {
           if (element.name === '#text') return { kind: 'text', text: String(element.text ?? '') }
           const attrs = normalizeAttrs(element)
-          const drawingLabel = element.name === 'text' && (parentType === 'drawing' || parentType === 'drawing-view')
+          const drawingLabel = element.name === 'text' && (parentType === 'drawing' || parentType === 'drawing-view' || parentType === 'repeat')
             && attrs.x !== undefined && attrs.y !== undefined
           const tagName = drawingLabel ? 'label' : element.name
           const type = Object.hasOwn(ML_TAGS, tagName) ? ML_TAGS[tagName] : undefined
@@ -3118,7 +3145,44 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function IuiDrawing({ item, resolve, scope, visible, streaming, adaptive, weight }) {
+    function renderDrawingElements(entries, context, resolveDataset) {
+      const shapes = []
+      const limit = IUI_AST.LIMITS.drawingShapes
+      // Reserve room for ordinary marks even if a repeat appears earlier in the drawing.
+      let remaining = limit - entries.filter(({ child }) => Object.hasOwn(DRAWING_TAGS, child.type)).length
+      let error
+      for (const { child, key } of entries) {
+        if (child.type !== 'repeat') {
+          const shape = renderDrawingShape(child, key, context)
+          if (shape !== null) shapes.push(shape)
+          continue
+        }
+        if (!context.visible(child)) continue
+        const items = resolveDataset(child, child.props.items)
+        if (!Array.isArray(items)) {
+          error ??= '图形数据暂不可用。'
+          continue
+        }
+        const count = items.length * child.children.length
+        if (count > remaining) {
+          error ??= `同一绘图最多 ${limit} 个图元。`
+          continue
+        }
+        remaining -= count
+        for (const [index, item] of items.entries()) {
+          const scope = { ...context.scope, data: { ...context.scope.data, item, index } }
+          const resolve = (value) => IUI_AST.resolveValue(value, scope)
+          const shapeContext = { ...context, resolve, scope, visible: (mark) => isItemVisible(mark, resolve, scope) }
+          for (const [order, mark] of child.children.entries()) {
+            const shape = renderDrawingShape(mark, `${key}-${index}-${order}`, shapeContext)
+            if (shape !== null) shapes.push(shape)
+          }
+        }
+      }
+      return { shapes, error }
+    }
+
+    function IuiDrawing({ item, resolve, resolveDataset, scope, visible, streaming, adaptive, weight }) {
       const [choice, choose] = React.useState(null)
       const captionId = React.useId()
       const weightStyle = weight === undefined ? {} : WEIGHT_STYLE[weight]
@@ -3157,11 +3221,15 @@ window.__ModuleLoader__.load({
       const selected = options.find(({ index }) => index === choice) ?? options[0]
       const caption = selected?.caption
       const shapeContext = { resolve, scope, visible, streaming, frame }
-      const shapes = item.children.flatMap((child, index) => {
-        if (child.type !== 'view') return renderDrawingShape(child, index, shapeContext)
+      const entries = item.children.flatMap((child, index) => {
+        if (child.type !== 'view') return { child, key: String(index) }
         if (selected?.index !== index) return []
-        return child.children.map((shape, order) => renderDrawingShape(shape, `${index}-${order}`, shapeContext))
-      }).filter(Boolean)
+        return child.children.map((mark, order) => ({ child: mark, key: `${index}-${order}` }))
+      })
+      const { shapes, error } = renderDrawingElements(entries, shapeContext, resolveDataset)
+      const repeatNotice = streaming !== true && error !== undefined ? h('div', {
+        role: 'status', 'data-iui-drawing-repeat-error': '1', style: { color: C.muted, fontSize: 12 },
+      }, error) : null
 
       const graphLabel = selected === undefined ? viewport.label : `${viewport.label} · ${selected.label}`
       const width = frame === null ? viewport.width : frame.right - frame.x
@@ -3175,7 +3243,7 @@ window.__ModuleLoader__.load({
         : svgCanvas(width, height, shapes, graphLabel, { drawing: true, fluid, x: frame?.x, y: frame?.y, describedBy: caption === undefined ? undefined : captionId })
       const layout = { minWidth: 0, maxWidth: '100%', ...weightStyle }
       const visualLayout = { width: visualWidth, margin: '0 auto' }
-      if (!hasViews) return h('div', { 'data-iui-weight': weight, style: fluid ? { ...layout, ...visualLayout } : layout }, graph)
+      if (!hasViews) return h('div', { 'data-iui-weight': weight, style: fluid ? { ...layout, ...visualLayout } : layout }, graph, repeatNotice)
       return h('figure', {
         'data-iui-drawing-comparison': '1',
         'data-iui-weight': weight,
@@ -3194,7 +3262,7 @@ window.__ModuleLoader__.load({
             onClick: () => choose(option.index),
           }, option.label)
         })) : null,
-      graph,
+      graph, repeatNotice,
       options.some((option) => option.caption !== undefined) ? h('figcaption', {
         id: captionId,
         'data-iui-drawing-caption': '1',
@@ -4190,7 +4258,7 @@ window.__ModuleLoader__.load({
           return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(text))
         }
         if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve, resolveText, visible })
-        if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, scope, visible, streaming, adaptive })
+        if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, resolveDataset, scope, visible, streaming, adaptive })
         if (item.type === 'views') return h(IuiViews, {
           key, item, resolve, visible, streaming,
           render: (child, index) => node(child, `${key}-${index}`),

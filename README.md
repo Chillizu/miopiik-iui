@@ -182,7 +182,7 @@ Any component may carry `when="$state.*"` (optionally with `is="value"` for equa
 
 ### Local state and bindings
 
-Controls write local `$state`, and other components read dot paths such as `$state.a.b`. The bounded expression interpreter powers `derive`, chart and table datasets, visibility, and drawing coordinates and labels. It supports arithmetic, comparisons, and a fixed function set, including `sin` and `cos` in radians and `exp`. Controls update the current message in the browser without sending a model request. `$data` is reserved for read-only input and currently resolves to `undefined`.
+Controls write local `$state`, and other components read dot paths such as `$state.a.b`. The bounded expression interpreter powers `derive`, chart and table datasets, visibility, and drawing coordinates and labels. It supports arithmetic, comparisons, and a fixed function set, including `sin` and `cos` in radians and `exp`. Controls update the current message in the browser without sending a model request. Inside a drawing's `repeat`, `$data.item` and `$data.index` are read-only references for drawing each array entry.
 
 ### Legacy `ink-view` replay
 
@@ -252,7 +252,7 @@ An equivalent `iui/1` JSON AST block:
 ```
 ~~~
 
-The system-prompt section injected by [index.js](index.js) instructs the model to default to standard Markdown and use IUI only for data comparisons, trends, or local view switching, without inspecting source files or running tools for UI rendering. Background findings are recorded in [docs/IUI-NATURAL-OUTPUT-AUDIT.md](docs/IUI-NATURAL-OUTPUT-AUDIT.md).
+The plugin's system prompt asks the model to place an illustration alongside the explanation when it helps the reader understand structure, motion, change, or a comparison. The prompt uses the same drawing primitives for still and interactive illustrations. [Prompt source](index.js)
 
 ## Compatibility
 

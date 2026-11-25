@@ -225,6 +225,30 @@ const ADAPTIVE_DRAWING_ML = `<ui density="auto">
   </drawing>
 </ui>`
 
+const DRAWING_REPEAT_ML = `<ui density="auto">
+  <state name="items" value='[{"x":30,"name":"Alpha"},{"x":90,"name":"Beta"}]'/>
+  <state name="shift" value="0"/>
+  <slider label="偏移" bind="$state.shift" min="0" max="20" step="1"/>
+  <drawing width="160" height="80" label="项目位置">
+    <view label="当前项目" caption="按项目显示位置与名称。">
+      <repeat items="$state.items"><circle cx="$data.item.x + $state.shift" cy="40" r="6"/><label x="$data.item.x + $state.shift" y="60" text="$data.item.name"/></repeat>
+    </view>
+  </drawing>
+</ui>`
+
+const REPEAT_OVERFLOW_ITEMS = Array.from({ length: 65 }, (_, index) => ({ x: 20 + index, name: `N${index}` }))
+const DRAWING_REPEAT_OVERFLOW_ML = `<ui density="auto">
+  <state name="items" value='${JSON.stringify(REPEAT_OVERFLOW_ITEMS)}'/>
+  <drawing width="180" height="80" label="超限项目">
+    <view label="结果" caption="普通图元仍可用。">
+      <circle cx="12" cy="12" r="4"/>
+      <repeat items="$state.items"><circle cx="$data.item.x" cy="40" r="3"/><label x="$data.item.x" y="60" text="$data.item.name"/></repeat>
+      <circle cx="168" cy="12" r="4"/>
+      <label x="90" y="76" text="仍可见"/>
+    </view>
+  </drawing>
+</ui>`
+
 const BOUND_VIEWS_ML = `<ui density="auto">
   <state name="phase" value='"before"'/>
   <views label="变化过程" bind="$state.phase">
@@ -592,6 +616,8 @@ const MAIN_RUN = `
       comparison:mountBlock(${JSON.stringify(DRAWING_COMPARISON_ML)}),
       staticDrawing:mountBlock(${JSON.stringify(STATIC_DRAWING_ML)}),
       adaptiveDrawing:mountBlock(${JSON.stringify(ADAPTIVE_DRAWING_ML)}),
+      repeatDrawing:mountBlock(${JSON.stringify(DRAWING_REPEAT_ML)}),
+      repeatOverflowDrawing:mountBlock(${JSON.stringify(DRAWING_REPEAT_OVERFLOW_ML)}),
       boundViews:mountBlock(${JSON.stringify(BOUND_VIEWS_ML)}),
       numericAxis:mountBlock(${JSON.stringify(NUMERIC_AXIS_ML)}),
       chartScrub:mountBlock(${JSON.stringify(CHART_SCRUB_ML)}),
@@ -1022,6 +1048,34 @@ const MAIN_RUN = `
           && adaptiveGraph()?.getAttribute('viewBox') === initialAdaptiveViewBox
           && adaptiveBounds()?.viewRight >= adaptiveBounds()?.right
           ? true : '切换视图后包围盒或共享视口发生变化');
+        const repeatDrawing = r3.repeatDrawing;
+        const repeatGraph = () => repeatDrawing.querySelector('svg[data-iui-drawing]');
+        const repeatValues = () => [...(repeatGraph()?.querySelectorAll('circle') ?? [])].map(circle => circle.getAttribute('cx')).join(',');
+        const repeatLabels = () => [...(repeatGraph()?.querySelectorAll('text') ?? [])].map(label => label.textContent).join(',');
+        const repeatInitialViewBox = repeatGraph()?.getAttribute('viewBox');
+        check('drawingRepeatInitial', () => repeatValues() === '30,90' && repeatLabels() === 'Alpha,Beta'
+          && repeatDrawing.querySelector('figure') !== null
+          && repeatInitialViewBox !== undefined && repeatInitialViewBox !== null
+          ? true : 'repeat 项目的属性/顺序/图形视口初值错误: ' + repeatValues() + ' / ' + repeatLabels());
+        const repeatShift = repeatDrawing.querySelector('[data-iui-slider] input[type="range"]');
+        if (repeatShift) {
+          repeatShift.value = '12';
+          repeatShift.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(35);
+        }
+        check('drawingRepeatBinding', () => repeatShift !== null && repeatValues() === '42,102'
+          && repeatLabels() === 'Alpha,Beta' && repeatGraph()?.getAttribute('viewBox') === repeatInitialViewBox
+          ? true : '滑轨未更新每项标量表达式，或图形视口发生变化: ' + repeatValues());
+        const repeatOverflow = r3.repeatOverflowDrawing;
+        check('drawingRepeatOverflow', () => {
+          const graph = repeatOverflow.querySelector('svg[data-iui-drawing]');
+          const error = repeatOverflow.querySelector('[data-iui-drawing-repeat-error][role="status"]');
+          const circles = [...(graph?.querySelectorAll('circle') ?? [])];
+          const labels = [...(graph?.querySelectorAll('text') ?? [])].map(label => label.textContent);
+          return error !== null && circles.map(circle => circle.getAttribute('cx')).join(',') === '12,168'
+            && labels.join(',') === '仍可见'
+            ? true : '超限 repeat 应局部报错并保留普通兄弟图元';
+        });
         const boundViews = r3.boundViews;
         const tabs = () => [...boundViews.querySelectorAll('[role=tab]')];
         tabs()[1]?.click();

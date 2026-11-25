@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { drawingProps, resolveValue, validateAst } from '../shared/iui-ast.js'
+import { drawingProps, LIMITS, resolveValue, validateAst } from '../shared/iui-ast.js'
 import { evaluateExpr } from '../shared/iui-expr.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 
@@ -32,6 +32,34 @@ test('drawing composes closed SVG shapes, semantic colors and local state bindin
   assert.deepEqual(drawingProps('circle', root.children[1].props, resolve), { cx: 142, cy: 60, r: 8, fill: 'accent' })
   assert.equal(drawingProps('path', root.children[3].props, resolve).d, 'M 20 20 q 15 25 54 30 a 20 18 0 1 1 12 15 z')
   assert.equal(drawingProps('label', root.children[4].props, resolve).text, '字段 A')
+})
+
+test('drawing repeat keeps bounded templates, item sources, data expressions and text aliases', () => {
+  const checked = check(`<ui><state name="items" value='[{"x":12,"name":"甲"}]'/><drawing width="120" height="80" label="列表">
+    <repeat items="$state.items"><circle cx="$data.item.x + 0" cy="40" r="6" when="$data.item.x > 0"/><text x="$data.item.x" y="60">$data.item.name</text></repeat>
+  </drawing></ui>`)
+  assert.equal(checked.ok, true)
+  assert.equal(LIMITS.drawingShapes, 64)
+  const repeat = checked.ast.root.children[0]
+  assert.equal(repeat.type, 'repeat')
+  assert.equal(repeat.props.items, '$state.items')
+  assert.deepEqual(repeat.children.map((shape) => shape.type), ['circle', 'label'])
+  assert.equal(repeat.children[0].props.cx, '$data.item.x + 0')
+  assert.equal(repeat.children[0].geometryExpressions.cx.ok, true)
+  assert.equal(repeat.children[0].conditionExpression.ok, true)
+  assert.equal(repeat.children[1].props.text, '$data.item.name')
+
+  const literal = check(`<ui><drawing width="80" height="60" label="空"><repeat items="[]"><circle cx="1" cy="1" r="1"/></repeat></drawing></ui>`)
+  assert.equal(literal.ok, true)
+  assert.deepEqual(literal.ast.root.children[0].props.items, [])
+  assert.equal(check(`<ui><drawing width="80" height="60" label="视图"><view label="视图"><repeat items="$data.rows"><circle cx="1" cy="1" r="1"/></repeat></view></drawing></ui>`).ok, true)
+  for (const body of [
+    '<repeat items="items"><circle cx="1" cy="1" r="1"/></repeat>',
+    '<repeat items="$state.items"><repeat items="$state.items"><circle cx="1" cy="1" r="1"/></repeat></repeat>',
+    '<repeat items="$state.items"><button label="x" action="copy" value="y"/></repeat>',
+  ]) assert.equal(check(`<ui><drawing width="80" height="60" label="坏">${body}</drawing></ui>`).ok, false)
+  const tooManyTemplates = '<repeat items="[]">' + '<circle cx="1" cy="1" r="1"/>'.repeat(65) + '</repeat>'
+  assert.equal(check(`<ui><drawing width="80" height="60" label="多">${tooManyTemplates}</drawing></ui>`).ok, false)
 })
 
 test('drawings keep safe siblings and discard unsupported graphics attributes', () => {

@@ -179,7 +179,44 @@
       })
     }
 
-    function IuiDrawing({ item, resolve, scope, visible, streaming, adaptive, weight }) {
+    function renderDrawingElements(entries, context, resolveDataset) {
+      const shapes = []
+      const limit = IUI_AST.LIMITS.drawingShapes
+      // Reserve room for ordinary marks even if a repeat appears earlier in the drawing.
+      let remaining = limit - entries.filter(({ child }) => Object.hasOwn(DRAWING_TAGS, child.type)).length
+      let error
+      for (const { child, key } of entries) {
+        if (child.type !== 'repeat') {
+          const shape = renderDrawingShape(child, key, context)
+          if (shape !== null) shapes.push(shape)
+          continue
+        }
+        if (!context.visible(child)) continue
+        const items = resolveDataset(child, child.props.items)
+        if (!Array.isArray(items)) {
+          error ??= '图形数据暂不可用。'
+          continue
+        }
+        const count = items.length * child.children.length
+        if (count > remaining) {
+          error ??= `同一绘图最多 ${limit} 个图元。`
+          continue
+        }
+        remaining -= count
+        for (const [index, item] of items.entries()) {
+          const scope = { ...context.scope, data: { ...context.scope.data, item, index } }
+          const resolve = (value) => IUI_AST.resolveValue(value, scope)
+          const shapeContext = { ...context, resolve, scope, visible: (mark) => isItemVisible(mark, resolve, scope) }
+          for (const [order, mark] of child.children.entries()) {
+            const shape = renderDrawingShape(mark, `${key}-${index}-${order}`, shapeContext)
+            if (shape !== null) shapes.push(shape)
+          }
+        }
+      }
+      return { shapes, error }
+    }
+
+    function IuiDrawing({ item, resolve, resolveDataset, scope, visible, streaming, adaptive, weight }) {
       const [choice, choose] = React.useState(null)
       const captionId = React.useId()
       const weightStyle = weight === undefined ? {} : WEIGHT_STYLE[weight]
@@ -218,11 +255,15 @@
       const selected = options.find(({ index }) => index === choice) ?? options[0]
       const caption = selected?.caption
       const shapeContext = { resolve, scope, visible, streaming, frame }
-      const shapes = item.children.flatMap((child, index) => {
-        if (child.type !== 'view') return renderDrawingShape(child, index, shapeContext)
+      const entries = item.children.flatMap((child, index) => {
+        if (child.type !== 'view') return { child, key: String(index) }
         if (selected?.index !== index) return []
-        return child.children.map((shape, order) => renderDrawingShape(shape, `${index}-${order}`, shapeContext))
-      }).filter(Boolean)
+        return child.children.map((mark, order) => ({ child: mark, key: `${index}-${order}` }))
+      })
+      const { shapes, error } = renderDrawingElements(entries, shapeContext, resolveDataset)
+      const repeatNotice = streaming !== true && error !== undefined ? h('div', {
+        role: 'status', 'data-iui-drawing-repeat-error': '1', style: { color: C.muted, fontSize: 12 },
+      }, error) : null
 
       const graphLabel = selected === undefined ? viewport.label : `${viewport.label} · ${selected.label}`
       const width = frame === null ? viewport.width : frame.right - frame.x
@@ -236,7 +277,7 @@
         : svgCanvas(width, height, shapes, graphLabel, { drawing: true, fluid, x: frame?.x, y: frame?.y, describedBy: caption === undefined ? undefined : captionId })
       const layout = { minWidth: 0, maxWidth: '100%', ...weightStyle }
       const visualLayout = { width: visualWidth, margin: '0 auto' }
-      if (!hasViews) return h('div', { 'data-iui-weight': weight, style: fluid ? { ...layout, ...visualLayout } : layout }, graph)
+      if (!hasViews) return h('div', { 'data-iui-weight': weight, style: fluid ? { ...layout, ...visualLayout } : layout }, graph, repeatNotice)
       return h('figure', {
         'data-iui-drawing-comparison': '1',
         'data-iui-weight': weight,
@@ -255,7 +296,7 @@
             onClick: () => choose(option.index),
           }, option.label)
         })) : null,
-      graph,
+      graph, repeatNotice,
       options.some((option) => option.caption !== undefined) ? h('figcaption', {
         id: captionId,
         'data-iui-drawing-caption': '1',
@@ -1251,7 +1292,7 @@
           return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(text))
         }
         if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve, resolveText, visible })
-        if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, scope, visible, streaming, adaptive })
+        if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, resolveDataset, scope, visible, streaming, adaptive })
         if (item.type === 'views') return h(IuiViews, {
           key, item, resolve, visible, streaming,
           render: (child, index) => node(child, `${key}-${index}`),
