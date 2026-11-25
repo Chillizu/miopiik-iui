@@ -1,6 +1,6 @@
 --- a/upstream/lib/client.js
 +++ b/upstream/lib/client.js
-@@ -8302,7 +8302,99 @@
+@@ -8302,7 +8302,92 @@
  			return fileMediaUrl(base, path);
  		}
  		/** Renders non-blank reasoning blocks as independent disclosures alongside the response. */
@@ -21,28 +21,19 @@
 +			const registry = globalThis.__miopiikMarkdownEmbeds;
 +			return registry !== undefined && typeof registry.renderBlock === "function" ? registry : null;
 +		}
-+		// 流式增量：尾部未闭合的 iui 围栏逐分片渲染，已定稿前缀仍走常规切分。
-+		function miopiikStreamSplit(text) {
-+			try {
-+				if (!miopiikEnabled()) return null;
-+				const registry = miopiikRegistry();
-+				if (registry === null || typeof registry.splitStreamingFence !== "function" || typeof registry.renderBlockStreaming !== "function") return null;
-+				const split = registry.splitStreamingFence(text);
-+				if (split.hasOpen !== true) return null;
-+				const live = registry.renderBlockStreaming(split.live);
-+				return live === null ? null : { pre: split.pre, live };
-+			} catch {
-+				return null;
-+			}
-+		}
-+		// 块级切分（只按闭合围栏/裸 <ui>）；行内 token 留在文本段里，由 DOM 嫁接原位替换。
-+		function miopiikBlockSegments(text) {
++		// One ordered segment list keeps the open IUI block in place when the fence closes.
++		function miopiikBlockSegments(text, streaming) {
 +			try {
 +				if (!miopiikEnabled()) return null;
 +				const registry = miopiikRegistry();
 +				if (registry === null || typeof registry.segmentsBlocks !== "function") return null;
-+				const parts = registry.segmentsBlocks(text);
-+				return Array.isArray(parts) ? parts : null;
++				const canRecover = typeof registry.renderBlockInterrupted === "function";
++				const legacy = !canRecover && streaming && typeof registry.renderBlockStreaming === "function"
++					? registry.splitStreamingFence?.(text) : null;
++				const parts = registry.segmentsBlocks(legacy?.hasOpen ? legacy.pre : text, { includeOpenIui: canRecover });
++				if (!Array.isArray(parts)) return null;
++				if (!legacy?.hasOpen) return parts;
++				return [...parts.filter(part => part.kind !== "text" || part.text !== ""), { kind: "block", lang: "iui", raw: legacy.live, open: true }];
 +			} catch {
 +				return null;
 +			}
@@ -84,24 +75,26 @@
 +			}
 +			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, props, key);
 +		}
-+		function MiopiikBlockSegment({ raw, lang, streaming, labels, mentions, pathImages }) {
++		const MiopiikBlockSegment = (0, react.memo)(function MiopiikBlockSegment({ raw, lang, mode, labels, mentions, pathImages }) {
 +			const registry = miopiikRegistry();
 +			try {
 +				const node = lang === "html" && typeof registry.renderHtmlBlock === "function"
 +					? registry.renderHtmlBlock(raw)
++					: mode === "live" ? registry.renderBlockStreaming?.(raw)
++					: mode === "interrupted" ? registry.renderBlockInterrupted?.(raw)
 +					: registry.renderBlock(raw);
-+				return node ?? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: raw, streaming, labels, fileMentions: mentions, pathImages });
++				return node ?? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: raw, streaming: mode === "live", labels, fileMentions: mentions, pathImages });
 +			} catch (error) {
 +				// 局部降级：块渲染失败只影响这一段，交回纯文本
 +				return (0, react_jsx_runtime.jsx)("span", { "data-miopiik-embed-fallback": String(error && error.message || error) }, raw);
 +			}
-+		}
++		});
 +		// <<< miopiik:markdown-embeds
 +const AssistantMarkdown = (0, react.memo)(function AssistantMarkdown({ blocks, streaming, textInteractionSource = false, interrupted, loadImage, groupPart, useDisclosure, reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t }) {
  			const labels = (0, react.useMemo)(() => markdownLabels(t), [t]);
  			const pathImages = (0, react.useMemo)(() => {
  				return { resolve: (value) => localPathMediaUrl(document.baseURI, value) };
-@@ -8316,16 +8408,43 @@
+@@ -8316,16 +8401,38 @@
  				if (groupPart === "reasoning" && block.kind !== "reasoning") continue;
  				if (groupPart === "response" && block.kind === "reasoning") continue;
  				switch (block.kind) {
@@ -114,37 +107,32 @@
 -							pathImages,
 -							textInteractionSource
 +					case "text": {
-+						const streamSplit = streaming === true ? miopiikStreamSplit(block.text) : null;
-+						const text = streamSplit?.pre ?? block.text;
-+						const segments = miopiikBlockSegments(text) ?? [{ kind: "text", text }];
++						const text = block.text;
++						const segments = miopiikBlockSegments(text, streaming) ?? [{ kind: "text", text }];
 +						const markdownProps = { streaming, labels, fileMentions: mentions, pathImages };
-+						if (streamSplit === null && segments.length === 1 && segments[0].kind === "text") {
++						if (segments.length === 1 && segments[0].kind === "text") {
 +							rendered.push(miopiikRenderText(text, { ...markdownProps, textInteractionSource }, i));
 +							break;
 +						}
 +						const segmentNodes = [];
++						let hasLiveBlock = false;
 +						segments.forEach((part, partIndex) => {
 +							if (part.kind === "text") {
 +								if (part.text !== "") segmentNodes.push(miopiikRenderText(part.text, markdownProps, i + ":" + partIndex));
 +								return;
 +							}
++							const mode = part.open === true ? (streaming === true ? "live" : "interrupted") : undefined;
++							if (mode === "live") hasLiveBlock = true;
 +							// 块组件必须独占整行，不能被外层 flex 压成窄卡片。
 +							segmentNodes.push((0, react_jsx_runtime.jsx)("div", {
 +								"data-miopiik-block-wrap": "1",
 +								style: { width: "100%", flexBasis: "100%", minWidth: 0 },
-+								children: (0, react_jsx_runtime.jsx)(MiopiikBlockSegment, { raw: part.raw, lang: part.lang, streaming, labels, mentions, pathImages })
++								children: (0, react_jsx_runtime.jsx)(MiopiikBlockSegment, { raw: part.raw, lang: part.lang, mode, labels, mentions, pathImages })
 +							}, i + ":" + partIndex + ":block"));
 +						});
-+						if (streamSplit !== null) {
-+							segmentNodes.push((0, react_jsx_runtime.jsx)("div", {
-+								"data-miopiik-block-wrap": "1",
-+								style: { width: "100%", flexBasis: "100%", minWidth: 0 },
-+								children: streamSplit.live
-+							}, "live"));
-+						}
 +						rendered.push((0, react_jsx_runtime.jsx)("div", {
 +							"data-miopiik-segments": "block",
-+							"data-miopiik-stream": streamSplit !== null ? "1" : undefined,
++							"data-miopiik-stream": hasLiveBlock ? "1" : undefined,
 +							style: { width: "100%", minWidth: 0 },
 +							children: segmentNodes
  						}, i));

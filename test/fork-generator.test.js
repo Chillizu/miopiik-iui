@@ -4,7 +4,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runInNewContext } from 'node:vm'
 
+import { splitTrustedBlocks } from '../shared/markdown-segments.js'
 import { isDshInstalled, resolveUpstreamDir } from '../tools/fork-chat-embeds.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -77,7 +79,48 @@ test('生成器 --check 只读：不删除 fork、不删除依赖链接', { skip
   // L-11：行内 token 走「原生先渲染后 DOM 嫁接」，块级才走预切分；流式围栏有专门路由
   assert.match(client, /MiopiikGraftText/u)
   assert.match(client, /graftInline/u)
-  assert.match(client, /miopiikStreamSplit/u)
+  assert.match(client, /includeOpenIui/u)
   // 补丁产物必须同时写出，供上游评审
   assert.match(readFileSync(patch, 'utf8'), /miopiik:markdown-embeds/u)
+})
+
+test('宿主在流式、闭合和中途停止时使用同一块组件和挂载位置', { skip: hostSkip }, () => {
+  if (!existsSync(join(tmp, 'lib', 'client.js'))) run()
+  const client = readFileSync(join(tmp, 'lib', 'client.js'), 'utf8')
+  const helperStart = client.indexOf('// >>> miopiik:markdown-embeds')
+  const assistantStart = client.indexOf('const AssistantMarkdown =', helperStart)
+  const textStart = client.indexOf('case "text": {', assistantStart)
+  const reasoningStart = client.indexOf('case "reasoning":', textStart)
+  assert.ok(helperStart >= 0 && assistantStart > helperStart && textStart > assistantStart && reasoningStart > textStart)
+
+  const render = runInNewContext(`${client.slice(helperStart, assistantStart)}
+    (function render(text, streaming) {
+      const block = { kind: "text", text };
+      const labels = {}, mentions = [], pathImages = {}, rendered = [], i = 0, textInteractionSource = false;
+      switch (block.kind) { ${client.slice(textStart, reasoningStart)} }
+      return rendered[0];
+    })`, {
+    react: { memo: (component) => component },
+    react_jsx_runtime: { jsx: (type, props, key) => ({ type, props, key }) },
+    _deepseek_ai_dsh_client_ui_primitives: { MarkdownText: 'markdown' },
+    __miopiikMarkdownEmbeds: {
+      segmentsBlocks: splitTrustedBlocks,
+      renderBlock: () => 'closed',
+      renderBlockStreaming: () => 'live',
+      renderBlockInterrupted: () => 'interrupted',
+    },
+  })
+
+  const source = '正文\n```iui\n<ui><text>图解</text></ui>\n'
+  const wrapper = (text, streaming) => render(text, streaming).props.children[1]
+  const live = wrapper(source, true)
+  const closed = wrapper(source + '```\n后文', true)
+  const stopped = wrapper(source, false)
+  assert.equal(live.key, closed.key)
+  assert.equal(live.key, stopped.key)
+  for (const [node, result] of [[live, 'live'], [closed, 'closed'], [stopped, 'interrupted']]) {
+    const block = node.props.children
+    assert.equal(block.type, live.props.children.type)
+    assert.equal(block.type(block.props), result)
+  }
 })

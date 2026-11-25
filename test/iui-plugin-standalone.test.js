@@ -192,6 +192,37 @@ test('复用已闭合块的校验结果，开放流与超长块不进入完成�
   assert.notEqual(registry.renderBlock(large(0)).props.document, firstLarge)
 })
 
+test('开放流跳过文档状态键，停止后保留完整图元并给出局部提示', () => {
+  const { registry, sandbox } = loadStandalonePlugin()
+  new Script(`
+    globalThis.sampleKeyWrites = 0;
+    const originalStringify = JSON.stringify;
+    JSON.stringify = function (value, ...args) {
+      if (value && Object.hasOwn(value, 'state') && Object.hasOwn(value, 'root')) sampleKeyWrites += 1;
+      return originalStringify(value, ...args);
+    };
+  `).runInContext(sandbox)
+
+  const start = '<ui fallback="时序说明"><state name="x" value="12"/><drawing width="100" height="50" label="进展">'
+  const shape = '<circle cx="$state.x" cy="20" r="3"/>'
+  const unfinished = start + shape + '<line x1="还未完成'
+  const live = render(registry.renderBlockStreaming(unfinished))
+  assert.equal(live.find(node => node.props['data-iui-streaming'] === '1').props['data-iui-output'], 'ok')
+  assert.equal(live.find(node => node.type === 'circle').props.cx, 12)
+  assert.equal(live.some(node => node.props['data-iui-partial'] === '1'), false)
+  assert.equal(sandbox.sampleKeyWrites, 0)
+
+  const interrupted = render(registry.renderBlockInterrupted(unfinished))
+  assert.equal(interrupted.find(node => node.type === 'circle').props.cx, 12)
+  assert.equal(interrupted.some(node => node.type === 'line'), false)
+  assert.equal(interrupted.some(node => node.props['data-iui-partial'] === '1'), true)
+  assert.equal(sandbox.sampleKeyWrites, 1)
+
+  const full = render(registry.renderBlockInterrupted(start + shape + '</drawing></ui>'))
+  assert.equal(full.find(node => node.type === 'circle').props.cx, 12)
+  assert.equal(full.some(node => node.props['data-iui-partial'] === '1'), false)
+})
+
 test('只包含计算的片段在流式阶段安静等待，完成后显示兜底', () => {
   const { registry } = loadStandalonePlugin()
   const source = '<ui fallback="恢复后逐步消化积压"><column><derive name="queue" expr="5"/></column></ui>'

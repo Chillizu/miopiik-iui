@@ -2,13 +2,15 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { hasTrustedMarkup, splitStreamingFence, splitTrustedBlocks, splitTrustedMarkdown } from '../shared/markdown-segments.js'
+import { forkDir } from '../tools/fork-chat-embeds.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 // fork 是生成物（.gitignore），干净 clone / CI 里不存在；存在时才校验补丁对齐。
-const forkClient = new URL('../upstream/dsh-client-ui-chat-embeds/lib/client.js', import.meta.url)
+const forkClient = join(forkDir, 'lib', 'client.js')
 
 test('纯 Markdown 不切分：没有受信标记时与原生完全一致', () => {
   const md = '**加粗** 与 [链接](https://example.com) 还有 `代码`。'
@@ -64,7 +66,7 @@ test('fork 补丁与当前上游对齐，安装后默认开启，明确关闭时
   assert.match(forked, /data-miopiik-embed-fallback/u)
   // L-11：行内 token 改为原生先渲染后 DOM 嫁接；流式围栏有专门路由
   assert.match(forked, /MiopiikGraftText/u)
-  assert.match(forked, /miopiikStreamSplit/u)
+  assert.match(forked, /includeOpenIui/u)
   // F-42：```html 沙箱文档通道经 lang 分支进 renderHtmlBlock
   assert.match(forked, /renderHtmlBlock/u)
   // 原生 ReasoningRow 仍在（没有被我们替换）
@@ -178,6 +180,35 @@ test('块级专用切分：没有块级标记时整段是一个文本段；裸 <
   assert.equal(bare.some((part) => part.kind === 'block' && part.lang === 'ml-bare'), true)
   const guarded = splitTrustedBlocks('```js\nconst s = "<ui title=\\"a\\"></ui>"\n```')
   assert.equal(guarded.some((part) => part.kind === 'block'), false, '代码围栏里的 <ui> 不识别')
+})
+
+test('定稿流式切分：启用 includeOpenIui 后，尾部开放围栏沿用闭合前的块位置', () => {
+  const openSource = '开头\n```iui\n<ui title="同一块"><text>内容'
+  const closedSource = openSource + '</text></ui>\n```\n结尾'
+  const open = splitTrustedBlocks(openSource, { includeOpenIui: true })
+  const closed = splitTrustedBlocks(closedSource, { includeOpenIui: true })
+
+  assert.deepEqual(open.map((part) => part.kind), ['text', 'block'])
+  assert.deepEqual(open[1], { kind: 'block', lang: 'iui', raw: '<ui title="同一块"><text>内容', open: true })
+  assert.deepEqual(closed.map((part) => part.kind), ['text', 'block', 'text'])
+  assert.deepEqual(closed[1], { kind: 'block', raw: '<ui title="同一块"><text>内容</text></ui>\n', lang: 'iui' })
+  assert.equal(closed[2].text, '\n结尾')
+  assert.equal(splitTrustedBlocks(openSource)[0].text, openSource, '默认模式继续把开放围栏作为原始 Markdown')
+  assert.equal(Object.hasOwn(splitTrustedBlocks(closedSource, { includeOpenIui: true })[1], 'open'), false,
+    '闭合块保持旧对象形状，不增加 open:false')
+})
+
+test('includeOpenIui 不越过外层 Markdown 围栏或非精确的尾部围栏', () => {
+  const tainted = [
+    '说明\n```md\n```iui\n<ui title="示例">',
+    '说明\n~~~~markdown\n```iui\n<ui title="示例">\n~~~~',
+    '前文提到 ```iui\n<ui title="行内">',
+  ]
+  for (const source of tainted) {
+    assert.deepEqual(splitTrustedBlocks(source, { includeOpenIui: true }), [{ kind: 'text', text: source }], source)
+  }
+  const nonExact = '```iui extra\n<ui title="非精确标签">'
+  assert.deepEqual(splitTrustedBlocks(nonExact, { includeOpenIui: true }), [{ kind: 'text', text: nonExact }])
 })
 
 test('```html 围栏：成为 lang=html 的块级段；流式期间不参与围栏路由（保持文本）', () => {

@@ -2420,12 +2420,13 @@ window.__ModuleLoader__.load({
       /** 块级专用切分：只按闭合围栏/行首裸 <ui> 分段，行内 token 保持字面量留在文本段里，
        *  交给 fork 层的「先原生渲染后 DOM 嫁接」（跨 token 完整性根修）。
        *  其他语言的代码围栏内的内容一律原样保留，不识别。 */
-      function splitTrustedBlocks(text) {
-        return splitMarkdown(text, false)
+      function splitTrustedBlocks(text, { includeOpenIui = false } = {}) {
+        return splitMarkdown(text, false, includeOpenIui)
       }
 
-      function splitMarkdown(text, splitInline) {
+      function splitMarkdown(text, splitInline, includeOpenIui = false) {
         const source = String(text ?? '')
+        if (!splitInline && !source.includes('```') && !source.includes('<ui')) return [{ kind: 'text', text: source }]
         const parts = []
         const pushText = (value) => {
           if (value === '') return
@@ -2449,6 +2450,8 @@ window.__ModuleLoader__.load({
           pushPlain(source.slice(cursor, fence.start))
           if (fence.lang !== null && fence.end !== null) {
             parts.push({ kind: 'block', raw: source.slice(fence.contentStart, fence.contentEnd), lang: fence.lang })
+          } else if (includeOpenIui && fence.lang === 'iui') {
+            parts.push({ kind: 'block', raw: source.slice(fence.contentStart), lang: fence.lang, open: true })
           } else {
             pushText(source.slice(fence.start, fence.end ?? source.length))
           }
@@ -3959,14 +3962,16 @@ window.__ModuleLoader__.load({
         && item.children.length > 0 && item.children.every(isComputationOnly)
     }
 
-    function prepareIuiDocument(sample) {
+    function prepareIuiDocument(sample, streaming = false) {
       const checked = IUI_AST.validateAst(sample)
       // 依赖必须是**内容**而不是对象引用：正文每次渲染都会产生新对象，用引用会导致状态被重置。
       let sampleKey
-      try {
-        sampleKey = JSON.stringify(checked.ok ? { state: checked.ast.state, root: checked.ast.root } : sample)
-      } catch {
-        sampleKey = String(sample)
+      if (!streaming) {
+        try {
+          sampleKey = JSON.stringify(checked.ok ? { state: checked.ast.state, root: checked.ast.root } : sample)
+        } catch {
+          sampleKey = String(sample)
+        }
       }
       const adaptive = checked.ok && checked.ast.density === 'auto'
       const density = checked.ok ? (adaptive ? inferDensity(checked.ast.root) : checked.ast.density) : 'panel'
@@ -3977,18 +3982,22 @@ window.__ModuleLoader__.load({
     function IuiSheet({ document, streaming }) {
       const { format, degraded } = document
       const { checked, sampleKey, density, adaptive, computationOnly } = React.useMemo(
-        () => document.prepared ?? prepareIuiDocument(document.doc),
-        [document],
+        () => document.prepared ?? prepareIuiDocument(document.doc, streaming),
+        [document, streaming],
       )
-      const [state, setState] = React.useState(checked.ok ? checked.ast.state : {})
+      const mountedWhileStreaming = React.useRef(streaming === true)
+      const enter = !streaming && !mountedWhileStreaming.current
+      const [editedState, setState] = React.useState(checked.ok ? checked.ast.state : {})
+      const state = streaming && checked.ok ? checked.ast.state : editedState
       // Keep disclosure state by position so conditional unmounting preserves it.
       const [openDetails, setOpenDetails] = React.useState(() => new Map())
-      React.useEffect(() => {
+      React.useLayoutEffect(() => {
+        if (streaming) return
         if (checked.ok) setState(checked.ast.state)
-        // 只有文档内容变化（新块/流式分片）才重置展开态；同一文档的控件交互不得清空。
+        // Reset before paint so the first settled frame uses the final declaration's state.
         setOpenDetails((prev) => (prev.size === 0 ? prev : new Map()))
         // eslint-disable-next-line react-hooks/exhaustive-deps
-      }, [sampleKey])
+      }, [sampleKey, streaming])
       const derived = React.useMemo(
         () => checked.ok && !computationOnly ? deriveState(checked.derivePlan, state) : { state, errors: 0 },
         [checked, computationOnly, state],
@@ -4476,7 +4485,7 @@ window.__ModuleLoader__.load({
           const source = resolveText(props.source)
           return h(
             'div',
-            { key, className: 'miopiik-enter miopiik-chart-frame', 'data-iui-chart': kind, 'data-iui-chart-scale': props.xScale },
+            { key, className: enter ? 'miopiik-enter miopiik-chart-frame' : 'miopiik-chart-frame', 'data-iui-chart': kind, 'data-iui-chart-scale': props.xScale },
             plot,
             textOf(source) === '' ? null : h('div', { className: 'miopiik-chart-source' }, `来源：${textOf(source)}`),
           )
@@ -4527,7 +4536,7 @@ window.__ModuleLoader__.load({
         'div',
         // 流式分片期间不挂入场动画：逐分片重挂载会让淡入闪成频闪
         {
-          className: streaming === true ? undefined : 'miopiik-enter',
+          className: enter ? 'miopiik-enter' : undefined,
           'data-iui-output': 'ok',
           'data-iui-format': format ?? 'json',
           'data-iui-degraded': String(degradedCount),
@@ -4893,10 +4902,11 @@ window.__ModuleLoader__.load({
       return document
     }
 
-    function renderIuiFence(raw, streaming = false) {
+    function renderIuiFence(raw, mode = 'complete') {
+      const streaming = mode === 'live'
       try {
         const text = String(raw ?? '').trim()
-        const document = streaming ? readIuiFence(text, true) : readCompletedIuiFence(text)
+        const document = mode === 'complete' ? readCompletedIuiFence(text) : readIuiFence(text, true)
         return document.ok
           ? h(MemoIuiSheet, { document, streaming })
           : renderIuiFallback({ ...document, streaming })
@@ -5207,10 +5217,11 @@ function registerIuiSettings(ctx) {
       apply(ctx) {
         const registry = {
           segments: (text) => MARKDOWN_SEGMENTS.splitTrustedMarkdown(text),
-          segmentsBlocks: (text) => MARKDOWN_SEGMENTS.splitTrustedBlocks(text),
+          segmentsBlocks: (text, options) => MARKDOWN_SEGMENTS.splitTrustedBlocks(text, options),
           renderInline: (node) => renderInlinePrimitive(node),
           renderBlock: (raw) => renderIuiFence(raw),
-          renderBlockStreaming: (raw) => renderIuiFence(raw, true),
+          renderBlockStreaming: (raw) => renderIuiFence(raw, "live"),
+          renderBlockInterrupted: (raw) => renderIuiFence(raw, "interrupted"),
           graftInline: (root) => MARKDOWN_SEGMENTS.graftTrustedInline(root, renderInlineDom),
           renderHtmlBlock: (raw) => renderHtmlBlock(raw),
           splitStreamingFence: (text) => MARKDOWN_SEGMENTS.splitStreamingFence(text),

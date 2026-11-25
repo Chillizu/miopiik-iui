@@ -91,12 +91,13 @@ export function hasTrustedMarkup(text) {
 /** 块级专用切分：只按闭合围栏/行首裸 <ui> 分段，行内 token 保持字面量留在文本段里，
  *  交给 fork 层的「先原生渲染后 DOM 嫁接」（跨 token 完整性根修）。
  *  其他语言的代码围栏内的内容一律原样保留，不识别。 */
-export function splitTrustedBlocks(text) {
-  return splitMarkdown(text, false)
+export function splitTrustedBlocks(text, { includeOpenIui = false } = {}) {
+  return splitMarkdown(text, false, includeOpenIui)
 }
 
-function splitMarkdown(text, splitInline) {
+function splitMarkdown(text, splitInline, includeOpenIui = false) {
   const source = String(text ?? '')
+  if (!splitInline && !source.includes('```') && !source.includes('<ui')) return [{ kind: 'text', text: source }]
   const parts = []
   const pushText = (value) => {
     if (value === '') return
@@ -120,6 +121,8 @@ function splitMarkdown(text, splitInline) {
     pushPlain(source.slice(cursor, fence.start))
     if (fence.lang !== null && fence.end !== null) {
       parts.push({ kind: 'block', raw: source.slice(fence.contentStart, fence.contentEnd), lang: fence.lang })
+    } else if (includeOpenIui && fence.lang === 'iui') {
+      parts.push({ kind: 'block', raw: source.slice(fence.contentStart), lang: fence.lang, open: true })
     } else {
       pushText(source.slice(fence.start, fence.end ?? source.length))
     }
