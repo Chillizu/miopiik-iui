@@ -259,6 +259,23 @@ test('miopiik-ml：toggle/slider/input/steps/step 解析成对应组件，when/i
   assert.deepEqual(checked.ast.root.children[3].children.map((node) => node.props.title), ['解析', '校验'])
 })
 
+test('miopiik-ml：play 时长解析为字面秒数并由 AST 限定适用控件', () => {
+  const parsed = parseMiopiikMl(`<ui><state name="v" value="0"/><column>
+    <slider bind="$state.v" min="0" max="10" step="1" play="2.5"/>
+    <chart kind="line" scrub="时间" play="4" series='[[0,1],[10,2]]'/>
+  </column></ui>`)
+  assert.equal(parsed.ok, true)
+  assert.equal(parsed.doc.root.children[0].props.play, 2.5)
+  assert.equal(parsed.doc.root.children[1].props.play, 4)
+  assert.equal(validateAst(parsed.doc).ok, true)
+  for (const source of [
+    '<ui><state name="v" value="0"/><slider bind="$state.v" play="0.2"/></ui>',
+    '<ui><chart kind="line" play="2" series="[[0,1],[1,2]]"/></ui>',
+    '<ui><chart kind="interval" play="2" series="[[&quot;A&quot;,0,1,&quot;x&quot;]]"/></ui>',
+    '<ui><state name="v" value="1"/><slider bind="$state.v" play="$state.duration"/></ui>',
+  ]) assert.equal(validateAst(parseMiopiikMl(source).doc).ok, false, source)
+})
+
 test('miopiik-ml：steps 混入非 step 子节点整体降级，兄弟保留', () => {
   const parsed = parseMiopiikMl('<ui fallback="f"><column><steps><step title="一"/><text>混入</text></steps><metric label="保留" value="1"/></column></ui>')
   assert.equal(parsed.ok, true)

@@ -520,7 +520,7 @@
       )
     }
 
-    function renderRangeInput({ min, max, step, value, label, valueText, onChange }) {
+    function renderRangeInput({ min, max, step, value, label, valueText, onChange, onPointerDown }) {
       const span = max - min
       const ratio = Number.isFinite(span) ? (span > 0 ? (value - min) / span : 0)
         : (value / 2 - min / 2) / (max / 2 - min / 2)
@@ -529,11 +529,111 @@
         h('input', {
           type: 'range', min, max, step, value,
           'aria-label': label, 'aria-valuetext': valueText,
+          onPointerDown,
           onChange: (event) => {
             const next = Number(event.target.value)
             if (Number.isFinite(next)) onChange(next)
           },
         }),
+      )
+    }
+
+    function useRangePlayback({ play, min, max, step, value, apply, streaming, activePlayback, sampleKey, statePath }) {
+      const [playing, setPlaying] = React.useState(false)
+      const currentApply = React.useRef(apply)
+      currentApply.current = apply
+      const run = React.useRef(null)
+      const target = statePath ?? run
+      const span = max - min
+      const steps = step === 'any' ? Infinity : span / step
+      const count = Math.floor(steps + Number.EPSILON * Math.max(1, steps) * 2)
+      const discrete = Number.isSafeInteger(count)
+      const decimalPlaces = (number) => {
+        const [mantissa, exponent = '0'] = String(number).split('e')
+        return (mantissa.split('.')[1]?.length ?? 0) - Number(exponent)
+      }
+      const precision = discrete ? Math.max(0, decimalPlaces(min), decimalPlaces(step)) : 0
+      const stepValue = (index) => {
+        const next = min + index * step
+        return Math.min(max, precision <= 100 ? Number(next.toFixed(precision)) : next)
+      }
+      const end = discrete ? stepValue(count) : max
+      const enabled = play !== undefined && Number.isFinite(span) && end > min
+
+      const stop = () => {
+        const session = run.current
+        if (session === null) return
+        clearTimeout(session.timer)
+        session.doc?.removeEventListener('visibilitychange', session.onVisibility)
+        run.current = null
+        if (activePlayback.current?.session === session) activePlayback.current = null
+      }
+      const pause = () => {
+        if (run.current === null) return
+        stop()
+        setPlaying(false)
+      }
+      React.useLayoutEffect(() => {
+        setPlaying(false)
+        return stop
+      }, [play, min, max, step, streaming, sampleKey, target])
+
+      function start() {
+        const doc = globalThis.document
+        if (!enabled || streaming || doc?.hidden) return
+        activePlayback.current?.pause()
+        const duration = play * 1000
+        const first = value >= end ? min : Math.max(min, value)
+        const started = performance.now() - duration * ((first - min) / (end - min))
+        const session = { timer: undefined, last: first, doc, onVisibility: () => { if (doc.hidden) pause() } }
+        run.current = session
+        activePlayback.current = { session, pause, target }
+        doc?.addEventListener('visibilitychange', session.onVisibility)
+        setPlaying(true)
+        if (first !== value) currentApply.current(first)
+        const tick = () => {
+          if (run.current !== session) return
+          if (doc?.hidden) return pause()
+          const progress = Math.min(1, (performance.now() - started) / duration)
+          const next = progress === 1 ? end : discrete ? stepValue(Math.floor(count * progress)) : min + (end - min) * progress
+          if (next !== session.last) {
+            session.last = next
+            currentApply.current(next)
+          }
+          if (progress === 1) pause()
+          else session.timer = setTimeout(tick, 33)
+        }
+        session.timer = setTimeout(tick, 33)
+      }
+
+      const pauseBeforeSeek = () => {
+        const running = activePlayback.current
+        if (running?.target === target) running.pause()
+      }
+      return {
+        pauseBeforeSeek,
+        seek(next) {
+          pauseBeforeSeek()
+          apply(next)
+        },
+        button: enabled ? h('button', {
+          type: 'button', className: 'miopiik-ctl miopiik-choice', 'data-iui-range-play': '1',
+          disabled: streaming, onClick: playing ? pause : start,
+        }, playing ? '暂停' : value >= end ? '重播' : '播放') : null,
+      }
+    }
+
+    function renderPlaybackRange(button, options) {
+      const range = renderRangeInput(options)
+      return button === null ? range : h('div', { className: 'miopiik-range-controls' }, button, range)
+    }
+
+    function IuiSlider({ min, max, step, value, label, unit, play, apply, streaming, activePlayback, sampleKey, statePath }) {
+      const { seek, button, pauseBeforeSeek } = useRangePlayback({ min, max, step, value, play, apply, streaming, activePlayback, sampleKey, statePath })
+      return h('div', { 'data-iui-slider': String(value) },
+        label === '' ? null : h('span', { className: 'miopiik-control-label' }, label),
+        h('span', { className: 'miopiik-range-value' }, `${value}${unit}`),
+        renderPlaybackRange(button, { min, max, step, value, label: label || '数值', onChange: seek, onPointerDown: pauseBeforeSeek }),
       )
     }
 
@@ -661,7 +761,7 @@
       return { parts, chartSeries, domainMin, domainMax, toX, toY, height, top, bottom, marks }
     }
 
-    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub, onScrub, marks: rawMarks }) {
+    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub, onScrub, marks: rawMarks, play, streaming, activePlayback, sampleKey, statePath }) {
       const containerRef = React.useRef(null)
       const [width, setWidth] = React.useState(360)
       const [scrubValue, setScrubValue] = React.useState(undefined)
@@ -690,7 +790,10 @@
       const chosen = onScrub === undefined ? scrubValue : externalCursor
       const controlValue = Math.min(domainMax, Math.max(domainMin, Number.isFinite(chosen) ? chosen : domainMin))
       const cursor = scrubbable && onScrub === undefined ? controlValue : externalCursor
-      const chooseCursor = onScrub ?? setScrubValue
+      const { seek: chooseCursor, button, pauseBeforeSeek } = useRangePlayback({
+        min: domainMin, max: domainMax, step: 'any', value: controlValue, play: scrubbable ? play : undefined,
+        apply: onScrub ?? setScrubValue, streaming, activePlayback, sampleKey, statePath,
+      })
       const active = linear && Number.isFinite(cursor) && cursor >= domainMin && cursor <= domainMax
       const cursorParts = []
       const readings = active ? chartSeries.map((trace) => lineValueAt(trace.rows, cursor)) : []
@@ -729,7 +832,7 @@
         scrubbable ? h('div', { 'data-iui-chart-scrub': '1' },
           h('span', { className: 'miopiik-control-label' }, scrub, ' ', h('span', { className: 'miopiik-scrub-position' }, position)),
           multiple ? null : h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': readings[0] }, readout),
-          renderRangeInput({ min: domainMin, max: domainMax, step: 'any', value: controlValue, label: scrub, valueText: [position, currentMark, ariaValue].filter(Boolean).join('，'), onChange: chooseCursor }),
+          renderPlaybackRange(button, { min: domainMin, max: domainMax, step: 'any', value: controlValue, label: scrub, valueText: [position, currentMark, ariaValue].filter(Boolean).join('，'), onChange: chooseCursor, onPointerDown: pauseBeforeSeek }),
         ) : null,
         marks.length === 0 ? null : h('div', { className: 'miopiik-chart-marks', role: 'group', 'aria-label': '时间标记' },
           ...marks.map(([time, title]) => {
@@ -1160,6 +1263,7 @@
       )
       const mountedWhileStreaming = React.useRef(streaming === true)
       const enter = !streaming && !mountedWhileStreaming.current
+      const activePlayback = React.useRef(null)
       const [editedState, setState] = React.useState(checked.ok ? checked.ast.state : {})
       const state = streaming && checked.ok ? checked.ast.state : editedState
       // Keep disclosure state by position so conditional unmounting preserves it.
@@ -1330,16 +1434,13 @@
           const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const raw = Number(current)
           const value = Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : min
-          const ariaLabel = label ? textOf(label) : '数值'
-          return h(
-            'div',
-            { key, 'data-iui-slider': String(value) },
-            label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
-            h('span', { className: 'miopiik-range-value' }, `${value}${textOf(unit)}`),
-            renderRangeInput({ min, max, step: stepSize, value, label: ariaLabel, onChange: (next) => {
+          return h(IuiSlider, {
+            key, min, max, step: stepSize, value, label: textOf(label), unit: textOf(unit),
+            play: props.play, streaming, activePlayback, sampleKey, statePath: binding.key,
+            apply: (next) => {
               if (binding.scope === 'state') setState((prev) => writeStatePath(prev, binding.key, next))
-            } }),
-          )
+            },
+          })
         }
         if (item.type === 'input') {
           const label = resolveText(props.label)
@@ -1652,6 +1753,7 @@
           const linked = binding.scope === 'state'
           const chartOptions = {
             xScale: props.xScale, xUnit, yUnit, cursor: resolve(linked ? props.bind : props.cursor), scrub: props.scrub, marks: resolve(props.marks),
+            play: props.play, streaming, activePlayback, sampleKey, statePath: linked ? binding.key : undefined,
             onScrub: linked ? (value) => setState((prev) => writeStatePath(prev, binding.key, value)) : undefined,
           }
           const plot = traces === null

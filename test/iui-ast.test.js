@@ -121,6 +121,12 @@ test('slider：min/max/step 必须是数字，max 必须大于 min', () => {
   assert.equal(compile({ min: '0' }).degraded, 1, '字符串 min 应降级')
   assert.equal(compile({ step: -1 }).degraded, 1, '负 step 应降级')
   assert.equal(compile({ min: 10, max: 5 }).degraded, 1, 'max <= min 应降级')
+  assert.equal(compile({ min: 0, max: 4, step: 2, play: 3 }).degraded, 0)
+  assert.equal(compile({ min: 0.1, max: 0.3, step: 0.2, play: 3 }).degraded, 0)
+  assert.equal(compile({ min: 0, max: 1, step: 2, play: 3 }).degraded, 1, '播放范围至少应覆盖一个 step')
+  for (const play of [0.49, 60.01, Infinity, '$state.duration']) {
+    assert.equal(compile({ min: 0, max: 10, play }).degraded, 1, `非法 play: ${play}`)
+  }
 })
 
 test('steps：只接受 step 子节点，title 必填，tone 走同一枚举', () => {
@@ -232,6 +238,14 @@ test('折线图 scrub 使用线性横轴，保留单位绑定并拒绝冲突控�
   ]
   for (const overrides of invalid) assert.equal(chart(overrides).ok, false, JSON.stringify(overrides))
   assert.equal(chart({ scrub: undefined, cursor: 0, xScale: 'linear' }).ok, true)
+  assert.equal(chart({ scrub: undefined, play: 2 }).ok, false, '播放时长要求 scrub')
+  assert.equal(chart({ scrub: '时间', play: 2 }).ok, true)
+  for (const play of [0.49, 60.01, Infinity, '$state.duration']) {
+    assert.equal(chart({ scrub: '时间', play }).ok, false, `非法 play: ${play}`)
+  }
+  assert.equal(validateAst({ root: { type: 'chart', props: {
+    kind: 'bar', scrub: undefined, play: 2, series: [['A', 1]],
+  } } }).ok, false)
 })
 
 test('时间轴支持状态联动、节点标签和派生写入保护', () => {

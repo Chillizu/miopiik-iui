@@ -149,6 +149,16 @@
   min-inline-size: 0;
 }
 
+.miopiik-range-controls {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.miopiik-range-controls > .miopiik-range { grid-column: 2; }
+
 .miopiik-range::before,
 .miopiik-range-fill {
   position: absolute;

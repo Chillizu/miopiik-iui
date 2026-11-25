@@ -33,7 +33,7 @@ export const REGISTRY = Object.freeze({
   callout: { props: { tone: 'string?', title: 'string?', text: 'string?' }, children: true },
   progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
   empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
-  chart: { props: { kind: 'string', series: 'value', source: 'string?', title: 'string?', domain: 'value?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', bind: 'string?', marks: 'value?' }, children: false },
+  chart: { props: { kind: 'string', series: 'value', source: 'string?', title: 'string?', domain: 'value?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', play: 'number?', bind: 'string?', marks: 'value?' }, children: false },
   views: { props: { label: 'string?', bind: 'string?' }, children: true },
   drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
   view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
@@ -47,7 +47,7 @@ export const REGISTRY = Object.freeze({
   divider: { props: { label: 'string?' }, children: false },
   // 本地交互控件：只写 $state，与 segmented 同一模型，不产生消息/工具调用
   toggle: { props: { label: 'string?', bind: 'string' }, children: false },
-  slider: { props: { label: 'string?', bind: 'string', min: 'number?', max: 'number?', step: 'number?', unit: 'string?' }, children: false },
+  slider: { props: { label: 'string?', bind: 'string', min: 'number?', max: 'number?', step: 'number?', play: 'number?', unit: 'string?' }, children: false },
   input: { props: { label: 'string?', bind: 'string', placeholder: 'string?' }, children: false },
   // 派生状态、折叠和动作。只有 copy 接触宿主剪贴板。
   derive: { props: { name: 'string', expr: 'string' }, children: false },
@@ -672,6 +672,17 @@ export function validateAst(input) {
       if (typeof props.min === 'number' && typeof props.max === 'number' && props.max <= props.min) {
         return failNode(node, path, 'slider.max 需大于 slider.min')
       }
+      if (props.play !== undefined) {
+        const min = props.min ?? 0
+        const max = props.max ?? Math.max(100, min + 1)
+        const step = props.step ?? 1
+        if (typeof props.play !== 'number' || !Number.isFinite(props.play) || props.play < 0.5 || props.play > 60) {
+          return failNode(node, path, 'slider.play 需要 0.5–60 秒的字面数字')
+        }
+        if (!Number.isFinite(max - min) || max <= min || (max - min) / step < 1 - Number.EPSILON * 2) {
+          return failNode(node, path, 'slider.play 需要至少包含一个 step 的有限范围')
+        }
+      }
     }
     if (node.type === 'details') {
       if (typeof props.label !== 'string' || props.label.trim() === '') return failNode(node, path, 'details.label 必填')
@@ -842,6 +853,10 @@ export function validateAst(input) {
           return failNode(node, path, 'chart.scrub 需要 120 字以内的非空字面标签')
         }
         props = { ...props, xScale: 'linear', scrub: label }
+      }
+      if (props.play !== undefined && (typeof props.play !== 'number' || !Number.isFinite(props.play)
+        || props.play < 0.5 || props.play > 60 || props.kind !== 'line' || props.scrub === undefined)) {
+        return failNode(node, path, 'chart.play 需要 0.5–60 秒，且仅用于启用 scrub 的折线图')
       }
       if (binding !== null) {
         if (props.scrub === undefined) return failNode(node, path, 'chart.bind 需要 chart.scrub')

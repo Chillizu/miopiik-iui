@@ -807,7 +807,7 @@ window.__ModuleLoader__.load({
         callout: { props: { tone: 'string?', title: 'string?', text: 'string?' }, children: true },
         progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
         empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
-        chart: { props: { kind: 'string', series: 'value', source: 'string?', title: 'string?', domain: 'value?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', bind: 'string?', marks: 'value?' }, children: false },
+        chart: { props: { kind: 'string', series: 'value', source: 'string?', title: 'string?', domain: 'value?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', play: 'number?', bind: 'string?', marks: 'value?' }, children: false },
         views: { props: { label: 'string?', bind: 'string?' }, children: true },
         drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
         view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
@@ -821,7 +821,7 @@ window.__ModuleLoader__.load({
         divider: { props: { label: 'string?' }, children: false },
         // 本地交互控件：只写 $state，与 segmented 同一模型，不产生消息/工具调用
         toggle: { props: { label: 'string?', bind: 'string' }, children: false },
-        slider: { props: { label: 'string?', bind: 'string', min: 'number?', max: 'number?', step: 'number?', unit: 'string?' }, children: false },
+        slider: { props: { label: 'string?', bind: 'string', min: 'number?', max: 'number?', step: 'number?', play: 'number?', unit: 'string?' }, children: false },
         input: { props: { label: 'string?', bind: 'string', placeholder: 'string?' }, children: false },
         // 派生状态、折叠和动作。只有 copy 接触宿主剪贴板。
         derive: { props: { name: 'string', expr: 'string' }, children: false },
@@ -1446,6 +1446,17 @@ window.__ModuleLoader__.load({
             if (typeof props.min === 'number' && typeof props.max === 'number' && props.max <= props.min) {
               return failNode(node, path, 'slider.max 需大于 slider.min')
             }
+            if (props.play !== undefined) {
+              const min = props.min ?? 0
+              const max = props.max ?? Math.max(100, min + 1)
+              const step = props.step ?? 1
+              if (typeof props.play !== 'number' || !Number.isFinite(props.play) || props.play < 0.5 || props.play > 60) {
+                return failNode(node, path, 'slider.play 需要 0.5–60 秒的字面数字')
+              }
+              if (!Number.isFinite(max - min) || max <= min || (max - min) / step < 1 - Number.EPSILON * 2) {
+                return failNode(node, path, 'slider.play 需要至少包含一个 step 的有限范围')
+              }
+            }
           }
           if (node.type === 'details') {
             if (typeof props.label !== 'string' || props.label.trim() === '') return failNode(node, path, 'details.label 必填')
@@ -1616,6 +1627,10 @@ window.__ModuleLoader__.load({
                 return failNode(node, path, 'chart.scrub 需要 120 字以内的非空字面标签')
               }
               props = { ...props, xScale: 'linear', scrub: label }
+            }
+            if (props.play !== undefined && (typeof props.play !== 'number' || !Number.isFinite(props.play)
+              || props.play < 0.5 || props.play > 60 || props.kind !== 'line' || props.scrub === undefined)) {
+              return failNode(node, path, 'chart.play 需要 0.5–60 秒，且仅用于启用 scrub 的折线图')
             }
             if (binding !== null) {
               if (props.scrub === undefined) return failNode(node, path, 'chart.bind 需要 chart.scrub')
@@ -2194,7 +2209,7 @@ window.__ModuleLoader__.load({
         empty: ['text', 'title', 'description', 'icon'],
         divider: ['label'],
         metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
-        chart: ['kind', 'type', 'series', 'source', 'title', 'domain', 'xScale', 'xUnit', 'yUnit', 'cursor', 'scrub', 'bind', 'marks'],
+        chart: ['kind', 'type', 'series', 'source', 'title', 'domain', 'xScale', 'xUnit', 'yUnit', 'cursor', 'scrub', 'play', 'bind', 'marks'],
         views: ['label', 'bind'],
         drawing: ['width', 'height', 'label'],
         view: ['label', 'caption'],
@@ -2207,7 +2222,7 @@ window.__ModuleLoader__.load({
         segmented: ['label', 'bind', 'options'],
         table: ['columns', 'rows', 'caption', 'filter'],
         toggle: ['label', 'bind'],
-        slider: ['label', 'bind', 'min', 'max', 'step', 'unit'],
+        slider: ['label', 'bind', 'min', 'max', 'step', 'play', 'unit'],
         input: ['label', 'bind', 'placeholder'],
         steps: [],
         step: ['title', 'note', 'tone'],
@@ -3623,7 +3638,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function renderRangeInput({ min, max, step, value, label, valueText, onChange }) {
+    function renderRangeInput({ min, max, step, value, label, valueText, onChange, onPointerDown }) {
       const span = max - min
       const ratio = Number.isFinite(span) ? (span > 0 ? (value - min) / span : 0)
         : (value / 2 - min / 2) / (max / 2 - min / 2)
@@ -3632,11 +3647,111 @@ window.__ModuleLoader__.load({
         h('input', {
           type: 'range', min, max, step, value,
           'aria-label': label, 'aria-valuetext': valueText,
+          onPointerDown,
           onChange: (event) => {
             const next = Number(event.target.value)
             if (Number.isFinite(next)) onChange(next)
           },
         }),
+      )
+    }
+
+    function useRangePlayback({ play, min, max, step, value, apply, streaming, activePlayback, sampleKey, statePath }) {
+      const [playing, setPlaying] = React.useState(false)
+      const currentApply = React.useRef(apply)
+      currentApply.current = apply
+      const run = React.useRef(null)
+      const target = statePath ?? run
+      const span = max - min
+      const steps = step === 'any' ? Infinity : span / step
+      const count = Math.floor(steps + Number.EPSILON * Math.max(1, steps) * 2)
+      const discrete = Number.isSafeInteger(count)
+      const decimalPlaces = (number) => {
+        const [mantissa, exponent = '0'] = String(number).split('e')
+        return (mantissa.split('.')[1]?.length ?? 0) - Number(exponent)
+      }
+      const precision = discrete ? Math.max(0, decimalPlaces(min), decimalPlaces(step)) : 0
+      const stepValue = (index) => {
+        const next = min + index * step
+        return Math.min(max, precision <= 100 ? Number(next.toFixed(precision)) : next)
+      }
+      const end = discrete ? stepValue(count) : max
+      const enabled = play !== undefined && Number.isFinite(span) && end > min
+
+      const stop = () => {
+        const session = run.current
+        if (session === null) return
+        clearTimeout(session.timer)
+        session.doc?.removeEventListener('visibilitychange', session.onVisibility)
+        run.current = null
+        if (activePlayback.current?.session === session) activePlayback.current = null
+      }
+      const pause = () => {
+        if (run.current === null) return
+        stop()
+        setPlaying(false)
+      }
+      React.useLayoutEffect(() => {
+        setPlaying(false)
+        return stop
+      }, [play, min, max, step, streaming, sampleKey, target])
+
+      function start() {
+        const doc = globalThis.document
+        if (!enabled || streaming || doc?.hidden) return
+        activePlayback.current?.pause()
+        const duration = play * 1000
+        const first = value >= end ? min : Math.max(min, value)
+        const started = performance.now() - duration * ((first - min) / (end - min))
+        const session = { timer: undefined, last: first, doc, onVisibility: () => { if (doc.hidden) pause() } }
+        run.current = session
+        activePlayback.current = { session, pause, target }
+        doc?.addEventListener('visibilitychange', session.onVisibility)
+        setPlaying(true)
+        if (first !== value) currentApply.current(first)
+        const tick = () => {
+          if (run.current !== session) return
+          if (doc?.hidden) return pause()
+          const progress = Math.min(1, (performance.now() - started) / duration)
+          const next = progress === 1 ? end : discrete ? stepValue(Math.floor(count * progress)) : min + (end - min) * progress
+          if (next !== session.last) {
+            session.last = next
+            currentApply.current(next)
+          }
+          if (progress === 1) pause()
+          else session.timer = setTimeout(tick, 33)
+        }
+        session.timer = setTimeout(tick, 33)
+      }
+
+      const pauseBeforeSeek = () => {
+        const running = activePlayback.current
+        if (running?.target === target) running.pause()
+      }
+      return {
+        pauseBeforeSeek,
+        seek(next) {
+          pauseBeforeSeek()
+          apply(next)
+        },
+        button: enabled ? h('button', {
+          type: 'button', className: 'miopiik-ctl miopiik-choice', 'data-iui-range-play': '1',
+          disabled: streaming, onClick: playing ? pause : start,
+        }, playing ? '暂停' : value >= end ? '重播' : '播放') : null,
+      }
+    }
+
+    function renderPlaybackRange(button, options) {
+      const range = renderRangeInput(options)
+      return button === null ? range : h('div', { className: 'miopiik-range-controls' }, button, range)
+    }
+
+    function IuiSlider({ min, max, step, value, label, unit, play, apply, streaming, activePlayback, sampleKey, statePath }) {
+      const { seek, button, pauseBeforeSeek } = useRangePlayback({ min, max, step, value, play, apply, streaming, activePlayback, sampleKey, statePath })
+      return h('div', { 'data-iui-slider': String(value) },
+        label === '' ? null : h('span', { className: 'miopiik-control-label' }, label),
+        h('span', { className: 'miopiik-range-value' }, `${value}${unit}`),
+        renderPlaybackRange(button, { min, max, step, value, label: label || '数值', onChange: seek, onPointerDown: pauseBeforeSeek }),
       )
     }
 
@@ -3764,7 +3879,7 @@ window.__ModuleLoader__.load({
       return { parts, chartSeries, domainMin, domainMax, toX, toY, height, top, bottom, marks }
     }
 
-    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub, onScrub, marks: rawMarks }) {
+    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub, onScrub, marks: rawMarks, play, streaming, activePlayback, sampleKey, statePath }) {
       const containerRef = React.useRef(null)
       const [width, setWidth] = React.useState(360)
       const [scrubValue, setScrubValue] = React.useState(undefined)
@@ -3793,7 +3908,10 @@ window.__ModuleLoader__.load({
       const chosen = onScrub === undefined ? scrubValue : externalCursor
       const controlValue = Math.min(domainMax, Math.max(domainMin, Number.isFinite(chosen) ? chosen : domainMin))
       const cursor = scrubbable && onScrub === undefined ? controlValue : externalCursor
-      const chooseCursor = onScrub ?? setScrubValue
+      const { seek: chooseCursor, button, pauseBeforeSeek } = useRangePlayback({
+        min: domainMin, max: domainMax, step: 'any', value: controlValue, play: scrubbable ? play : undefined,
+        apply: onScrub ?? setScrubValue, streaming, activePlayback, sampleKey, statePath,
+      })
       const active = linear && Number.isFinite(cursor) && cursor >= domainMin && cursor <= domainMax
       const cursorParts = []
       const readings = active ? chartSeries.map((trace) => lineValueAt(trace.rows, cursor)) : []
@@ -3832,7 +3950,7 @@ window.__ModuleLoader__.load({
         scrubbable ? h('div', { 'data-iui-chart-scrub': '1' },
           h('span', { className: 'miopiik-control-label' }, scrub, ' ', h('span', { className: 'miopiik-scrub-position' }, position)),
           multiple ? null : h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': readings[0] }, readout),
-          renderRangeInput({ min: domainMin, max: domainMax, step: 'any', value: controlValue, label: scrub, valueText: [position, currentMark, ariaValue].filter(Boolean).join('，'), onChange: chooseCursor }),
+          renderPlaybackRange(button, { min: domainMin, max: domainMax, step: 'any', value: controlValue, label: scrub, valueText: [position, currentMark, ariaValue].filter(Boolean).join('，'), onChange: chooseCursor, onPointerDown: pauseBeforeSeek }),
         ) : null,
         marks.length === 0 ? null : h('div', { className: 'miopiik-chart-marks', role: 'group', 'aria-label': '时间标记' },
           ...marks.map(([time, title]) => {
@@ -4263,6 +4381,7 @@ window.__ModuleLoader__.load({
       )
       const mountedWhileStreaming = React.useRef(streaming === true)
       const enter = !streaming && !mountedWhileStreaming.current
+      const activePlayback = React.useRef(null)
       const [editedState, setState] = React.useState(checked.ok ? checked.ast.state : {})
       const state = streaming && checked.ok ? checked.ast.state : editedState
       // Keep disclosure state by position so conditional unmounting preserves it.
@@ -4433,16 +4552,13 @@ window.__ModuleLoader__.load({
           const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const raw = Number(current)
           const value = Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : min
-          const ariaLabel = label ? textOf(label) : '数值'
-          return h(
-            'div',
-            { key, 'data-iui-slider': String(value) },
-            label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
-            h('span', { className: 'miopiik-range-value' }, `${value}${textOf(unit)}`),
-            renderRangeInput({ min, max, step: stepSize, value, label: ariaLabel, onChange: (next) => {
+          return h(IuiSlider, {
+            key, min, max, step: stepSize, value, label: textOf(label), unit: textOf(unit),
+            play: props.play, streaming, activePlayback, sampleKey, statePath: binding.key,
+            apply: (next) => {
               if (binding.scope === 'state') setState((prev) => writeStatePath(prev, binding.key, next))
-            } }),
-          )
+            },
+          })
         }
         if (item.type === 'input') {
           const label = resolveText(props.label)
@@ -4755,6 +4871,7 @@ window.__ModuleLoader__.load({
           const linked = binding.scope === 'state'
           const chartOptions = {
             xScale: props.xScale, xUnit, yUnit, cursor: resolve(linked ? props.bind : props.cursor), scrub: props.scrub, marks: resolve(props.marks),
+            play: props.play, streaming, activePlayback, sampleKey, statePath: linked ? binding.key : undefined,
             onScrub: linked ? (value) => setState((prev) => writeStatePath(prev, binding.key, value)) : undefined,
           }
           const plot = traces === null
@@ -5513,7 +5630,7 @@ function registerIuiSettings(ctx) {
           if (document.getElementById("miopiik-iui-chrome") === null) {
             chrome = document.createElement("style")
             chrome.id = "miopiik-iui-chrome"
-            chrome.textContent = "/* Standalone UI styles shared by IUI previews, live replies, and replay. */\n[data-iui-output] {\n  --iui-text: var(--dsw-alias-label-primary, light-dark(#182132, #e8ecf2));\n  --iui-muted: var(--dsw-alias-label-secondary, light-dark(#536074, #a9b3c2));\n  --iui-base: var(--dsw-alias-bg-layer-1, light-dark(#fff, #171c24));\n  --iui-accent: var(--dsw-static-deepseek-500, #4176e6);\n  --iui-line: color-mix(in srgb, var(--iui-text) 13%, transparent);\n  --iui-quiet: color-mix(in srgb, var(--iui-text) 4%, transparent);\n  --iui-selected: color-mix(in srgb, var(--iui-accent) 12%, var(--iui-base));\n  --iui-chart-surface: color-mix(in srgb, var(--iui-text) 2.5%, var(--iui-base));\n}\n\n@keyframes miopiik-enter {\n  from { opacity: 0; }\n}\n\n.miopiik-enter { animation: miopiik-enter .14s ease-out; }\n[data-iui-streaming] .miopiik-enter { animation: none; }\n\n.miopiik-drawing-surface,\n.miopiik-drawing-viewport {\n  min-inline-size: 0;\n  max-inline-size: 100%;\n}\n\n.miopiik-drawing-tools {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin-block-end: 4px;\n}\n\n.miopiik-drawing-tools > button { margin-inline-start: auto; }\n\n[data-iui-drawing-expanded] {\n  max-block-size: min(62vh, 560px);\n  overflow: auto;\n  overscroll-behavior: contain;\n  scrollbar-width: thin;\n}\n\n[data-iui-drawing-expanded]:focus-visible {\n  outline: 2px solid var(--iui-accent, #4176e6);\n  outline-offset: -2px;\n}\n\n.miopiik-ctl,\n.miopiik-range > input,\n[data-iui-input] input {\n  -webkit-tap-highlight-color: transparent;\n}\n\n.miopiik-ctl:focus-visible,\n.miopiik-range > input:focus-visible,\n[data-iui-input] input:focus-visible {\n  outline: 2px solid var(--iui-accent, #4176e6);\n  outline-offset: 2px;\n}\n\n.miopiik-sr {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  padding: 0;\n  margin: -1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n  border: 0;\n}\n\n[data-miopiik-segments=block] > [data-miopiik-block-wrap] { margin-block: 8px; }\n[data-miopiik-segments=block] > [data-miopiik-block-wrap]:has(> [data-iui-density=inline]) { margin-block: 5px; }\n\n.miopiik-control-label {\n  color: var(--iui-muted);\n  font-size: 12px;\n  line-height: 1.5;\n  min-inline-size: 0;\n}\n\n.miopiik-choices {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 4px;\n  min-inline-size: 0;\n}\n\n.miopiik-choice {\n  appearance: none;\n  max-inline-size: 100%;\n  min-block-size: 28px;\n  padding: 3px 9px;\n  border: 1px solid transparent;\n  border-radius: 6px;\n  background: var(--iui-quiet);\n  color: var(--iui-muted);\n  font: inherit;\n  font-size: 12px;\n  font-weight: 500;\n  line-height: 1.4;\n  overflow-wrap: anywhere;\n  cursor: pointer;\n}\n\n.miopiik-choice[aria-pressed=true],\n.miopiik-choice[aria-selected=true] {\n  border-color: color-mix(in srgb, var(--iui-accent) 32%, transparent);\n  background: var(--iui-selected);\n  color: var(--iui-text);\n}\n\n.miopiik-choice:disabled { opacity: .65; cursor: default; }\n.miopiik-choices[role=tablist] {\n  padding-block-end: 7px;\n  border-block-end: 1px solid var(--iui-line);\n}\n\n[data-iui-slider],\n[data-iui-chart-scrub] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  grid-template-rows: auto auto;\n  align-items: center;\n  column-gap: 8px;\n  min-inline-size: 0;\n}\n\n.miopiik-range-value {\n  grid-area: 1 / 2;\n  color: var(--iui-text);\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.5;\n  font-variant-numeric: tabular-nums;\n  text-align: end;\n  max-inline-size: min(22ch, 45vi);\n  overflow-wrap: anywhere;\n}\n\n.miopiik-range {\n  --iui-thumb: 14px;\n  --iui-half-thumb: 7px;\n  --iui-track: 4px;\n  position: relative;\n  display: block;\n  grid-column: 1 / -1;\n  min-inline-size: 0;\n}\n\n.miopiik-range::before,\n.miopiik-range-fill {\n  position: absolute;\n  pointer-events: none;\n  inset-inline: var(--iui-half-thumb);\n  inset-block-start: 50%;\n  block-size: var(--iui-track);\n  border-radius: 999px;\n}\n\n.miopiik-range::before {\n  content: \"\";\n  background: var(--iui-line);\n  transform: translateY(-50%);\n}\n\n.miopiik-range-fill {\n  background: var(--iui-accent);\n  transform-origin: left center;\n}\n\n.miopiik-range:dir(rtl) > .miopiik-range-fill { transform-origin: right center; }\n\n.miopiik-range > input {\n  appearance: none;\n  position: relative;\n  display: block;\n  box-sizing: border-box;\n  inline-size: 100%;\n  block-size: 24px;\n  padding: 0;\n  margin: 0;\n  border: 0;\n  border-radius: 6px;\n  background: transparent;\n  accent-color: var(--iui-accent);\n  cursor: pointer;\n  z-index: 1;\n}\n\n.miopiik-range > input::-webkit-slider-runnable-track {\n  height: var(--iui-track);\n  background: transparent;\n}\n\n.miopiik-range > input::-moz-range-track {\n  height: var(--iui-track);\n  background: transparent;\n}\n\n.miopiik-range > input::-webkit-slider-thumb {\n  appearance: none;\n  box-sizing: border-box;\n  width: var(--iui-thumb);\n  height: var(--iui-thumb);\n  margin-top: calc((var(--iui-track) - var(--iui-thumb)) / 2);\n  border: 2px solid var(--iui-base);\n  border-radius: 50%;\n  background: var(--iui-accent);\n  box-shadow: 0 0 0 1px var(--iui-accent);\n}\n\n.miopiik-range > input::-moz-range-thumb {\n  box-sizing: border-box;\n  width: var(--iui-thumb);\n  height: var(--iui-thumb);\n  border: 2px solid var(--iui-base);\n  border-radius: 50%;\n  background: var(--iui-accent);\n  box-shadow: 0 0 0 1px var(--iui-accent);\n}\n\n.miopiik-switch {\n  appearance: none;\n  box-sizing: border-box;\n  flex: none;\n  position: relative;\n  inline-size: 32px;\n  block-size: 20px;\n  padding: 2px;\n  border: 1px solid var(--iui-line);\n  border-radius: 999px;\n  background: var(--iui-quiet);\n  cursor: pointer;\n}\n\n.miopiik-switch[aria-checked=true] {\n  border-color: var(--iui-accent);\n  background: var(--iui-accent);\n}\n\n.miopiik-switch > span {\n  display: block;\n  inline-size: 14px;\n  block-size: 14px;\n  border-radius: 50%;\n  background: var(--iui-muted);\n}\n\n.miopiik-switch[aria-checked=true] > span {\n  background: white;\n  transform: translateX(12px);\n}\n\n.miopiik-switch[aria-checked=true]:dir(rtl) > span { transform: translateX(-12px); }\n\n[data-iui-input] > input {\n  appearance: none;\n  box-sizing: border-box;\n  flex: 1 1 140px;\n  min-inline-size: min(140px, 100%);\n  min-block-size: 30px;\n  padding: 4px 9px;\n  border: 1px solid var(--iui-line);\n  border-radius: 6px;\n  background: var(--iui-quiet);\n  color: var(--iui-text);\n  font: inherit;\n  font-size: 13px;\n  line-height: 1.4;\n}\n\n[data-iui-metric] { flex: 1 1 0; padding-block: 2px; }\n.miopiik-metric-row > [data-iui-metric] { flex-basis: 104px; }\n.miopiik-metric-row > [data-iui-metric-narrative] { flex-basis: 100%; }\n.miopiik-metric-value { line-height: 1.25; }\n.miopiik-metric-unit {\n  margin-inline-start: .35em;\n  color: var(--iui-muted);\n  font-size: .64em;\n  font-weight: 500;\n}\n\n.miopiik-chart-frame {\n  display: flex;\n  flex-direction: column;\n  gap: 5px;\n  min-inline-size: 0;\n  padding: 10px clamp(10px, 1.5vi, 16px) 9px;\n  border: 1px solid var(--iui-line);\n  border-radius: 10px;\n  background: var(--iui-chart-surface);\n}\n\n:where([data-iui-container=card]) .miopiik-chart-frame {\n  --iui-chart-surface: var(--iui-base);\n  padding-inline: 0;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n}\n\n.miopiik-chart-source {\n  color: var(--iui-muted);\n  font-size: 11px;\n  line-height: 1.5;\n}\n\n.miopiik-interval {\n  margin: 0;\n  gap: 6px;\n}\n\n.miopiik-interval-caption {\n  color: var(--iui-text);\n  font-size: 13px;\n  font-weight: 600;\n  line-height: 1.4;\n}\n\n.miopiik-interval-row {\n  display: grid;\n  grid-template-columns: minmax(42px, min(26%, 112px)) minmax(0, 1fr);\n  column-gap: 8px;\n  align-items: center;\n}\n\n.miopiik-interval-axis {\n  color: var(--iui-muted);\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-interval-axis > div {\n  display: flex;\n  justify-content: space-between;\n  gap: 4px;\n  direction: ltr;\n}\n\n.miopiik-interval-lane {\n  font-size: 12px;\n  line-height: 1.3;\n  overflow-wrap: anywhere;\n}\n\n.miopiik-interval-tracks {\n  display: flex;\n  min-inline-size: 0;\n  flex-direction: column;\n  gap: 3px;\n}\n\n.miopiik-interval-track {\n  position: relative;\n  min-inline-size: 0;\n  min-block-size: 28px;\n  border-block-end: 1px solid var(--iui-line);\n  background: var(--iui-quiet);\n  border-radius: 4px 4px 0 0;\n}\n\n.miopiik-interval-mark {\n  position: absolute;\n  inset-block: 1px 2px;\n  appearance: none;\n  border: 0;\n  border-radius: 4px;\n  padding: 0;\n  background: color-mix(in srgb, var(--iui-interval-tone) 18%, var(--iui-base));\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--iui-interval-tone) 52%, var(--iui-base));\n  color: var(--iui-text);\n  font: inherit;\n  font-size: 12px;\n  white-space: nowrap;\n  text-overflow: ellipsis;\n  overflow: hidden;\n  cursor: pointer;\n}\n\n.miopiik-interval-mark[aria-pressed=true], .miopiik-interval-mark:focus-visible {\n  z-index: 1;\n  outline: 2px solid var(--iui-interval-tone);\n  outline-offset: -1px;\n}\n\n.miopiik-interval-mark:disabled { cursor: default; }\n\n.miopiik-interval-detail {\n  color: var(--iui-muted);\n  font-size: 12px;\n  line-height: 1.4;\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-interval-detail:empty { display: none; }\n\n@media (pointer: coarse) {\n  .miopiik-interval-track { min-block-size: 33px; }\n}\n\n@media (forced-colors: active) {\n  .miopiik-interval-mark { box-shadow: inset 0 0 0 1px ButtonText; }\n  .miopiik-interval-mark[aria-pressed=true], .miopiik-interval-mark:focus-visible { outline-color: Highlight; }\n}\n\n[data-iui-chart-scrub] {\n  margin-block-start: 2px;\n  padding-block-start: 5px;\n  border-block-start: 1px solid var(--iui-line);\n}\n\n.miopiik-scrub-position {\n  color: var(--iui-text);\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-chart-marks {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 6px;\n  padding-block: 3px;\n  min-inline-size: 0;\n}\n\n.miopiik-chart-mark-time {\n  color: var(--iui-muted);\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-chart-mark[aria-current=time] {\n  border-color: color-mix(in srgb, var(--iui-accent) 38%, transparent);\n  background: var(--iui-selected);\n  color: var(--iui-text);\n}\n\n.miopiik-chart-mark-tick { stroke: var(--iui-accent); }\n\n@media (pointer: coarse) {\n  .miopiik-ctl.miopiik-chart-mark { min-block-size: 40px; }\n}\n\n@media (forced-colors: active) {\n  .miopiik-chart-mark[aria-current=time] { border-color: Highlight; }\n  .miopiik-chart-mark-tick { stroke: Highlight; }\n}\n\n.miopiik-trace-legend {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(min(100%, 6.5rem), 1fr));\n  gap: 7px 10px;\n  padding-block: 3px;\n}\n\n.miopiik-trace-legend-item {\n  min-inline-size: 0;\n  font-size: 12px;\n  line-height: 1.4;\n}\n\n.miopiik-trace-label {\n  display: flex;\n  align-items: baseline;\n  gap: 5px;\n  color: var(--iui-muted);\n  overflow-wrap: anywhere;\n}\n\n.miopiik-trace-label svg { flex: 0 0 18px; }\n\n.miopiik-trace-value {\n  display: block;\n  margin-inline-start: 23px;\n  color: var(--iui-text);\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  overflow-wrap: anywhere;\n}\n\n[data-iui-trace-tone=\"0\"] { --iui-trace-color: light-dark(#275ac2, #72a3ff); }\n[data-iui-trace-tone=\"1\"] { --iui-trace-color: light-dark(#147660, #53cbb0); }\n[data-iui-trace-tone=\"2\"] { --iui-trace-color: light-dark(#995011, #f0a966); }\n[data-iui-trace-tone=\"3\"] { --iui-trace-color: light-dark(#833aa7, #d29cf4); }\n.miopiik-trace-stroke { stroke: var(--iui-trace-color, var(--iui-accent)); }\n\n@media (forced-colors: active) {\n  .miopiik-trace-stroke { stroke: CanvasText; }\n}\n\n.miopiik-chart-guide { stroke: var(--iui-line); }\n.miopiik-chart-area { fill: color-mix(in srgb, var(--iui-accent) 8%, var(--iui-chart-surface)); }\n.miopiik-chart-marker { fill: var(--iui-chart-surface); }\n\n.miopiik-diagram-title {\n  color: var(--iui-text);\n  font-size: 13px;\n  font-weight: 600;\n  line-height: 1.5;\n  overflow-wrap: anywhere;\n}\n\n.miopiik-diagram-scroll {\n  min-inline-size: 0;\n  inline-size: 100%;\n  overflow-x: auto;\n  padding-block: 2px;\n  scrollbar-width: thin;\n}\n\n.miopiik-diagram-scroll:focus-visible {\n  outline: 2px solid var(--iui-accent);\n  outline-offset: 2px;\n  border-radius: 4px;\n}\n\n.miopiik-diagram-lane {\n  display: flex;\n  min-inline-size: 0;\n  flex-direction: column;\n  text-align: center;\n}\n\n.miopiik-diagram-lane-title {\n  min-block-size: 16px;\n  color: var(--iui-muted);\n  font-size: 11px;\n  font-weight: 500;\n  line-height: 16px;\n  overflow-wrap: anywhere;\n}\n\n.miopiik-diagram-node {\n  display: flex;\n  min-inline-size: 0;\n  flex-direction: column;\n  justify-content: center;\n  gap: 2px;\n  box-sizing: border-box;\n  border-width: 1px;\n  border-radius: 8px;\n  background: var(--iui-chart-surface);\n  padding: 6px 9px;\n  overflow-wrap: anywhere;\n}\n\n.miopiik-diagram-node-title { font-size: 12px; line-height: 1.4; }\n.miopiik-diagram-node-note { color: var(--iui-muted); font-size: 11px; line-height: 1.4; }\n\n.miopiik-diagram-edge-caption {\n  max-inline-size: min(120px, 33%);\n  color: var(--iui-muted);\n  font-size: 10px;\n  line-height: 1.3;\n  text-align: center;\n  overflow-wrap: anywhere;\n  pointer-events: none;\n}\n\n@media (hover: hover) {\n  .miopiik-choice:not(:disabled):hover {\n    border-color: var(--iui-line);\n    color: var(--iui-text);\n  }\n\n  .miopiik-choice[aria-pressed=true]:not(:disabled):hover,\n  .miopiik-choice[aria-selected=true]:not(:disabled):hover {\n    border-color: color-mix(in srgb, var(--iui-accent) 42%, transparent);\n  }\n\n  .miopiik-ctl:not(.miopiik-choice):not(.miopiik-switch):not(:disabled):hover { filter: brightness(1.12); }\n  .miopiik-ctl:not(:disabled):active { filter: brightness(.95); }\n}\n\n@media (prefers-reduced-motion: no-preference) {\n  .miopiik-choice { transition: background-color .12s ease, border-color .12s ease, color .12s ease; }\n  .miopiik-switch { transition: background-color .12s ease; }\n  .miopiik-switch > span { transition: transform .12s ease; }\n  .miopiik-shape-motion {\n    transition-property: x, y, cx, cy, r, width, height, opacity, fill, stroke;\n    transition-duration: .12s;\n    transition-timing-function: ease-out;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .miopiik-enter { animation: none; }\n  .miopiik-ctl:hover,\n  .miopiik-ctl:active { filter: none; }\n}\n\n@media (pointer: coarse) {\n  .miopiik-ctl { min-block-size: 32px; }\n  .miopiik-choice { padding-inline: 12px; }\n  .miopiik-range > input { block-size: 32px; }\n  [data-iui-input] > input { min-block-size: 32px; }\n  .miopiik-switch {\n    inline-size: 44px;\n    block-size: 32px;\n    padding: 2px 4px;\n  }\n  .miopiik-switch[aria-checked=true] > span { transform: translateX(20px); }\n  .miopiik-switch[aria-checked=true]:dir(rtl) > span { transform: translateX(-20px); }\n}\n\n@media (forced-colors: active) {\n  .miopiik-ctl { border: 1px solid ButtonBorder; forced-color-adjust: auto; }\n  .miopiik-choice[aria-pressed=true],\n  .miopiik-choice[aria-selected=true] { background: Highlight; color: HighlightText; }\n  .miopiik-ctl:focus-visible,\n  .miopiik-range > input:focus-visible,\n  [data-iui-input] input:focus-visible { outline: 2px solid Highlight; }\n  .miopiik-switch > span { background: ButtonText; }\n  .miopiik-switch[aria-checked=true] { background: Highlight; }\n  .miopiik-switch[aria-checked=true] > span { background: HighlightText; }\n  .miopiik-chart-guide { stroke: GrayText; }\n  .miopiik-chart-area { fill: none; }\n  .miopiik-range > input,\n  .miopiik-range::before,\n  .miopiik-range-fill { forced-color-adjust: none; }\n  .miopiik-range::before { background: GrayText; }\n  .miopiik-range-fill { background: Highlight; }\n  .miopiik-range > input::-webkit-slider-thumb {\n    border-color: Canvas;\n    background: Highlight;\n    box-shadow: 0 0 0 1px Highlight;\n  }\n  .miopiik-range > input::-moz-range-thumb {\n    border-color: Canvas;\n    background: Highlight;\n    box-shadow: 0 0 0 1px Highlight;\n  }\n}"
+            chrome.textContent = "/* Standalone UI styles shared by IUI previews, live replies, and replay. */\n[data-iui-output] {\n  --iui-text: var(--dsw-alias-label-primary, light-dark(#182132, #e8ecf2));\n  --iui-muted: var(--dsw-alias-label-secondary, light-dark(#536074, #a9b3c2));\n  --iui-base: var(--dsw-alias-bg-layer-1, light-dark(#fff, #171c24));\n  --iui-accent: var(--dsw-static-deepseek-500, #4176e6);\n  --iui-line: color-mix(in srgb, var(--iui-text) 13%, transparent);\n  --iui-quiet: color-mix(in srgb, var(--iui-text) 4%, transparent);\n  --iui-selected: color-mix(in srgb, var(--iui-accent) 12%, var(--iui-base));\n  --iui-chart-surface: color-mix(in srgb, var(--iui-text) 2.5%, var(--iui-base));\n}\n\n@keyframes miopiik-enter {\n  from { opacity: 0; }\n}\n\n.miopiik-enter { animation: miopiik-enter .14s ease-out; }\n[data-iui-streaming] .miopiik-enter { animation: none; }\n\n.miopiik-drawing-surface,\n.miopiik-drawing-viewport {\n  min-inline-size: 0;\n  max-inline-size: 100%;\n}\n\n.miopiik-drawing-tools {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin-block-end: 4px;\n}\n\n.miopiik-drawing-tools > button { margin-inline-start: auto; }\n\n[data-iui-drawing-expanded] {\n  max-block-size: min(62vh, 560px);\n  overflow: auto;\n  overscroll-behavior: contain;\n  scrollbar-width: thin;\n}\n\n[data-iui-drawing-expanded]:focus-visible {\n  outline: 2px solid var(--iui-accent, #4176e6);\n  outline-offset: -2px;\n}\n\n.miopiik-ctl,\n.miopiik-range > input,\n[data-iui-input] input {\n  -webkit-tap-highlight-color: transparent;\n}\n\n.miopiik-ctl:focus-visible,\n.miopiik-range > input:focus-visible,\n[data-iui-input] input:focus-visible {\n  outline: 2px solid var(--iui-accent, #4176e6);\n  outline-offset: 2px;\n}\n\n.miopiik-sr {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  padding: 0;\n  margin: -1px;\n  overflow: hidden;\n  clip: rect(0 0 0 0);\n  white-space: nowrap;\n  border: 0;\n}\n\n[data-miopiik-segments=block] > [data-miopiik-block-wrap] { margin-block: 8px; }\n[data-miopiik-segments=block] > [data-miopiik-block-wrap]:has(> [data-iui-density=inline]) { margin-block: 5px; }\n\n.miopiik-control-label {\n  color: var(--iui-muted);\n  font-size: 12px;\n  line-height: 1.5;\n  min-inline-size: 0;\n}\n\n.miopiik-choices {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 4px;\n  min-inline-size: 0;\n}\n\n.miopiik-choice {\n  appearance: none;\n  max-inline-size: 100%;\n  min-block-size: 28px;\n  padding: 3px 9px;\n  border: 1px solid transparent;\n  border-radius: 6px;\n  background: var(--iui-quiet);\n  color: var(--iui-muted);\n  font: inherit;\n  font-size: 12px;\n  font-weight: 500;\n  line-height: 1.4;\n  overflow-wrap: anywhere;\n  cursor: pointer;\n}\n\n.miopiik-choice[aria-pressed=true],\n.miopiik-choice[aria-selected=true] {\n  border-color: color-mix(in srgb, var(--iui-accent) 32%, transparent);\n  background: var(--iui-selected);\n  color: var(--iui-text);\n}\n\n.miopiik-choice:disabled { opacity: .65; cursor: default; }\n.miopiik-choices[role=tablist] {\n  padding-block-end: 7px;\n  border-block-end: 1px solid var(--iui-line);\n}\n\n[data-iui-slider],\n[data-iui-chart-scrub] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  grid-template-rows: auto auto;\n  align-items: center;\n  column-gap: 8px;\n  min-inline-size: 0;\n}\n\n.miopiik-range-value {\n  grid-area: 1 / 2;\n  color: var(--iui-text);\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.5;\n  font-variant-numeric: tabular-nums;\n  text-align: end;\n  max-inline-size: min(22ch, 45vi);\n  overflow-wrap: anywhere;\n}\n\n.miopiik-range {\n  --iui-thumb: 14px;\n  --iui-half-thumb: 7px;\n  --iui-track: 4px;\n  position: relative;\n  display: block;\n  grid-column: 1 / -1;\n  min-inline-size: 0;\n}\n\n.miopiik-range-controls {\n  display: grid;\n  grid-column: 1 / -1;\n  grid-template-columns: auto minmax(0, 1fr);\n  align-items: center;\n  gap: 8px;\n}\n\n.miopiik-range-controls > .miopiik-range { grid-column: 2; }\n\n.miopiik-range::before,\n.miopiik-range-fill {\n  position: absolute;\n  pointer-events: none;\n  inset-inline: var(--iui-half-thumb);\n  inset-block-start: 50%;\n  block-size: var(--iui-track);\n  border-radius: 999px;\n}\n\n.miopiik-range::before {\n  content: \"\";\n  background: var(--iui-line);\n  transform: translateY(-50%);\n}\n\n.miopiik-range-fill {\n  background: var(--iui-accent);\n  transform-origin: left center;\n}\n\n.miopiik-range:dir(rtl) > .miopiik-range-fill { transform-origin: right center; }\n\n.miopiik-range > input {\n  appearance: none;\n  position: relative;\n  display: block;\n  box-sizing: border-box;\n  inline-size: 100%;\n  block-size: 24px;\n  padding: 0;\n  margin: 0;\n  border: 0;\n  border-radius: 6px;\n  background: transparent;\n  accent-color: var(--iui-accent);\n  cursor: pointer;\n  z-index: 1;\n}\n\n.miopiik-range > input::-webkit-slider-runnable-track {\n  height: var(--iui-track);\n  background: transparent;\n}\n\n.miopiik-range > input::-moz-range-track {\n  height: var(--iui-track);\n  background: transparent;\n}\n\n.miopiik-range > input::-webkit-slider-thumb {\n  appearance: none;\n  box-sizing: border-box;\n  width: var(--iui-thumb);\n  height: var(--iui-thumb);\n  margin-top: calc((var(--iui-track) - var(--iui-thumb)) / 2);\n  border: 2px solid var(--iui-base);\n  border-radius: 50%;\n  background: var(--iui-accent);\n  box-shadow: 0 0 0 1px var(--iui-accent);\n}\n\n.miopiik-range > input::-moz-range-thumb {\n  box-sizing: border-box;\n  width: var(--iui-thumb);\n  height: var(--iui-thumb);\n  border: 2px solid var(--iui-base);\n  border-radius: 50%;\n  background: var(--iui-accent);\n  box-shadow: 0 0 0 1px var(--iui-accent);\n}\n\n.miopiik-switch {\n  appearance: none;\n  box-sizing: border-box;\n  flex: none;\n  position: relative;\n  inline-size: 32px;\n  block-size: 20px;\n  padding: 2px;\n  border: 1px solid var(--iui-line);\n  border-radius: 999px;\n  background: var(--iui-quiet);\n  cursor: pointer;\n}\n\n.miopiik-switch[aria-checked=true] {\n  border-color: var(--iui-accent);\n  background: var(--iui-accent);\n}\n\n.miopiik-switch > span {\n  display: block;\n  inline-size: 14px;\n  block-size: 14px;\n  border-radius: 50%;\n  background: var(--iui-muted);\n}\n\n.miopiik-switch[aria-checked=true] > span {\n  background: white;\n  transform: translateX(12px);\n}\n\n.miopiik-switch[aria-checked=true]:dir(rtl) > span { transform: translateX(-12px); }\n\n[data-iui-input] > input {\n  appearance: none;\n  box-sizing: border-box;\n  flex: 1 1 140px;\n  min-inline-size: min(140px, 100%);\n  min-block-size: 30px;\n  padding: 4px 9px;\n  border: 1px solid var(--iui-line);\n  border-radius: 6px;\n  background: var(--iui-quiet);\n  color: var(--iui-text);\n  font: inherit;\n  font-size: 13px;\n  line-height: 1.4;\n}\n\n[data-iui-metric] { flex: 1 1 0; padding-block: 2px; }\n.miopiik-metric-row > [data-iui-metric] { flex-basis: 104px; }\n.miopiik-metric-row > [data-iui-metric-narrative] { flex-basis: 100%; }\n.miopiik-metric-value { line-height: 1.25; }\n.miopiik-metric-unit {\n  margin-inline-start: .35em;\n  color: var(--iui-muted);\n  font-size: .64em;\n  font-weight: 500;\n}\n\n.miopiik-chart-frame {\n  display: flex;\n  flex-direction: column;\n  gap: 5px;\n  min-inline-size: 0;\n  padding: 10px clamp(10px, 1.5vi, 16px) 9px;\n  border: 1px solid var(--iui-line);\n  border-radius: 10px;\n  background: var(--iui-chart-surface);\n}\n\n:where([data-iui-container=card]) .miopiik-chart-frame {\n  --iui-chart-surface: var(--iui-base);\n  padding-inline: 0;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n}\n\n.miopiik-chart-source {\n  color: var(--iui-muted);\n  font-size: 11px;\n  line-height: 1.5;\n}\n\n.miopiik-interval {\n  margin: 0;\n  gap: 6px;\n}\n\n.miopiik-interval-caption {\n  color: var(--iui-text);\n  font-size: 13px;\n  font-weight: 600;\n  line-height: 1.4;\n}\n\n.miopiik-interval-row {\n  display: grid;\n  grid-template-columns: minmax(42px, min(26%, 112px)) minmax(0, 1fr);\n  column-gap: 8px;\n  align-items: center;\n}\n\n.miopiik-interval-axis {\n  color: var(--iui-muted);\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-interval-axis > div {\n  display: flex;\n  justify-content: space-between;\n  gap: 4px;\n  direction: ltr;\n}\n\n.miopiik-interval-lane {\n  font-size: 12px;\n  line-height: 1.3;\n  overflow-wrap: anywhere;\n}\n\n.miopiik-interval-tracks {\n  display: flex;\n  min-inline-size: 0;\n  flex-direction: column;\n  gap: 3px;\n}\n\n.miopiik-interval-track {\n  position: relative;\n  min-inline-size: 0;\n  min-block-size: 28px;\n  border-block-end: 1px solid var(--iui-line);\n  background: var(--iui-quiet);\n  border-radius: 4px 4px 0 0;\n}\n\n.miopiik-interval-mark {\n  position: absolute;\n  inset-block: 1px 2px;\n  appearance: none;\n  border: 0;\n  border-radius: 4px;\n  padding: 0;\n  background: color-mix(in srgb, var(--iui-interval-tone) 18%, var(--iui-base));\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--iui-interval-tone) 52%, var(--iui-base));\n  color: var(--iui-text);\n  font: inherit;\n  font-size: 12px;\n  white-space: nowrap;\n  text-overflow: ellipsis;\n  overflow: hidden;\n  cursor: pointer;\n}\n\n.miopiik-interval-mark[aria-pressed=true], .miopiik-interval-mark:focus-visible {\n  z-index: 1;\n  outline: 2px solid var(--iui-interval-tone);\n  outline-offset: -1px;\n}\n\n.miopiik-interval-mark:disabled { cursor: default; }\n\n.miopiik-interval-detail {\n  color: var(--iui-muted);\n  font-size: 12px;\n  line-height: 1.4;\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-interval-detail:empty { display: none; }\n\n@media (pointer: coarse) {\n  .miopiik-interval-track { min-block-size: 33px; }\n}\n\n@media (forced-colors: active) {\n  .miopiik-interval-mark { box-shadow: inset 0 0 0 1px ButtonText; }\n  .miopiik-interval-mark[aria-pressed=true], .miopiik-interval-mark:focus-visible { outline-color: Highlight; }\n}\n\n[data-iui-chart-scrub] {\n  margin-block-start: 2px;\n  padding-block-start: 5px;\n  border-block-start: 1px solid var(--iui-line);\n}\n\n.miopiik-scrub-position {\n  color: var(--iui-text);\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-chart-marks {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 6px;\n  padding-block: 3px;\n  min-inline-size: 0;\n}\n\n.miopiik-chart-mark-time {\n  color: var(--iui-muted);\n  font-variant-numeric: tabular-nums;\n}\n\n.miopiik-chart-mark[aria-current=time] {\n  border-color: color-mix(in srgb, var(--iui-accent) 38%, transparent);\n  background: var(--iui-selected);\n  color: var(--iui-text);\n}\n\n.miopiik-chart-mark-tick { stroke: var(--iui-accent); }\n\n@media (pointer: coarse) {\n  .miopiik-ctl.miopiik-chart-mark { min-block-size: 40px; }\n}\n\n@media (forced-colors: active) {\n  .miopiik-chart-mark[aria-current=time] { border-color: Highlight; }\n  .miopiik-chart-mark-tick { stroke: Highlight; }\n}\n\n.miopiik-trace-legend {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(min(100%, 6.5rem), 1fr));\n  gap: 7px 10px;\n  padding-block: 3px;\n}\n\n.miopiik-trace-legend-item {\n  min-inline-size: 0;\n  font-size: 12px;\n  line-height: 1.4;\n}\n\n.miopiik-trace-label {\n  display: flex;\n  align-items: baseline;\n  gap: 5px;\n  color: var(--iui-muted);\n  overflow-wrap: anywhere;\n}\n\n.miopiik-trace-label svg { flex: 0 0 18px; }\n\n.miopiik-trace-value {\n  display: block;\n  margin-inline-start: 23px;\n  color: var(--iui-text);\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n  overflow-wrap: anywhere;\n}\n\n[data-iui-trace-tone=\"0\"] { --iui-trace-color: light-dark(#275ac2, #72a3ff); }\n[data-iui-trace-tone=\"1\"] { --iui-trace-color: light-dark(#147660, #53cbb0); }\n[data-iui-trace-tone=\"2\"] { --iui-trace-color: light-dark(#995011, #f0a966); }\n[data-iui-trace-tone=\"3\"] { --iui-trace-color: light-dark(#833aa7, #d29cf4); }\n.miopiik-trace-stroke { stroke: var(--iui-trace-color, var(--iui-accent)); }\n\n@media (forced-colors: active) {\n  .miopiik-trace-stroke { stroke: CanvasText; }\n}\n\n.miopiik-chart-guide { stroke: var(--iui-line); }\n.miopiik-chart-area { fill: color-mix(in srgb, var(--iui-accent) 8%, var(--iui-chart-surface)); }\n.miopiik-chart-marker { fill: var(--iui-chart-surface); }\n\n.miopiik-diagram-title {\n  color: var(--iui-text);\n  font-size: 13px;\n  font-weight: 600;\n  line-height: 1.5;\n  overflow-wrap: anywhere;\n}\n\n.miopiik-diagram-scroll {\n  min-inline-size: 0;\n  inline-size: 100%;\n  overflow-x: auto;\n  padding-block: 2px;\n  scrollbar-width: thin;\n}\n\n.miopiik-diagram-scroll:focus-visible {\n  outline: 2px solid var(--iui-accent);\n  outline-offset: 2px;\n  border-radius: 4px;\n}\n\n.miopiik-diagram-lane {\n  display: flex;\n  min-inline-size: 0;\n  flex-direction: column;\n  text-align: center;\n}\n\n.miopiik-diagram-lane-title {\n  min-block-size: 16px;\n  color: var(--iui-muted);\n  font-size: 11px;\n  font-weight: 500;\n  line-height: 16px;\n  overflow-wrap: anywhere;\n}\n\n.miopiik-diagram-node {\n  display: flex;\n  min-inline-size: 0;\n  flex-direction: column;\n  justify-content: center;\n  gap: 2px;\n  box-sizing: border-box;\n  border-width: 1px;\n  border-radius: 8px;\n  background: var(--iui-chart-surface);\n  padding: 6px 9px;\n  overflow-wrap: anywhere;\n}\n\n.miopiik-diagram-node-title { font-size: 12px; line-height: 1.4; }\n.miopiik-diagram-node-note { color: var(--iui-muted); font-size: 11px; line-height: 1.4; }\n\n.miopiik-diagram-edge-caption {\n  max-inline-size: min(120px, 33%);\n  color: var(--iui-muted);\n  font-size: 10px;\n  line-height: 1.3;\n  text-align: center;\n  overflow-wrap: anywhere;\n  pointer-events: none;\n}\n\n@media (hover: hover) {\n  .miopiik-choice:not(:disabled):hover {\n    border-color: var(--iui-line);\n    color: var(--iui-text);\n  }\n\n  .miopiik-choice[aria-pressed=true]:not(:disabled):hover,\n  .miopiik-choice[aria-selected=true]:not(:disabled):hover {\n    border-color: color-mix(in srgb, var(--iui-accent) 42%, transparent);\n  }\n\n  .miopiik-ctl:not(.miopiik-choice):not(.miopiik-switch):not(:disabled):hover { filter: brightness(1.12); }\n  .miopiik-ctl:not(:disabled):active { filter: brightness(.95); }\n}\n\n@media (prefers-reduced-motion: no-preference) {\n  .miopiik-choice { transition: background-color .12s ease, border-color .12s ease, color .12s ease; }\n  .miopiik-switch { transition: background-color .12s ease; }\n  .miopiik-switch > span { transition: transform .12s ease; }\n  .miopiik-shape-motion {\n    transition-property: x, y, cx, cy, r, width, height, opacity, fill, stroke;\n    transition-duration: .12s;\n    transition-timing-function: ease-out;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .miopiik-enter { animation: none; }\n  .miopiik-ctl:hover,\n  .miopiik-ctl:active { filter: none; }\n}\n\n@media (pointer: coarse) {\n  .miopiik-ctl { min-block-size: 32px; }\n  .miopiik-choice { padding-inline: 12px; }\n  .miopiik-range > input { block-size: 32px; }\n  [data-iui-input] > input { min-block-size: 32px; }\n  .miopiik-switch {\n    inline-size: 44px;\n    block-size: 32px;\n    padding: 2px 4px;\n  }\n  .miopiik-switch[aria-checked=true] > span { transform: translateX(20px); }\n  .miopiik-switch[aria-checked=true]:dir(rtl) > span { transform: translateX(-20px); }\n}\n\n@media (forced-colors: active) {\n  .miopiik-ctl { border: 1px solid ButtonBorder; forced-color-adjust: auto; }\n  .miopiik-choice[aria-pressed=true],\n  .miopiik-choice[aria-selected=true] { background: Highlight; color: HighlightText; }\n  .miopiik-ctl:focus-visible,\n  .miopiik-range > input:focus-visible,\n  [data-iui-input] input:focus-visible { outline: 2px solid Highlight; }\n  .miopiik-switch > span { background: ButtonText; }\n  .miopiik-switch[aria-checked=true] { background: Highlight; }\n  .miopiik-switch[aria-checked=true] > span { background: HighlightText; }\n  .miopiik-chart-guide { stroke: GrayText; }\n  .miopiik-chart-area { fill: none; }\n  .miopiik-range > input,\n  .miopiik-range::before,\n  .miopiik-range-fill { forced-color-adjust: none; }\n  .miopiik-range::before { background: GrayText; }\n  .miopiik-range-fill { background: Highlight; }\n  .miopiik-range > input::-webkit-slider-thumb {\n    border-color: Canvas;\n    background: Highlight;\n    box-shadow: 0 0 0 1px Highlight;\n  }\n  .miopiik-range > input::-moz-range-thumb {\n    border-color: Canvas;\n    background: Highlight;\n    box-shadow: 0 0 0 1px Highlight;\n  }\n}"
             document.head.appendChild(chrome)
           }
         }

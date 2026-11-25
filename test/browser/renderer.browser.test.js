@@ -316,6 +316,13 @@ const SHARED_CHART_SCRUB_ML = `<ui density="auto">
   <metric label="积水量" value="$state.water" unit="升"/>
 </ui>`
 
+const RANGE_PLAYBACK_ML = `<ui density="auto">
+  <state name="time" value="0"/>
+  <slider label="播放时刻" bind="$state.time" min="0" max="4" step="1" play="0.5"/>
+  <chart kind="line" scrub="播放时刻" bind="$state.time" play="0.5" x-unit="秒" y-unit="件" series='[[0,0],[1,2],[2,4],[3,6],[4,8]]'/>
+  <metric label="共享时刻" value="$state.time" unit="秒"/>
+</ui>`
+
 const INTERVAL_CHART_ML = `<ui density="auto">
   <state name="mode" value='"baseline"'/>
   <derive name="spans" expr="$state.mode == 'baseline' ? [['组装',0,3,'装配','info'],['组装',2,5,'检查','warning'],['交付',1,4,'发送','accent']] : [['组装',0,2,'装配','info'],['交付',3,6,'发送','accent']]"/>
@@ -667,6 +674,7 @@ const MAIN_RUN = `
       chartScrub:mountBlock(${JSON.stringify(CHART_SCRUB_ML)}),
       multiChartScrub:mountBlock(${JSON.stringify(MULTI_CHART_SCRUB_ML)}),
       sharedChartScrub:mountBlock(${JSON.stringify(SHARED_CHART_SCRUB_ML)}),
+      rangePlayback:mountBlock(${JSON.stringify(RANGE_PLAYBACK_ML)}),
       intervalChart:mountBlock(${JSON.stringify(INTERVAL_CHART_ML)}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
@@ -1386,6 +1394,67 @@ const MAIN_RUN = `
             && JSON.stringify(samples) === '[[4,[4,4],12],[6.5,[6.5,6.5],7],[10,[10,10],0]]'
             ? true : JSON.stringify(samples));
         }
+        const playback = r3.rangePlayback;
+        const playbackSlider = () => playback.querySelector('[data-iui-slider] input[type="range"][aria-label="播放时刻"]');
+        const playbackScrub = () => playback.querySelector('[data-iui-chart-scrub] input[type="range"][aria-label="播放时刻"]');
+        const playbackButtons = () => [...playback.querySelectorAll('[data-iui-range-play]')];
+        const playbackTime = () => playbackSlider()?.valueAsNumber;
+        const playbackCursor = () => Number(playback.querySelector('[data-iui-chart-cursor]')?.getAttribute('data-iui-chart-cursor') ?? NaN);
+        const playbackMetric = () => Number.parseFloat(playback.querySelector('[data-iui-metric="共享时刻"] .miopiik-metric-value')?.textContent ?? 'NaN');
+        const playbackLabels = () => playbackButtons().map(button => button.textContent.trim());
+        const waitUntil = async (predicate, timeout = 1200) => {
+          for (let elapsed = 0; elapsed < timeout; elapsed += 25) {
+            if (predicate()) return true;
+            await wait(25);
+          }
+          return predicate();
+        };
+        const setPlaybackTime = async (input, value) => {
+          if (input === null) throw new Error('播放范围控件缺失');
+          input.value = String(value);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(25);
+        };
+        const playbackInitial = () => playback.querySelector('[data-iui-output="ok"][data-iui-degraded="0"]') !== null
+          && playbackButtons().length === 2 && playbackLabels().every(label => label === '播放')
+          && playbackTime() === 0 && playbackCursor() === 0 && playbackMetric() === 0;
+        check('rangePlaybackInitial', () => playbackInitial() ? true : '初始滑轨/图表/派生读数或播放按钮错误');
+        const sliderPlayButton = () => playbackButtons().find(button => button.closest('[data-iui-slider]') !== null);
+        const chartPlayButton = () => playbackButtons().find(button => button.closest('[data-iui-chart-scrub]') !== null);
+        sliderPlayButton()?.click();
+        const sliderAdvanced = await waitUntil(() => Number(playbackTime()) > 0, 700);
+        check('rangePlaybackSlider', () => sliderAdvanced && playbackLabels().includes('暂停')
+          && playbackCursor() === playbackTime() && playbackMetric() === playbackTime()
+          ? true : '滑轨播放未推进共享状态并同步图表游标/指标');
+        await setPlaybackTime(playbackScrub(), 3);
+        const seekValue = playbackTime();
+        await wait(100);
+        check('rangePlaybackSeekPause', () => seekValue === 3 && playbackTime() === 3
+          && playbackCursor() === 3 && playbackMetric() === 3
+          && playbackLabels().every(label => label === '播放')
+          ? true : '手动拖动未暂停播放或共享图表/读数未停在新时刻');
+        await setPlaybackTime(playbackSlider(), 0);
+        chartPlayButton()?.click();
+        await wait(540);
+        const reachedEnd = playbackTime() === 4;
+        check('rangePlaybackEnd', () => reachedEnd && playbackTime() === 4 && playbackCursor() === 4
+          && playbackMetric() === 4 && playbackLabels().every(label => label === '重播')
+          ? true : '图表播放未到达终点、保持末值或切换为重播');
+        await setPlaybackTime(playbackSlider(), 0);
+        sliderPlayButton()?.click();
+        const resumed = await waitUntil(() => Number(playbackTime()) > 0, 700);
+        const previousHiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden');
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        await wait(80);
+        const hiddenTime = playbackTime();
+        const hiddenPaused = playbackLabels().every(label => label === '播放');
+        await wait(100);
+        if (previousHiddenDescriptor === undefined) delete document.hidden;
+        else Object.defineProperty(document, 'hidden', previousHiddenDescriptor);
+        check('rangePlaybackHiddenPause', () => resumed && hiddenPaused && playbackTime() === hiddenTime
+          && playbackCursor() === hiddenTime && playbackMetric() === hiddenTime
+          ? true : '页面隐藏后播放未暂停或共享读数继续漂移');
         const intervalHost = r3.intervalChart;
         const intervalGraph = () => intervalHost.querySelector('[data-iui-chart="interval"]');
         const intervalMarks = () => [...(intervalGraph()?.querySelectorAll('[data-iui-interval-mark]') ?? [])];
@@ -1693,7 +1762,7 @@ function dumpDom(html, name = 'dump') {
   mkdirSync(folder, {recursive:true})
   const file = join(folder, 'iui-settings.html')
   writeFileSync(file, html)
-  const dump = execFileSync(visibleChromium, ['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--user-data-dir='+join(folder,'settings-profile'),'--virtual-time-budget=3000','--dump-dom','file://'+file], {encoding:'utf8',timeout:60000,stdio:['ignore','pipe','ignore']})
+  const dump = execFileSync(visibleChromium, ['--headless=new','--no-sandbox','--disable-gpu','--hide-scrollbars','--user-data-dir='+join(folder,'settings-profile'),'--virtual-time-budget=4500','--dump-dom','file://'+file], {encoding:'utf8',timeout:60000,stdio:['ignore','pipe','ignore']})
   writeFileSync(join(folder, 'last-' + name + '.html'), dump)
   return dump
 }
@@ -1805,6 +1874,11 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-multi-chart-scrub-samples="ok"/u,'各曲线应独立插值，范围外不显示读数，窄列无横溢')
   assert.match(html,/data-shared-chart-scrub-initial="ok"/u,'共享滑轨应在窄列显示两个可点击阶段标记')
   assert.match(html,/data-shared-chart-scrub-samples="ok"/u,'阶段按钮与滑轨应双向更新共享时刻、两图游标和派生数量')
+  assert.match(html,/data-range-playback-initial="ok"/u,'滑轨与可拖动图表应提供可访问播放按钮并共享初始时刻')
+  assert.match(html,/data-range-playback-slider="ok"/u,'滑轨播放应推进既有状态并更新图表游标和派生读数')
+  assert.match(html,/data-range-playback-seek-pause="ok"/u,'手动拖动应暂停共享播放并将图表停在新时刻')
+  assert.match(html,/data-range-playback-end="ok"/u,'图表播放应在末值停止并显示重播')
+  assert.match(html,/data-range-playback-hidden-pause="ok"/u,'页面隐藏后应暂停播放且保持图表和读数')
   assert.match(html,/data-interval-chart-initial="ok"/u,'区间图应在同 lane 的重叠时段分配不同轨道，并适配 320px')
   assert.match(html,/data-interval-chart-select="ok"/u,'点击区间应显示准确 lane、标签和起止分钟')
   assert.match(html,/data-interval-chart-rebind="ok"/u,'state 重绑移除已选区间时应清除旧读数')
