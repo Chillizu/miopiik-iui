@@ -17,6 +17,33 @@
 .miopiik-enter { animation: miopiik-enter .14s ease-out; }
 [data-iui-streaming] .miopiik-enter { animation: none; }
 
+.miopiik-drawing-surface,
+.miopiik-drawing-viewport {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.miopiik-drawing-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-block-end: 4px;
+}
+
+.miopiik-drawing-tools > button { margin-inline-start: auto; }
+
+[data-iui-drawing-expanded] {
+  max-block-size: min(62vh, 560px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+[data-iui-drawing-expanded]:focus-visible {
+  outline: 2px solid var(--iui-accent, #4176e6);
+  outline-offset: -2px;
+}
+
 .miopiik-ctl,
 .miopiik-range > input,
 [data-iui-input] input {

@@ -224,6 +224,21 @@ const POINT_ANCHORED_DRAWING_ML = `<ui density="auto">
   </drawing>
 </ui>`
 
+const DRAWING_ZOOM_ML = `<ui density="auto">
+  <drawing width="480" height="200" label="宽画幅文字放大示意">
+    <line x1="20" y1="100" x2="460" y2="100" stroke="muted"/>
+    <circle cx="80" cy="100" r="10" fill="accent"/>
+    <label x="40" y="58" text="窄列中应可读的标注" size="14"/>
+  </drawing>
+</ui>`
+
+const DRAWING_SMALL_READABLE_ML = `<ui density="auto">
+  <drawing width="300" height="220" label="小型可读示意">
+    <circle cx="40" cy="70" r="12" fill="accent"/>
+    <label x="64" y="76" text="12px 清晰标注" size="12"/>
+  </drawing>
+</ui>`
+
 const STATIC_DRAWING_ML = `<ui density="auto" fallback="剖面中可以看到密封内衬。">
   <drawing width="300" height="146" label="密封结构">
     <view label="剖面" caption="剖面中可以看到密封内衬。">
@@ -625,7 +640,7 @@ const MAIN_RUN = `
     mountElement(page.render({view:'page'}), pageHost);
     pageHost.setAttribute('data-plugin-settings-tabs', String(pageHost.querySelectorAll('[role=tablist]').length));
     const embeds=globalThis.__miopiikMarkdownEmbeds;
-    const mountBlock=(raw)=>{const host=document.createElement('div');document.getElementById('root').appendChild(host);mountElement(embeds.renderBlock(raw),host);return host};
+    const mountBlock=(raw, width)=>{const host=document.createElement('div');if(width!==undefined)host.style.width=width;document.getElementById('root').appendChild(host);mountElement(embeds.renderBlock(raw),host);return host};
     const demo=document.createElement('div');
     document.getElementById('root').appendChild(demo);
     const controlsHost=mountBlock(${JSON.stringify(DEMO_CONTROLS_ML)});
@@ -641,6 +656,8 @@ const MAIN_RUN = `
       legacyLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML.replace(' density="auto"', ''))}),
       comparison:mountBlock(${JSON.stringify(DRAWING_COMPARISON_ML)}),
       pointAnchoredDrawing:mountBlock(${JSON.stringify(POINT_ANCHORED_DRAWING_ML)}),
+      drawingZoom:mountBlock(${JSON.stringify(DRAWING_ZOOM_ML)}, '320px'),
+      drawingSmallReadable:mountBlock(${JSON.stringify(DRAWING_SMALL_READABLE_ML)}, '320px'),
       staticDrawing:mountBlock(${JSON.stringify(STATIC_DRAWING_ML)}),
       adaptiveDrawing:mountBlock(${JSON.stringify(ADAPTIVE_DRAWING_ML)}),
       repeatDrawing:mountBlock(${JSON.stringify(DRAWING_REPEAT_ML)}),
@@ -1082,6 +1099,59 @@ const MAIN_RUN = `
           && secondViewPoint.label.text === 'B' && secondViewPoint.label.x === 168 && secondViewPoint.label.y === 50
           && secondViewPoint.viewBox === initialPointViewBox && secondViewPoint.movingCircle === false
           ? true : '切换第二视图后共享 point、路径终点或共享画幅不同步');
+        const zoomHost = r3.drawingZoom;
+        const zoomButton = () => zoomHost.querySelector('[data-iui-drawing-zoom]');
+        const zoomViewport = () => zoomHost.querySelector('[data-iui-drawing-viewport]');
+        const zoomGraph = () => zoomHost.querySelector('svg[data-iui-drawing]');
+        const zoomText = () => [...(zoomGraph()?.querySelectorAll('text') ?? [])].find(node => node.textContent === '窄列中应可读的标注');
+        const zoomScale = () => {
+          const svg = zoomGraph();
+          const text = zoomText();
+          const viewBox = (svg?.getAttribute('viewBox') ?? '').trim().split(/[ ,]+/u).map(Number);
+          if (!svg || !text || viewBox.length !== 4 || viewBox.some(value => !Number.isFinite(value)) || viewBox[2] <= 0) return NaN;
+          return Number(text.getAttribute('font-size')) * svg.getBoundingClientRect().width / viewBox[2];
+        };
+        const initialZoomViewBox = zoomGraph()?.getAttribute('viewBox');
+        check('drawingZoomInitial', () => zoomHost.querySelector('[data-iui-output="ok"][data-iui-degraded="0"]') !== null
+          && zoomHost.clientWidth === 320 && zoomButton()?.getAttribute('aria-expanded') === 'false'
+          && zoomViewport()?.tabIndex === -1 && zoomScale() < 11 && initialZoomViewBox !== undefined
+          ? true : '窄列小字未提示放大，或折叠态视口语义错误: scale=' + zoomScale());
+        zoomButton()?.click();
+        await wait(35);
+        const expandedZoomScale = zoomScale();
+        const expandedViewport = zoomViewport();
+        if (expandedViewport !== null) {
+          const maxPan = Math.max(0, expandedViewport.scrollWidth - expandedViewport.clientWidth);
+          expandedViewport.scrollLeft = Math.min(32, maxPan);
+          await wait(20);
+        }
+        check('drawingZoomExpanded', () => zoomButton()?.getAttribute('aria-expanded') === 'true'
+          && zoomViewport()?.tabIndex === 0 && expandedZoomScale >= 12
+          && zoomHost.textContent.includes('可横向滚动')
+          && zoomGraph()?.getAttribute('viewBox') === initialZoomViewBox
+          && expandedViewport !== null && expandedViewport.scrollWidth > expandedViewport.clientWidth
+          && expandedViewport.scrollLeft > 0 && zoomHost.scrollWidth <= zoomHost.clientWidth + 1
+          && document.documentElement.scrollWidth <= window.innerWidth
+          ? true : '放大态未达到 12px、未可聚焦/平移、改了 viewBox 或造成页面横溢: scale=' + expandedZoomScale);
+        zoomButton()?.click();
+        await wait(35);
+        const zoomViewportAfterCollapse = zoomViewport();
+        check('drawingZoomCollapse', () => zoomButton()?.getAttribute('aria-expanded') === 'false'
+          && zoomViewportAfterCollapse?.tabIndex === -1 && zoomViewportAfterCollapse.scrollLeft === 0
+          && zoomGraph()?.getAttribute('viewBox') === initialZoomViewBox
+          && document.documentElement.scrollWidth <= window.innerWidth
+          ? true : '收起后局部平移未归零、视口未复位或页面横溢');
+        const smallReadableHost = r3.drawingSmallReadable;
+        const smallReadableGraph = smallReadableHost.querySelector('svg[data-iui-drawing]');
+        const smallReadableText = [...(smallReadableGraph?.querySelectorAll('text') ?? [])].find(node => node.textContent === '12px 清晰标注');
+        const smallReadableBox = (smallReadableGraph?.getAttribute('viewBox') ?? '').trim().split(/[ ,]+/u).map(Number);
+        const smallReadableScale = smallReadableGraph && smallReadableText && smallReadableBox.length === 4 && smallReadableBox[2] > 0
+          ? Number(smallReadableText.getAttribute('font-size')) * smallReadableGraph.getBoundingClientRect().width / smallReadableBox[2]
+          : NaN;
+        check('drawingSmallReadable', () => smallReadableHost.clientWidth === 320
+          && smallReadableHost.querySelector('[data-iui-drawing-zoom]') === null
+          && smallReadableScale >= 12 && smallReadableHost.scrollWidth <= smallReadableHost.clientWidth + 1
+          ? true : '本来已可读的小图仍出现放大按钮，或文字小于 12px: scale=' + smallReadableScale);
         check('staticDrawingView', () => {
           const host = r3.staticDrawing;
           const graph = host.querySelector('svg[data-iui-drawing]');
@@ -1700,6 +1770,10 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-point-anchored-initial="ok"/u,'初始 point 应统一驱动 circle、line、path 和偏移标签')
   assert.match(html,/data-point-anchored-state="ok"/u,'改变 state point 后不同图元与标签坐标应一起移动')
   assert.match(html,/data-point-anchored-second-view="ok"/u,'第二视图复用相同 point，且共享 viewBox 保持不变')
+  assert.match(html,/data-drawing-zoom-initial="ok"/u,'窄列小字绘图应显示可访问的放大控制')
+  assert.match(html,/data-drawing-zoom-expanded="ok"/u,'放大态应达到 12px、允许局部平移并保持 viewBox 与页面无横溢')
+  assert.match(html,/data-drawing-zoom-collapse="ok"/u,'收起放大态应复位局部平移且保持 viewBox')
+  assert.match(html,/data-drawing-small-readable="ok"/u,'原生已可读的小图应达到 12px 且不显示放大控制')
   assert.match(html,/data-static-drawing-view="ok"/u,'单个绘图视图应呈现静态标签与关联图注、无切换控件和横溢')
   assert.match(html,/data-comparison-live="ok"/u,'尚未定稿的流式对照选项应禁用')
   assert.match(html,/data-bound-views="ok"/u,'切换完整视图应更新共享状态')

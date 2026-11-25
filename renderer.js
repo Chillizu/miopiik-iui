@@ -217,6 +217,81 @@
       return { shapes, error }
     }
 
+    const DRAWING_READABLE_FONT = 11
+    const DRAWING_ZOOM_FONT = 12
+
+    function smallestDrawingLabel(primitives) {
+      let size = Infinity
+      for (const part of primitives ?? []) {
+        if (part.type === 'repeat') size = Math.min(size, smallestDrawingLabel(part.children))
+        if (part.type !== 'label') continue
+        // A label whose size is computed can use the full supported range.
+        const authored = part.props.size
+        size = Math.min(size, authored === undefined ? 13 : Number.isFinite(authored) ? authored : 8)
+      }
+      return size
+    }
+
+    function IuiDrawingViewport({ width, height, shapes, label, x, y, describedBy, fluid, adaptive, streaming, zoomFont }) {
+      const viewportRef = React.useRef(null)
+      const zoomRef = React.useRef(null)
+      const viewportId = React.useId()
+      const [availableWidth, updateWidth] = React.useState(0)
+      const [enlarged, setEnlarged] = React.useState(false)
+      const measureLabels = adaptive && streaming !== true && Number.isFinite(zoomFont)
+      React.useLayoutEffect(() => {
+        const viewport = viewportRef.current
+        if (!measureLabels || viewport === null) return
+        const measure = () => {
+          const next = viewportRef.current?.clientWidth
+          if (next > 0) updateWidth(next)
+        }
+        measure()
+        if (typeof ResizeObserver === 'undefined') return
+        const observer = new ResizeObserver(measure)
+        observer.observe(viewport)
+        return () => observer.disconnect()
+      }, [measureLabels])
+
+      const visibleFont = shapes.reduce((minimum, shape) => shape.type === 'text' ? Math.min(minimum, shape.props.fontSize) : minimum, Infinity)
+      const collapsedWidth = fluid ? availableWidth : Math.min(availableWidth, width)
+      const canEnlarge = measureLabels && collapsedWidth > 0 && visibleFont * collapsedWidth < DRAWING_READABLE_FONT * width
+      const expanded = enlarged && measureLabels
+      const expandedWidth = expanded ? Math.max(availableWidth, Math.ceil(width * DRAWING_ZOOM_FONT / zoomFont)) : undefined
+      const collapse = () => {
+        setEnlarged(false)
+        const viewport = viewportRef.current
+        if (viewport !== null) {
+          viewport.scrollLeft = 0
+          viewport.scrollTop = 0
+        }
+      }
+
+      return h('div', { className: 'miopiik-drawing-surface' },
+        canEnlarge || expanded ? h('div', { className: 'miopiik-drawing-tools' },
+          expandedWidth > availableWidth + 1 ? h('span', { className: 'miopiik-control-label' }, '可横向滚动') : null,
+          h('button', {
+            ref: zoomRef, type: 'button', className: 'miopiik-ctl miopiik-choice', 'data-iui-drawing-zoom': '1',
+            'aria-controls': viewportId, 'aria-expanded': String(expanded),
+            onClick: expanded ? collapse : () => setEnlarged(true),
+          }, expanded ? '恢复原比例' : '放大图解'),
+        ) : null,
+        h('div', {
+          ref: viewportRef, id: viewportId, className: 'miopiik-drawing-viewport', 'data-iui-drawing-viewport': '1',
+          'data-iui-drawing-expanded': expanded ? '1' : undefined,
+          role: expanded ? 'region' : undefined, 'aria-label': expanded ? label : undefined, tabIndex: expanded ? 0 : undefined,
+          onKeyDown: expanded ? (event) => {
+            if (event.key !== 'Escape') return
+            event.preventDefault()
+            collapse()
+            zoomRef.current?.focus()
+          } : undefined,
+        }, h('div', { style: expanded ? { width: expandedWidth } : undefined },
+          svgCanvas(width, height, shapes, label, { drawing: true, fluid: fluid || expanded, x, y, describedBy }),
+        )),
+      )
+    }
+
     function IuiDrawing({ item, resolve, resolveDataset, scope, visible, streaming, adaptive, weight }) {
       const [choice, choose] = React.useState(null)
       const captionId = React.useId()
@@ -228,6 +303,7 @@
         if (!adaptive || streaming === true || widthHint === undefined) return null
         return item.children.flatMap((part) => part.type === 'view' ? part.children : [part])
       }, [adaptive, item.children, streaming, widthHint])
+      const zoomFont = React.useMemo(() => smallestDrawingLabel(primitives), [primitives])
       const [measured, updateMeasured] = React.useState(null)
       const baseFrame = React.useMemo(() => {
         if (!adaptive || widthHint === undefined) return null
@@ -275,7 +351,8 @@
       const visualWidth = fluid ? Math.max(width, Math.round(aspect * 340)) : width
       const graph = shapes.length === 0
         ? h('div', { 'data-iui-drawing-invalid': '1', style: { color: C.muted } }, graphLabel)
-        : svgCanvas(width, height, shapes, graphLabel, { drawing: true, fluid, x: frame?.x, y: frame?.y, describedBy: caption === undefined ? undefined : captionId })
+        : h(IuiDrawingViewport, { width, height, shapes, label: graphLabel, x: frame?.x, y: frame?.y,
+          describedBy: caption === undefined ? undefined : captionId, fluid, adaptive, streaming, zoomFont })
       const layout = { minWidth: 0, maxWidth: '100%', ...weightStyle }
       const visualLayout = { width: visualWidth, margin: '0 auto' }
       if (!hasViews) return h('div', { 'data-iui-weight': weight, style: fluid ? { ...layout, ...visualLayout } : layout }, graph, repeatNotice)
