@@ -197,9 +197,9 @@ const DRAWING_COMPARISON_ML = `<ui density="auto" fallback="蓝色圆点仅出�
   <state name="showLater" value="true"/>
   <toggle label="提供调整后视图" bind="$state.showLater"/>
   <drawing width="240" height="112" label="图层对照">
-    <rect x="4" y="4" width="232" height="104"/>
+    <rect x="4" y="4" width="232" height="104" stroke="$state.showLater ? 'success' : 'border'"/>
     <view label="之前" caption="共同结构。"/>
-    <line x1="16" y1="20" x2="16" y2="48" stroke="muted" stroke-dasharray="3 4"/>
+    <line x1="16" y1="20" x2="16" y2="48" stroke="$state.showLater ? 'success' : 'border'" stroke-dasharray="3 4"/>
     <view label="之后" caption="新增一个圆点。" when="$state.showLater == true"><circle cx="234" cy="40" r="9" fill="accent"/></view>
     <label x="120" y="97" align="center" text="共用标注"/>
   </drawing>
@@ -1028,6 +1028,24 @@ const MAIN_RUN = `
         const compareGraph = () => compareFigure().querySelector('svg[data-iui-drawing]');
         const compareCaption = () => compareFigure().querySelector('figcaption[data-iui-drawing-caption]');
         const shapeOrder = () => [...compareGraph().children].map((shape) => shape.localName).join(',');
+        const compareRect = () => compareGraph().querySelector(':scope > rect');
+        const compareLine = () => compareGraph().querySelector(':scope > line');
+        const initialRectStroke = compareRect()?.getAttribute('stroke');
+        const initialLineStroke = compareLine()?.getAttribute('stroke');
+        compare.querySelector('button[role="switch"]')?.click();
+        await wait(25);
+        const inactiveRectStroke = compareRect()?.getAttribute('stroke');
+        const inactiveLineStroke = compareLine()?.getAttribute('stroke');
+        compare.querySelector('button[role="switch"]')?.click();
+        await wait(25);
+        check('drawingStateStrokeToggle', () => compare.querySelector('[data-iui-output="ok"][data-iui-degraded="0"]') !== null
+          && initialRectStroke !== undefined && initialLineStroke !== undefined
+          && inactiveRectStroke !== initialRectStroke && inactiveLineStroke !== initialLineStroke
+          && compareRect() !== null && compareLine() !== null
+          && compareRect()?.getAttribute('stroke') === initialRectStroke
+          && compareLine()?.getAttribute('stroke') === initialLineStroke
+          && shapeOrder() === 'rect,line,text'
+          ? true : '状态切换未更新并恢复 line/rect stroke，或图元降级/丢失');
         check('comparisonInitial', () => {
           const buttons = compareButtons();
           const named = compareGraph().getAttribute('aria-describedby') === compareCaption().id;

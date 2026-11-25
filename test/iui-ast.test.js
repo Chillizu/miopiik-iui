@@ -165,7 +165,12 @@ test('区间图表归一化车道、时间顺序、范围与绑定数据', () =>
   ]) assert.equal(chartIntervals(invalid), null, JSON.stringify(invalid))
   assert.equal(chartIntervals(Array.from({ length: 61 }, (_, i) => ['A', i, i + 1, 'x'])), null)
   assert.equal(chartIntervals(Array.from({ length: 9 }, (_, i) => [`L${i}`, 0, 1, 'x'])), null)
-  for (const domain of [[0, 7], [2, 9], [4, 3], [0, Infinity], [0, 0], '0,8']) {
+  const originalSeries = structuredClone(series)
+  const extended = chartIntervals(series, [2, 7])
+  assert.equal(extended.min, 1)
+  assert.equal(extended.max, 8)
+  assert.deepEqual(series, originalSeries, '范围扩展不会修改输入数据')
+  for (const domain of [[4, 3], [0, Infinity], [0, 0], '0,8', [-Number.MAX_VALUE, Number.MAX_VALUE]]) {
     assert.equal(chartIntervals(series, domain), null, JSON.stringify(domain))
   }
   assert.equal(chartIntervals([['A', 0, 1, 'x'.repeat(101)]]), null)
@@ -199,7 +204,7 @@ test('区间图表归一化车道、时间顺序、范围与绑定数据', () =>
   for (const forbidden of ['cursor', 'scrub', 'bind', 'marks', 'xScale', 'yUnit']) {
     assert.equal(interval({ [forbidden]: forbidden === 'marks' ? [] : 'x' }).ok, false, forbidden)
   }
-  assert.equal(interval({ domain: [0, 1] }).ok, false)
+  assert.equal(interval({ domain: [0, 1] }).ok, true)
 })
 
 test('折线图 scrub 使用线性横轴，保留单位绑定并拒绝冲突控制', () => {

@@ -45,7 +45,7 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 </drawing>
 ```
 
-`fill` 和 `stroke` 使用 `text`、`muted`、`border`、`surface`、`accent`、`neutral`、`success`、`warning`、`danger`、`info` 或 `none`。用 `stroke-width` 指定线宽，`opacity` 接收 0–1 的数字或绑定。
+`fill` 和 `stroke` 使用 `text`、`muted`、`border`、`surface`、`accent`、`neutral`、`success`、`warning`、`danger`、`info` 或 `none`。用 `stroke="$state.online ? 'success' : 'border'"` 可让描边随状态变化，求值后仍从同一组主题色选取。用 `stroke-width` 指定线宽，`opacity` 接收 0–1 的数字或绑定。
 
 同一幅 `drawing` 可包含最多六个 `<view label="条件" caption="图注">`。直接放在 `drawing` 下的形状始终共用，`view` 容纳该条件的图形。一个可用视图直接呈现图和图注。至少两个可用视图时，宿主在图旁显示切换选项，并默认显示第一个可用条件。按声明顺序绘制，共享和各条件合计最多声明 64 个图元。直线的 `stroke-dasharray` 可用有界的数字列表，例如 `"3 4"`。
 
@@ -64,7 +64,7 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 
 `chart.series` 与 `table.rows` 支持 `derive` 所用的纯表达式，例如 `series='[["当前",$state.cap],["参考",100]]'`。求值后仍按图表和表格预算进行校验。无法计算的节点可写 `fallback="一句话说明这部分"`，保留自然语言解释。
 
-`chart kind="interval"` 给持续时段和数值范围共用一条轴。每项是 `[轨道, 起点, 终点, 标签, 可选主题色]`，最多 8 条轨道、60 个区间。同一轨道里重叠的区间会排在不同行。可用 `domain="[0,6]"` 固定轴范围，切换状态时仍能比较；省略时从所有起止值求范围。`series` 可读同一份本地状态或派生结果。选中区间会显示完整标签及起止值。
+`chart kind="interval"` 给持续时段和数值范围共用一条轴。每项是 `[轨道, 起点, 终点, 标签, 可选主题色]`，最多 8 条轨道、60 个区间。同一轨道里重叠的区间会排在不同行。可用 `domain="[0,6]"` 给不同状态提供共同的基准范围。数据超出基准时，横轴会扩展到完整范围。省略时从所有起止值求范围。`series` 可读同一份本地状态或派生结果。选中区间会显示完整标签及起止值。
 
 [电容屏示例](../test/fixtures/natural/capacitive-screen.md)组合手机正视图、盖板与电极剖面。触摸前后的 pF 读数为教学示意。互电容与自电容测量方式各有不同的量和变化方向。[Infineon 电容触摸传感设计指南](https://www.infineon.com/dgdl/Infineon-AN234185_PSOC_4_CAPSENSE_touchpad_design_guide-ApplicationNotes-v03_00-EN.pdf?fileId=8ac78c8c8e7ead30018ee43d60a1036a)
 

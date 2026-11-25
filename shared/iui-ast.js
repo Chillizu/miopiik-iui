@@ -210,8 +210,9 @@ export function chartIntervals(series, domain) {
   }
   if (domain !== undefined) {
     if (!Array.isArray(domain) || domain.length !== 2 || !Number.isFinite(domain[0]) || !Number.isFinite(domain[1])
-      || domain[0] >= domain[1] || min < domain[0] || max > domain[1]) return null
-    ;[min, max] = domain
+      || domain[0] >= domain[1] || !Number.isFinite(domain[1] - domain[0])) return null
+    min = Math.min(min, domain[0])
+    max = Math.max(max, domain[1])
   }
   if (!Number.isFinite(max - min) || max <= min) return null
   for (const lane of lanes) {
@@ -431,7 +432,8 @@ export function drawingProps(type, props, resolve = null, inlineValue = null) {
       }
       value = resolve(value)
     }
-    const canCalculate = DRAWING_SHAPES.has(type) && (rule.startsWith('number') || (type === 'label' && key === 'text'))
+    const canCalculate = DRAWING_SHAPES.has(type) && (rule.startsWith('number')
+      || (type === 'label' && key === 'text') || key === 'fill' || key === 'stroke')
     const calculated = !bound && canCalculate && typeof value === 'string'
       ? inlineValue?.(key, value)
       : undefined
@@ -866,7 +868,7 @@ export function validateAst(input) {
         const staticIntervals = chartIntervals(seriesBinding.literal)
         if (staticIntervals !== null) {
           if (domain.scope === undefined && props.domain !== undefined && chartIntervals(seriesBinding.literal, domain.literal) === null) {
-            return failNode(node, path, 'chart.interval.domain 必须覆盖全部区间且跨度为正')
+            return failNode(node, path, 'chart.interval.domain 需要有限正跨度且与区间范围可合并')
           }
         } else {
           if (Array.isArray(seriesBinding.literal)) return failNode(node, path, 'chart.interval.series 包含无效区间')

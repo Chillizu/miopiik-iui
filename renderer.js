@@ -166,8 +166,8 @@
       }
       const outline = child.type === 'rect' || child.type === 'circle' ? 'border' : 'accent'
       const strokeColor = stroke ?? (fill === undefined || fill === 'none' ? outline : 'none')
-      // Marks sharing a point move together. An SVG line or path has no matching CSS position transition.
-      const animated = plan?.animated && child.props.at === undefined && (child.type === 'rect' || child.type === 'circle')
+      // An anchored mark must stay attached to the line or path that shares its point.
+      const animated = plan?.animated && child.props.at === undefined
       return h(DRAWING_TAGS[child.type], {
         key,
         ...geometry,

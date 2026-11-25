@@ -17,7 +17,7 @@ export const IUI_CHARTER = [
   '成组对象可共用一套图元：<repeat items="$state.points"><circle cx="$data.item.x" cy="30" r="4"/><label x="$data.item.x" y="50" text="$data.item.name"/></repeat>。items 取数组，$data.index 从 0 开始。同一图最多展开 64 个图元。',
   `时间或范围的重叠用 <chart kind="interval" label="共享时间轴" x-unit="分" domain='[0,4]' series='[["甲",0,2,"准备"],["乙",1,3,"执行","success"]]'/>。每行是轨道、起点、终点、标签、可选主题色。宿主根据数值绘制位置，点选区间读完整时间。`,
   `对象之间的流向可用 diagram，由宿主布置。先写 <node id="a" label="起点"/> 和 <node id="b" label="下一站"/>，然后写 <edge from="a" to="b" label="作用"/>。可用 lane(label) 分组，node.note 补充短说明，node 和 edge 允许用 when="$state.名称" 显示对应状态。数字关系使用 chart(kind=bar/line/donut)、table、metric，步骤用 steps(step)。row 横向就近、column 纵向。chart.series 和 table.rows 可用数组、完整绑定或纯表达式。table 同时写 columns。state 的 value、segmented 的 options 用合法 JSON，如 <state name="mode" value='"short"'/> 和 options='[{"label":"短","value":"short"}]'。控件 bind="$state.名称"，slider 设 min/max/step，toggle 绑定布尔。button 支持 set/append/pop/reset（bind、value、max 或 min）和用户触发的 copy。`,
-  '普通属性填字面量或完整 $state 路径，例如 metric value="$state.result"；图元数值允许 x="$state.x + 10" 等局部算式。共用公式放 derive，用 ==、!=、?:、round/min/max。图外的文字用 <text>，label 只在 drawing 内。数组用 len/at/gather/join/zip/dot/matvec/scale/softmax/roundEach，索引只用 at(a,i)。用两组输入检查图形和读数的变化是否与正文一致。',
+  `普通属性填字面量或完整 $state 路径，例如 metric value="$state.result"。图元数值和配色允许局部算式，如 x="$state.x + 10"、stroke="$state.online ? 'success' : 'border'"。共用公式放 derive。控件只绑定可写的 state 输入，derive 的结果供读取。用 ==、!=、?:、round/min/max。图外的文字用 <text>，label 只在 drawing 内。数组用 len/at/gather/join/zip/dot/matvec/scale/softmax/roundEach，索引只用 at(a,i)。用两组输入检查图形和读数的变化是否与正文一致。`,
   `例如讲影长时，把竖杆和地面画成共享图层，用两片光线对照。同一个物体的哪一处变化，直接看图：
 ${FENCE}iui
 <ui density="auto" fallback="光线越贴近地面，同一根竖杆的影子越长">

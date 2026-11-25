@@ -114,12 +114,13 @@ test('numeric drawing expressions use local state and retain SVG field bounds', 
   const checked = check(`<ui><drawing width="300" height="120" label="负载示意">
     <rect x="20" y="20" width="$state.load * 10" height="30" opacity="$state.load / 10"/>
     <label x="20" y="100" text="$state.load + ' 项'"/>
-    <rect x="20" y="40" width="40" height="30" fill="$state.load + 1"/>
+    <rect x="20" y="40" width="40" height="30" fill="$state.online ? 'success' : 'border'" stroke="$state.online ? 'accent' : 'muted'"/>
+    <circle cx="60" cy="60" r="8" fill="$state.online ? 'url(https://example.com)' : 'lime'"/>
   </drawing></ui>`)
-  assert.equal(checked.degraded, 1)
-  const [shape, label] = checked.ast.root.children
+  assert.equal(checked.degraded, 0)
+  const [shape, label, colors, unsafeColors] = checked.ast.root.children
   const render = (load, item = shape) => {
-    const scope = { state: { load } }
+    const scope = { state: { load, online: true } }
     return drawingProps(item.type, item.props, (value) => resolveValue(value, scope),
       (key) => evaluateExpr(item.geometryExpressions[key], scope).value)
   }
@@ -127,6 +128,18 @@ test('numeric drawing expressions use local state and retain SVG field bounds', 
   assert.equal(render(7).opacity, 0.7)
   assert.equal(render(6, label).text, '6 项')
   assert.equal(render(11), null)
+  assert.equal(render(0, colors).fill, 'success')
+  assert.equal(render(0, colors).stroke, 'accent')
+  const offline = { state: { online: false } }
+  const colorProps = (item, scope) => drawingProps(item.type, item.props,
+    (value) => resolveValue(value, scope),
+    (key) => evaluateExpr(item.geometryExpressions[key], scope).value)
+  assert.equal(colorProps(colors, offline).fill, 'border')
+  assert.equal(colorProps(colors, offline).stroke, 'muted')
+  assert.equal(colorProps(unsafeColors, { state: { online: true } }), null)
+  assert.equal(colorProps(unsafeColors, { state: { online: false } }), null)
+  assert.equal(drawingProps('circle', { cx: 1, cy: 1, r: 1, fill: 'chartreuse' }), null)
+  assert.equal(drawingProps('path', { d: '$state.path' }, () => 'M 0 0 L 1 1'), null)
 })
 
 test('drawing geometry, path operations and viewport have bounded safe ranges', () => {
