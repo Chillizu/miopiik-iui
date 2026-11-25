@@ -50,6 +50,8 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 
 `chart.series` 与 `table.rows` 支持 `derive` 所用的纯表达式，例如 `series='[["当前",$state.cap],["参考",100]]'`。求值后仍按图表和表格预算进行校验。无法计算的节点可写 `fallback="一句话说明这部分"`，保留自然语言解释。
 
+`chart kind="interval"` 给持续时段和数值范围共用一条轴。每项是 `[轨道, 起点, 终点, 标签, 可选主题色]`，最多 8 条轨道、60 个区间。同一轨道里重叠的区间会排在不同行。可用 `domain="[0,6]"` 固定轴范围，切换状态时仍能比较；省略时从所有起止值求范围。`series` 可读同一份本地状态或派生结果。选中区间会显示完整标签及起止值。
+
 [电容屏示例](../test/fixtures/natural/capacitive-screen.md)组合手机正视图、盖板与电极剖面。触摸前后的 pF 读数为教学示意。互电容与自电容测量方式各有不同的量和变化方向。[Infineon 电容触摸传感设计指南](https://www.infineon.com/dgdl/Infineon-AN234185_PSOC_4_CAPSENSE_touchpad_design_guide-ApplicationNotes-v03_00-EN.pdf?fileId=8ac78c8c8e7ead30018ee43d60a1036a)
 
 ## 候选验收

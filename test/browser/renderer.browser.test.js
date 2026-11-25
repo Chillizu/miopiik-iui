@@ -282,6 +282,13 @@ const SHARED_CHART_SCRUB_ML = `<ui density="auto">
   <metric label="积水量" value="$state.water" unit="升"/>
 </ui>`
 
+const INTERVAL_CHART_ML = `<ui density="auto">
+  <state name="mode" value='"baseline"'/>
+  <derive name="spans" expr="$state.mode == 'baseline' ? [['组装',0,3,'装配','info'],['组装',2,5,'检查','warning'],['交付',1,4,'发送','accent']] : [['组装',0,2,'装配','info'],['交付',3,6,'发送','accent']]"/>
+  <segmented label="数据版本" bind="$state.mode" options='[{"label":"基线","value":"baseline"},{"label":"更新","value":"updated"}]'/>
+  <chart kind="interval" label="处理时段" x-unit="分钟" domain='[0,6]' series="$state.spans"/>
+</ui>`
+
 const R3_WEIGHT_AST = {
   title: '语义权重',
   root: {
@@ -623,6 +630,7 @@ const MAIN_RUN = `
       chartScrub:mountBlock(${JSON.stringify(CHART_SCRUB_ML)}),
       multiChartScrub:mountBlock(${JSON.stringify(MULTI_CHART_SCRUB_ML)}),
       sharedChartScrub:mountBlock(${JSON.stringify(SHARED_CHART_SCRUB_ML)}),
+      intervalChart:mountBlock(${JSON.stringify(INTERVAL_CHART_ML)}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
       copy:mountBlock(${JSON.stringify(JSON.stringify(R3_COPY_AST))}),
@@ -640,6 +648,8 @@ const MAIN_RUN = `
     r3Hosts.chartScrub.style.maxWidth = '320px';
     r3Hosts.multiChartScrub.style.maxWidth = '320px';
     r3Hosts.sharedChartScrub.style.maxWidth = '320px';
+    r3Hosts.intervalChart.style.width = '320px';
+    r3Hosts.intervalChart.style.maxWidth = '320px';
     window.__r3Hosts=r3Hosts;
     // L-11 基础：DOM 级行内嫁接——原生先渲染（加粗跨 token 保留），再原位替换受信 token
     const graftHost=document.createElement('div');
@@ -1220,6 +1230,57 @@ const MAIN_RUN = `
             && JSON.stringify(samples) === '[[4,[4,4],12],[6.5,[6.5,6.5],7],[10,[10,10],0]]'
             ? true : JSON.stringify(samples));
         }
+        const intervalHost = r3.intervalChart;
+        const intervalGraph = () => intervalHost.querySelector('[data-iui-chart="interval"]');
+        const intervalMarks = () => [...(intervalGraph()?.querySelectorAll('[data-iui-interval-mark]') ?? [])];
+        const findInterval = (start, end) => intervalMarks().find(mark => mark.getAttribute('data-start') === String(start)
+          && mark.getAttribute('data-end') === String(end));
+        const intervalDetail = () => intervalHost.querySelector('[data-iui-interval-detail]');
+        check('intervalChartInitial', () => {
+          const graph = intervalGraph();
+          const first = findInterval(0, 3);
+          const second = findInterval(2, 5);
+          const firstLane = first?.closest('[data-iui-interval-lane]');
+          const secondLane = second?.closest('[data-iui-interval-lane]');
+          const firstTrack = first?.closest('[data-iui-interval-track]');
+          const secondTrack = second?.closest('[data-iui-interval-track]');
+          const firstStyle = first === undefined ? null : getComputedStyle(first);
+          const secondStyle = second === undefined ? null : getComputedStyle(second);
+          const laneLabel = (lane) => lane?.getAttribute('data-iui-interval-lane') ?? lane?.textContent ?? '';
+          const firstLeft = Number.parseFloat(firstStyle?.left ?? '');
+          const secondLeft = Number.parseFloat(secondStyle?.left ?? '');
+          const firstWidth = Number.parseFloat(firstStyle?.width ?? '');
+          return graph !== null && intervalMarks().length === 3 && laneLabel(firstLane).includes('组装')
+            && laneLabel(secondLane).includes('组装') && firstTrack != null && secondTrack != null && firstTrack !== secondTrack
+            && firstTrack.getBoundingClientRect().top !== secondTrack.getBoundingClientRect().top
+            && firstLeft < secondLeft && firstLeft + firstWidth > secondLeft
+            && Number.parseFloat(firstStyle?.width ?? '') > 0 && Number.parseFloat(secondStyle?.width ?? '') > 0
+            && intervalHost.clientWidth <= 320 && intervalHost.scrollWidth <= intervalHost.clientWidth + 1
+            && graph.clientWidth <= 320 && graph.scrollWidth <= graph.clientWidth + 1
+            ? true : '同 lane 的重叠区间未分轨、区间几何缺失或 320px 容器横溢';
+        });
+        const selectedInterval = findInterval(2, 5);
+        if (selectedInterval !== undefined) {
+          selectedInterval.click();
+          await wait(25);
+        }
+        check('intervalChartSelect', () => {
+          const detail = intervalDetail();
+          return findInterval(2, 5)?.getAttribute('aria-pressed') === 'true'
+            && detail !== null && detail.textContent.trim() === '组装 · 检查 · 2–5分钟'
+            ? true : '点击区间未选中，或读数未显示完整 lane、label 与分钟范围';
+        });
+        const intervalMode = [...intervalHost.querySelectorAll('button')].find(button => button.textContent.trim() === '更新');
+        if (intervalMode !== undefined) {
+          intervalMode.click();
+          await wait(35);
+        }
+        check('intervalChartRebind', () => {
+          const detail = intervalDetail();
+          return intervalMode !== undefined && findInterval(2, 5) === undefined
+            && (detail === null || detail.hidden || detail.getClientRects().length === 0 || detail.textContent.trim() === '')
+            ? true : 'state/segmented 更新后移除的区间仍保留选择读数';
+        });
         check('r3Weight', () => {
           const host = r3.weight;
           const primary = host.querySelector('[data-iui-weight="primary"]');
@@ -1581,6 +1642,9 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-multi-chart-scrub-samples="ok"/u,'各曲线应独立插值，范围外不显示读数，窄列无横溢')
   assert.match(html,/data-shared-chart-scrub-initial="ok"/u,'共享滑轨应在窄列显示两个可点击阶段标记')
   assert.match(html,/data-shared-chart-scrub-samples="ok"/u,'阶段按钮与滑轨应双向更新共享时刻、两图游标和派生数量')
+  assert.match(html,/data-interval-chart-initial="ok"/u,'区间图应在同 lane 的重叠时段分配不同轨道，并适配 320px')
+  assert.match(html,/data-interval-chart-select="ok"/u,'点击区间应显示准确 lane、标签和起止分钟')
+  assert.match(html,/data-interval-chart-rebind="ok"/u,'state 重绑移除已选区间时应清除旧读数')
   assert.match(html,/data-r3-weight="ok"/u,'weight 三态应输出 data-iui-weight 并给出强弱视觉（primary 加粗 / secondary·optional 弱化）')
   assert.match(html,/data-r3-details-closed="ok"/u,'details 初始应收起并带 aria-expanded=false')
   assert.match(html,/data-r3-details-open="ok"/u,'details 由 IuiSheet 受控展开（aria-controls 指向内容）')

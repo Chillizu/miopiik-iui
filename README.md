@@ -136,7 +136,7 @@ Grammar rules:
 - Root element is `<ui>`, with optional `title` and `fallback` attributes. `fallback` is displayed if the root block fails validation.
 - `<state>` accepts either `<state name="range" value='{"...":...}'/>` or a JSON body `<state>{"range":{...}}</state>`.
 - Attribute values can be quoted strings, JSON literals (`options='[...]'`, `rows='[...]'`), numbers, booleans, or `$state.*` binding paths.
-- `gap` accepts `none`, `xs`, `sm`, `md`, `lg`, `xl`, or a number. `chart` accepts `kind="bar"`, `kind="line"`, or `kind="donut"`; legacy `type`/`data` attributes normalize to `kind`/`series`.
+- `gap` accepts `none`, `xs`, `sm`, `md`, `lg`, `xl`, or a number. `chart` accepts `kind="bar"`, `kind="line"`, `kind="donut"`, and `kind="interval"`. Legacy `type`/`data` attributes normalize to `kind`/`series`.
 - A bare top-level `<ui>...</ui>` starting at column 0 is also accepted as a fallback when fences are omitted.
 
 ### Component catalog
@@ -158,7 +158,7 @@ Grammar rules:
 | Divider | `divider` | Optional `label`. |
 | Metric | `metric` | `label`, `value`, `unit`, `delta`, `caption`/`note`, `tone`. Supports `$state` bindings. |
 | Table | `table` | `columns` (1-12 strings or `{key,label}` objects), `rows` (up to 200 arrays or objects), `caption`, `filter` (`$state.*` binding for browser-local text filtering). |
-| Chart | `chart` | `kind` (`bar`, `line`, or `donut`), `series` (point array or `$state` binding), `source`. Rendered as inline SVG. |
+| Chart | `chart` | `kind` (`bar`, `line`, `donut`, or `interval`), `series` (data array or `$state` binding), `source`. |
 | Progress | `progress` | `value` >= 0 (number or `$state` binding), `max` > 0, `label`, `tone`. |
 | Callout | `callout` | `tone`, `title`, `text`; accepts child nodes. |
 | Empty | `empty` | `text`/`title`/`description`, `icon`. |
@@ -177,6 +177,7 @@ Grammar rules:
 | Explore a curve | `chart kind="line" scrub="Elapsed time" x-unit="s" y-unit=" L"` | A numeric `series` supplies the range and the interpolated readout. Scrubbing starts at the first point and changes the local cursor. Use `cursor="$state.time"` with a separate slider to share the position with other components. |
 | Compare curves | `chart kind="line" scrub="Elapsed time"` | `series='[["A",[[0,12],[10,7]]],["B",[[0,12],[10,4]]]]'` puts named curves on shared axes. The cursor reads each curve at the same x value. A curve shows no reading beyond its data range. Up to four curves share a budget of 60 points. |
 | Connect a timeline | `chart kind="line" scrub="Elapsed time" bind="$state.time"` | Initialize `time` with a numeric state and let other charts follow `cursor="$state.time"`. `marks='[[4,"Power off"],[10,"Cooled down"]]'` adds up to six ordered events. A scrub chart lets readers jump to an event by button. |
+| Compare intervals | `chart kind="interval" x-unit="min"` | `series='[["A",0,2,"Setup"],["B",1,3,"Run","success"]]'` places intervals on a shared axis. Use `domain='[0,4]'` to fix the axis across state changes. Readers can select an interval for its full label and extent. |
 
 Any component may carry `when="$state.*"` (optionally with `is="value"` for equality switching) to gate its own visibility against local state. The component whitelist is defined by `REGISTRY` in [shared/iui-ast.js](shared/iui-ast.js). Unlisted tag names degrade locally.
 

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { IUI_VERSION, chartMarks, chartTraces, readBinding, resolveValue, validateAst } from '../shared/iui-ast.js'
+import { IUI_VERSION, chartIntervals, chartMarks, chartTraces, readBinding, resolveValue, validateAst } from '../shared/iui-ast.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 
 const good = () => ({
@@ -137,6 +137,69 @@ test('chart.kind 放行 donut，其余未知 kind 仍拒绝', () => {
   assert.equal(compile('donut').degraded, 0)
   assert.equal(compile('line').degraded, 0)
   assert.equal(compile('pie').degraded, 1)
+})
+
+test('区间图表归一化车道、时间顺序、范围与绑定数据', () => {
+  const series = [
+    ['API', 4, 8, '发布', 'success'],
+    ['Worker', 2, 6, '构建'],
+    ['API', 1, 5, '准备'],
+    ['API', 3, 7, '重叠阶段'],
+  ]
+  assert.deepEqual(chartIntervals(series), {
+    min: 1, max: 8,
+    lanes: [
+      { label: 'API', intervals: [
+        { start: 1, end: 5, label: '准备' },
+        { start: 3, end: 7, label: '重叠阶段' },
+        { start: 4, end: 8, label: '发布', tone: 'success' },
+      ] },
+      { label: 'Worker', intervals: [{ start: 2, end: 6, label: '构建' }] },
+    ],
+  })
+  assert.equal(chartIntervals(series, [0, 10]).min, 0)
+  for (const invalid of [
+    [], [['A', 0, 0, 'x']], [['A', 2, 1, 'x']], [[' ', 0, 1, 'x']], [['A', 0, 1, ' ']],
+    [['A', Infinity, 2, 'x']], [['A', 0, NaN, 'x']], [['A', 0, 1, 'x', 'purple']],
+    [['A', 0, 1, 'x', null]], [['A', 0, 1, 'x', 'success', 'extra']],
+  ]) assert.equal(chartIntervals(invalid), null, JSON.stringify(invalid))
+  assert.equal(chartIntervals(Array.from({ length: 61 }, (_, i) => ['A', i, i + 1, 'x'])), null)
+  assert.equal(chartIntervals(Array.from({ length: 9 }, (_, i) => [`L${i}`, 0, 1, 'x'])), null)
+  for (const domain of [[0, 7], [2, 9], [4, 3], [0, Infinity], [0, 0], '0,8']) {
+    assert.equal(chartIntervals(series, domain), null, JSON.stringify(domain))
+  }
+  assert.equal(chartIntervals([['A', 0, 1, 'x'.repeat(101)]]), null)
+
+  const parsed = parseMiopiikMl(`<ui><chart kind="interval" label="发布窗口" x-unit="分钟" domain='[0,10]'
+    series='[["API",1,5,"准备"],["Worker",3,9,"构建","info"]]'/></ui>`)
+  assert.equal(parsed.ok, true)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.ast.root.props.title, '发布窗口')
+  assert.equal(checked.ast.root.props.domain[1], 10)
+  assert.equal(chartIntervals(checked.ast.root.props.series, checked.ast.root.props.domain).lanes.length, 2)
+  assert.equal(validateAst({ root: { type: 'chart', props: { kind: 'bar', title: 'ignored', series: [['A', 1]] } } }).ast.root.props.title, undefined)
+
+  const dynamic = validateAst({ state: { intervals: [['API', 0, 2, 'Build']], range: [0, 3] }, root: {
+    type: 'chart', props: { kind: 'interval', series: '$state.intervals', domain: '$state.range' },
+  } })
+  assert.equal(dynamic.ok, true)
+  assert.equal(validateAst({ state: { intervals: [] }, root: { type: 'chart', props: {
+    kind: 'interval', series: '$state.intervals', domain: [-Number.MAX_VALUE, Number.MAX_VALUE],
+  } } }).ok, false)
+  const expression = validateAst({ root: { type: 'chart', props: {
+    kind: 'interval', series: 'zip(["API"],[0],[2],["Build"])',
+  } } })
+  assert.equal(expression.ok, true)
+  assert.equal(expression.ast.root.datasetExpression.ok, true)
+
+  const interval = (overrides) => validateAst({ root: { type: 'chart', props: {
+    kind: 'interval', series: [['A', 1, 2, 'x']], ...overrides,
+  } } })
+  for (const forbidden of ['cursor', 'scrub', 'bind', 'marks', 'xScale', 'yUnit']) {
+    assert.equal(interval({ [forbidden]: forbidden === 'marks' ? [] : 'x' }).ok, false, forbidden)
+  }
+  assert.equal(interval({ domain: [0, 1] }).ok, false)
 })
 
 test('折线图 scrub 使用线性横轴，保留单位绑定并拒绝冲突控制', () => {

@@ -280,6 +280,104 @@
   line-height: 1.5;
 }
 
+.miopiik-interval {
+  margin: 0;
+  gap: 6px;
+}
+
+.miopiik-interval-caption {
+  color: var(--iui-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.miopiik-interval-row {
+  display: grid;
+  grid-template-columns: minmax(42px, min(26%, 112px)) minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+}
+
+.miopiik-interval-axis {
+  color: var(--iui-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.miopiik-interval-axis > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  direction: ltr;
+}
+
+.miopiik-interval-lane {
+  font-size: 12px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.miopiik-interval-tracks {
+  display: flex;
+  min-inline-size: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.miopiik-interval-track {
+  position: relative;
+  min-inline-size: 0;
+  min-block-size: 28px;
+  border-block-end: 1px solid var(--iui-line);
+  background: var(--iui-quiet);
+  border-radius: 4px 4px 0 0;
+}
+
+.miopiik-interval-mark {
+  position: absolute;
+  inset-block: 1px 2px;
+  appearance: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  background: color-mix(in srgb, var(--iui-interval-tone) 18%, var(--iui-base));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--iui-interval-tone) 52%, var(--iui-base));
+  color: var(--iui-text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.miopiik-interval-mark[aria-pressed=true], .miopiik-interval-mark:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--iui-interval-tone);
+  outline-offset: -1px;
+}
+
+.miopiik-interval-mark:disabled { cursor: default; }
+
+.miopiik-interval-detail {
+  color: var(--iui-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.miopiik-interval-detail:empty { display: none; }
+
+@media (pointer: coarse) {
+  .miopiik-interval-track { min-block-size: 33px; }
+}
+
+@media (forced-colors: active) {
+  .miopiik-interval-mark { box-shadow: inset 0 0 0 1px ButtonText; }
+  .miopiik-interval-mark[aria-pressed=true], .miopiik-interval-mark:focus-visible { outline-color: Highlight; }
+}
+
 [data-iui-chart-scrub] {
   margin-block-start: 2px;
   padding-block-start: 5px;

@@ -33,7 +33,7 @@ export const REGISTRY = Object.freeze({
   callout: { props: { tone: 'string?', title: 'string?', text: 'string?' }, children: true },
   progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
   empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
-  chart: { props: { kind: 'string', series: 'value', source: 'string?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', bind: 'string?', marks: 'value?' }, children: false },
+  chart: { props: { kind: 'string', series: 'value', source: 'string?', title: 'string?', domain: 'value?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', bind: 'string?', marks: 'value?' }, children: false },
   views: { props: { label: 'string?', bind: 'string?' }, children: true },
   drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
   view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
@@ -179,6 +179,45 @@ export function chartMarks(value) {
     previous = x
   }
   return marks
+}
+
+/** Normalize bounded interval rows into stable lanes and chronological intervals. */
+export function chartIntervals(series, domain) {
+  if (!Array.isArray(series) || series.length < 1 || series.length > LIMITS.series) return null
+  let min = Infinity
+  let max = -Infinity
+  const lanes = []
+  const byLabel = new Map()
+  for (const row of series) {
+    if (!Array.isArray(row) || (row.length !== 4 && row.length !== 5)) return null
+    const [rawLane, start, end, rawLabel, tone] = row
+    if (typeof rawLane !== 'string' || typeof rawLabel !== 'string'
+      || rawLane.trim() === '' || rawLane.trim().length > 100
+      || rawLabel.trim() === '' || rawLabel.trim().length > 100
+      || !Number.isFinite(start) || !Number.isFinite(end) || start >= end
+      || (tone !== undefined && !TONES.includes(tone))) return null
+    min = Math.min(min, start)
+    max = Math.max(max, end)
+    const label = rawLane.trim()
+    let lane = byLabel.get(label)
+    if (lane === undefined) {
+      if (lanes.length >= 8) return null
+      lane = { label, intervals: [] }
+      byLabel.set(label, lane)
+      lanes.push(lane)
+    }
+    lane.intervals.push({ start, end, label: rawLabel.trim(), ...(tone === undefined ? {} : { tone }) })
+  }
+  if (domain !== undefined) {
+    if (!Array.isArray(domain) || domain.length !== 2 || !Number.isFinite(domain[0]) || !Number.isFinite(domain[1])
+      || domain[0] >= domain[1] || min < domain[0] || max > domain[1]) return null
+    ;[min, max] = domain
+  }
+  if (!Number.isFinite(max - min) || max <= min) return null
+  for (const lane of lanes) {
+    lane.intervals.sort((a, b) => a.start - b.start || a.end - b.end)
+  }
+  return { min, max, lanes }
 }
 
 /** Inline datasets use the same bounded expression grammar as derive. */
@@ -712,7 +751,31 @@ export function validateAst(input) {
       }
     }
     if (node.type === 'chart') {
-      if (!['bar', 'line', 'donut'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut')
+      if (!['bar', 'line', 'donut', 'interval'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut/interval')
+      if (props.kind === 'interval') {
+        if (props.label !== undefined) {
+          props = { ...props, title: props.title ?? props.label }
+          delete props.label
+        }
+        if (props.title !== undefined && (typeof props.title !== 'string' || props.title.trim() === '' || props.title.length > 120)) {
+          return failNode(node, path, 'chart.label 需要 120 字以内的非空标题')
+        }
+        if (props.cursor !== undefined || props.scrub !== undefined || props.bind !== undefined || props.marks !== undefined
+          || props.xScale !== undefined || props.yUnit !== undefined) {
+          return failNode(node, path, 'chart.interval 不支持 cursor/scrub/bind/marks/xScale/yUnit')
+        }
+        const domainBinding = readBinding(props.domain)
+        if (props.domain !== undefined && domainBinding.scope === undefined
+          && (!Array.isArray(props.domain) || props.domain.length !== 2
+            || !Number.isFinite(props.domain[0]) || !Number.isFinite(props.domain[1]) || props.domain[0] >= props.domain[1]
+            || !Number.isFinite(props.domain[1] - props.domain[0]))) {
+          return failNode(node, path, 'chart.interval.domain 需要 [min,max] 有限数值范围或完整绑定')
+        }
+      } else if (props.title !== undefined || props.label !== undefined) {
+        props = { ...props }
+        delete props.title
+        delete props.label
+      }
       if (props.xScale !== undefined && (props.kind !== 'line' || props.xScale !== 'linear')) return failNode(node, path, '数值横轴只用于折线图')
       if (props.yUnit !== undefined && typeof props.yUnit !== 'string') return failNode(node, path, 'chart.yUnit 需要文本或状态绑定')
       if (props.scrub !== undefined) {
@@ -743,7 +806,19 @@ export function validateAst(input) {
           return failNode(node, path, 'chart.marks 需要数值横轴，以及 1–6 个升序时间节点或本地数据绑定')
         }
       }
-      if (seriesBinding.scope === undefined && chartMatrix(seriesBinding.literal, props.xScale, props.xUnit) === null
+      if (props.kind === 'interval' && seriesBinding.scope === undefined) {
+        const domain = readBinding(props.domain)
+        const staticIntervals = chartIntervals(seriesBinding.literal)
+        if (staticIntervals !== null) {
+          if (domain.scope === undefined && props.domain !== undefined && chartIntervals(seriesBinding.literal, domain.literal) === null) {
+            return failNode(node, path, 'chart.interval.domain 必须覆盖全部区间且跨度为正')
+          }
+        } else {
+          if (Array.isArray(seriesBinding.literal)) return failNode(node, path, 'chart.interval.series 包含无效区间')
+          datasetExpression = compileDataset(seriesBinding.literal)
+          if (datasetExpression === null) return failNode(node, path, 'chart.interval.series 需要 1–60 行有效区间或数组表达式')
+        }
+      } else if (seriesBinding.scope === undefined && chartMatrix(seriesBinding.literal, props.xScale, props.xUnit) === null
         && namedTraces === null) {
         datasetExpression = compileDataset(seriesBinding.literal)
         if (datasetExpression === null) return failNode(node, path, 'chart.series 需要点列、状态绑定或纯表达式')

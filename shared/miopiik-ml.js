@@ -264,6 +264,8 @@ function normalizeAttrs(element) {
   }
   if (element.name === 'chart') {
     if (attrs.type !== undefined && attrs.kind === undefined) attrs.kind = attrs.type
+    if (attrs.kind === 'interval' && attrs.title === undefined && attrs.label !== undefined) attrs.title = attrs.label
+    delete attrs.label
     if (attrs.data !== undefined && attrs.series === undefined) attrs.series = attrs.data
     if (attrs.xScale === undefined) attrs.xScale = attrs['x-scale']
     if (attrs.xUnit === undefined) attrs.xUnit = attrs['x-unit']
@@ -353,7 +355,7 @@ const TEXT_PROPS = Object.freeze({
   empty: ['text', 'title', 'description', 'icon'],
   divider: ['label'],
   metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
-  chart: ['kind', 'type', 'series', 'source', 'title', 'xScale', 'xUnit', 'yUnit', 'cursor', 'scrub', 'bind', 'marks'],
+  chart: ['kind', 'type', 'series', 'source', 'title', 'domain', 'xScale', 'xUnit', 'yUnit', 'cursor', 'scrub', 'bind', 'marks'],
   views: ['label', 'bind'],
   drawing: ['width', 'height', 'label'],
   view: ['label', 'caption'],

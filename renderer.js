@@ -378,6 +378,70 @@
       return magnitude > 0 && (magnitude < 0.01 || magnitude >= 1e9) ? value.toExponential(2) : chartNumber.format(value)
     }
 
+    function prepareIntervalChart(series, domain) {
+      const chart = IUI_AST.chartIntervals(series, domain)
+      if (chart === null) return null
+      const lanes = chart.lanes.map(({ label, intervals }) => {
+        const tracks = []
+        for (const [index, interval] of intervals.entries()) {
+          const track = tracks.find(({ end }) => end <= interval.start)
+          const mark = { ...interval, key: JSON.stringify([label, interval.start, interval.end, interval.label, index]) }
+          if (track === undefined) tracks.push({ end: interval.end, marks: [mark] })
+          else {
+            track.end = interval.end
+            track.marks.push(mark)
+          }
+        }
+        return { label, tracks }
+      })
+      return { ...chart, lanes }
+    }
+
+    function IuiIntervalChart({ series, domain, label, unit, source, fallback, streaming, enter, weight }) {
+      const chart = React.useMemo(() => prepareIntervalChart(series, domain), [series, domain])
+      const [selected, select] = React.useState(null)
+      if (chart === null) return renderIuiNotice(fallback, { 'data-iui-chart-empty': '1' })
+      const { min, max, lanes } = chart
+      const span = max - min
+      const position = (value) => `${(value - min) / span * 100}%`
+      let detail = ''
+      const renderMark = (lane, mark) => {
+        const active = selected === mark.key
+        const description = `${lane} · ${mark.label} · ${formatChartValue(mark.start)}–${formatChartValue(mark.end)}${unit}`
+        if (active) detail = description
+        return h('button', {
+          key: mark.key, type: 'button', className: 'miopiik-interval-mark',
+          'data-iui-interval-mark': '1', 'data-start': mark.start, 'data-end': mark.end,
+          'aria-label': description, 'aria-pressed': active, title: description, disabled: streaming === true,
+          onClick: () => select(mark.key),
+          style: { left: position(mark.start), width: `${(mark.end - mark.start) / span * 100}%`, '--iui-interval-tone': TONE_COLORS[mark.tone ?? 'accent'][1] },
+        }, mark.label)
+      }
+      const rows = lanes.map(({ label: lane, tracks }) => {
+        const trackRows = tracks.map(({ marks }, track) => h('div', {
+          key: track, className: 'miopiik-interval-track', 'data-iui-interval-track': '1',
+        }, ...marks.map((mark) => renderMark(lane, mark))))
+        return h('div', { key: lane, className: 'miopiik-interval-row', 'data-iui-interval-lane': lane, role: 'group', 'aria-label': lane },
+          h('span', { className: 'miopiik-interval-lane' }, lane),
+          h('div', { className: 'miopiik-interval-tracks' }, ...trackRows),
+        )
+      })
+      const weightStyle = weight === undefined ? {} : WEIGHT_STYLE[weight]
+      return h('figure', {
+        className: enter ? 'miopiik-enter miopiik-chart-frame miopiik-interval' : 'miopiik-chart-frame miopiik-interval',
+        'data-iui-chart': 'interval', 'data-iui-weight': weight, 'aria-label': label || '区间图', style: weightStyle,
+      },
+      label === '' ? null : h('figcaption', { className: 'miopiik-interval-caption' }, label),
+      h('div', { className: 'miopiik-interval-row miopiik-interval-axis', 'aria-hidden': true },
+        h('span', null, unit),
+        h('div', null, ...[min, min + span / 2, max].map((value, index) => h('span', { key: index }, formatChartValue(value)))),
+      ),
+      ...rows,
+      h('div', { 'data-iui-interval-detail': '1', className: 'miopiik-interval-detail', role: 'status' }, detail),
+      source === '' ? null : h('div', { className: 'miopiik-chart-source' }, `来源：${source}`),
+      )
+    }
+
     function renderRangeInput({ min, max, step, value, label, valueText, onChange }) {
       const span = max - min
       const ratio = Number.isFinite(span) ? (span > 0 ? (value - min) / span : 0)
@@ -1497,6 +1561,11 @@
         if (item.type === 'chart') {
           const series = resolveDataset(item, props.series)
           const kind = String(props.kind ?? 'bar')
+          if (kind === 'interval') return h(IuiIntervalChart, {
+            key, series, domain: props.domain === undefined ? undefined : resolve(props.domain) ?? null,
+            label: textOf(resolveText(props.title)), unit: textOf(resolveText(props.xUnit)).slice(0, 16),
+            source: textOf(resolveText(props.source)), fallback: item.fallback, streaming, enter,
+          })
           const xUnit = props.xScale === 'linear' ? textOf(resolveText(props.xUnit)).slice(0, 16) : ''
           const yUnit = textOf(resolveText(props.yUnit)).slice(0, 16)
           const { rows, traces } = normalizeChart(series, props.xScale, xUnit)

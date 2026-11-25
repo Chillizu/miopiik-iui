@@ -138,7 +138,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 - 根标签为 `<ui>`，`title` 与 `fallback` 可选；整块校验失败时显示 `fallback` 文本。
 - `<state>` 支持 `<state name="range" value='{"...":...}'/>` 或 JSON 正文 `<state>{"range":{...}}</state>`。
 - 属性值支持引号字符串、JSON 字面量（`options='[...]'`、`rows='[...]'`）、数字、布尔值及 `$state.*` 绑定路径。
-- `gap` 支持 `none`、`xs`、`sm`、`md`、`lg`、`xl` 或数字。`chart` 支持 `kind="bar"`、`kind="line"` 或 `kind="donut"`；旧写法 `type`/`data` 会自动归一为 `kind`/`series`。
+- `gap` 支持 `none`、`xs`、`sm`、`md`、`lg`、`xl` 或数字。`chart` 支持 `kind="bar"`、`kind="line"`、`kind="donut"` 和 `kind="interval"`。旧写法 `type`/`data` 会自动归一为 `kind`/`series`。
 - 当模型漏写代码围栏时，行首顶层 `<ui>...</ui>` 也可被容错识别。
 
 ### 组件清单
@@ -160,7 +160,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 | 分隔 | `divider` | 可选 `label`。 |
 | 指标 | `metric` | 支持 `label`、`value`、`unit`、`delta`、`caption`/`note`、`tone`；值可绑定 `$state`。 |
 | 表格 | `table` | `columns`（1-12 个字符串或 `{key,label}` 描述符）、`rows`（最多 200 行数组或对象）、`caption`、`filter`（绑定 `$state.*`，浏览器内本地过滤）。 |
-| 图表 | `chart` | `kind`（`bar`、`line` 或 `donut`）、`series`（点列或 `$state` 绑定）、`source`；渲染为内联 SVG。 |
+| 图表 | `chart` | `kind`（`bar`、`line`、`donut` 或 `interval`）、`series`（数据数组或 `$state` 绑定）、`source`。 |
 | 进度 | `progress` | `value` >= 0（数字或 `$state` 绑定）、`max` > 0、`label`、`tone`。 |
 | 提示条 | `callout` | `tone`、`title`、`text`；可含子节点。 |
 | 空状态 | `empty` | `text`/`title`/`description`、`icon`。 |
@@ -179,6 +179,7 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 | 探索曲线 | `chart kind="line" scrub="经过时间" x-unit="秒" y-unit="升"` | 从数值 `series` 生成滑杆与插值读数，游标从第一个点起步。需要和其他组件共享位置时，另用 `slider` 配合 `cursor="$state.time"`。 |
 | 同轴对照 | `chart kind="line" scrub="经过时间"` | `series='[["甲",[[0,12],[10,7]]],["乙",[[0,12],[10,4]]]]'` 让曲线共用坐标。一个游标读取同一时刻的各条曲线，数据覆盖范围外留空。最多四条曲线，合计 60 个点。 |
 | 联动时间轴 | `chart kind="line" scrub="经过时间" bind="$state.time"` | 用数值初始化 `time`，其他图表通过 `cursor="$state.time"` 跟随。`marks='[[4,"停止供电"],[10,"冷却完成"]]'` 标注最多六个按时刻排序的事件，带滑杆的折线图可以用按钮直达。 |
+| 区间对照 | `chart kind="interval" x-unit="分"` | `series='[["甲",0,2,"准备"],["乙",1,3,"执行","success"]]'` 在同一条轴上呈现各组区间。用 `domain='[0,4]'` 在状态切换时固定数值范围。点选区间可读完整标签及起止数值。 |
 
 任何组件都可写 `when="$state.*"`（可配 `is="值"` 做等值切换），按本地状态控制自身显隐。组件白名单由 [shared/iui-ast.js](shared/iui-ast.js) 的 `REGISTRY` 强制执行，未知标签会局部降级。
 
