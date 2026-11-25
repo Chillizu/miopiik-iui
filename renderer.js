@@ -166,7 +166,8 @@
       }
       const outline = child.type === 'rect' || child.type === 'circle' ? 'border' : 'accent'
       const strokeColor = stroke ?? (fill === undefined || fill === 'none' ? outline : 'none')
-      const animated = plan?.animated && (child.type === 'rect' || child.type === 'circle')
+      // Marks sharing a point move together. An SVG line or path has no matching CSS position transition.
+      const animated = plan?.animated && child.props.at === undefined && (child.type === 'rect' || child.type === 'circle')
       return h(DRAWING_TAGS[child.type], {
         key,
         ...geometry,

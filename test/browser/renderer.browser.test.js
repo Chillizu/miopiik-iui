@@ -205,6 +205,25 @@ const DRAWING_COMPARISON_ML = `<ui density="auto" fallback="蓝色圆点仅出�
   </drawing>
 </ui>`
 
+const POINT_ANCHORED_DRAWING_ML = `<ui density="auto">
+  <state name="start" value="[20,60]"/>
+  <state name="end" value="[220,60]"/>
+  <state name="point" value="[80,60]"/>
+  <segmented label="锚点位置" bind="$state.point" options='[{"label":"点 A","value":[80,60]},{"label":"点 B","value":[160,60]}]'/>
+  <drawing width="240" height="120" label="共享锚点跨视图对照">
+    <circle at="$state.point" r="7" fill="accent"/>
+    <label at="$state.point" dx="8" dy="-10" text="at($state.point,0) == 80 ? 'A' : 'B'" size="11"/>
+    <view label="起点到锚点" caption="线段和路径都落在同一个锚点。">
+      <line from="$state.start" to="$state.point" stroke="accent"/>
+      <path points='[$state.start,[120,25],$state.point]' fill="none" stroke="info"/>
+    </view>
+    <view label="终点到锚点" caption="切换视图后仍复用同一个位置。">
+      <line from="$state.end" to="$state.point" stroke="warning"/>
+      <path points='[$state.end,[120,100],$state.point]' fill="none" stroke="success"/>
+    </view>
+  </drawing>
+</ui>`
+
 const STATIC_DRAWING_ML = `<ui density="auto" fallback="剖面中可以看到密封内衬。">
   <drawing width="300" height="146" label="密封结构">
     <view label="剖面" caption="剖面中可以看到密封内衬。">
@@ -621,6 +640,7 @@ const MAIN_RUN = `
       autoLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML)}),
       legacyLayout:mountBlock(${JSON.stringify(AUTO_LAYOUT_ML.replace(' density="auto"', ''))}),
       comparison:mountBlock(${JSON.stringify(DRAWING_COMPARISON_ML)}),
+      pointAnchoredDrawing:mountBlock(${JSON.stringify(POINT_ANCHORED_DRAWING_ML)}),
       staticDrawing:mountBlock(${JSON.stringify(STATIC_DRAWING_ML)}),
       adaptiveDrawing:mountBlock(${JSON.stringify(ADAPTIVE_DRAWING_ML)}),
       repeatDrawing:mountBlock(${JSON.stringify(DRAWING_REPEAT_ML)}),
@@ -1014,6 +1034,54 @@ const MAIN_RUN = `
         compare.querySelector('button[role="switch"]').click();
         await wait(25);
         check('comparisonRestored', () => laterActive() ? true : '重新显示后项时没有保留选择');
+        const pointAnchored = r3.pointAnchoredDrawing;
+        const pointFigure = () => pointAnchored.querySelector('figure[data-iui-drawing-comparison]');
+        const pointGraph = () => pointFigure()?.querySelector('svg[data-iui-drawing]');
+        const pointSnapshot = () => {
+          const graph = pointGraph();
+          const circle = graph?.querySelector(':scope > circle');
+          const line = graph?.querySelector(':scope > line');
+          const path = graph?.querySelector(':scope > path');
+          const label = [...(graph?.querySelectorAll(':scope > text') ?? [])].find(node => node.textContent === 'A' || node.textContent === 'B');
+          const coordinates = path?.getAttribute('d')?.trim().split(/[ ,]+/u) ?? [];
+          return {
+            graph,
+            point: [Number(circle?.getAttribute('cx')), Number(circle?.getAttribute('cy'))],
+            lineEnd: [Number(line?.getAttribute('x2')), Number(line?.getAttribute('y2'))],
+            pathEnd: coordinates.slice(-2).map(Number),
+            label: { text: label?.textContent, x: Number(label?.getAttribute('x')), y: Number(label?.getAttribute('y')) },
+            viewBox: graph?.getAttribute('viewBox'),
+            movingCircle: circle?.classList.contains('miopiik-shape-motion') ?? true,
+          };
+        };
+        const pointOptions = () => [...(pointFigure()?.querySelectorAll('button[data-iui-drawing-option]') ?? [])];
+        const pointSegment = (name) => [...pointAnchored.querySelectorAll('button')].find(button => button.textContent.trim() === name);
+        const initialPointViewBox = pointGraph()?.getAttribute('viewBox');
+        const initialPoint = pointSnapshot();
+        check('pointAnchoredInitial', () => pointAnchored.querySelector('[data-iui-output="ok"][data-iui-degraded="0"]') !== null
+          && initialPoint.point[0] === 80 && initialPoint.point[1] === 60
+          && JSON.stringify(initialPoint.lineEnd) === '[80,60]' && JSON.stringify(initialPoint.pathEnd) === '[80,60]'
+          && initialPoint.label.text === 'A' && initialPoint.label.x === 88 && initialPoint.label.y === 50
+          && initialPoint.movingCircle === false && initialPoint.viewBox !== undefined
+          ? true : '初始圆心、连接终点、路径末点或偏移标签未共用 point');
+        pointSegment('点 B')?.click();
+        await wait(35);
+        const movedPoint = pointSnapshot();
+        check('pointAnchoredState', () => pointSegment('点 B')?.getAttribute('aria-pressed') === 'true'
+          && movedPoint.point[0] === 160 && movedPoint.point[1] === 60
+          && JSON.stringify(movedPoint.lineEnd) === '[160,60]' && JSON.stringify(movedPoint.pathEnd) === '[160,60]'
+          && movedPoint.label.text === 'B' && movedPoint.label.x === 168 && movedPoint.label.y === 50
+          && movedPoint.viewBox === initialPointViewBox && movedPoint.movingCircle === false
+          ? true : '状态更新后 circle/line/path/label 锚点不同步或视口改变');
+        pointOptions()[1]?.click();
+        await wait(25);
+        const secondViewPoint = pointSnapshot();
+        check('pointAnchoredSecondView', () => pointOptions()[1]?.getAttribute('aria-pressed') === 'true'
+          && secondViewPoint.point[0] === 160 && secondViewPoint.point[1] === 60
+          && JSON.stringify(secondViewPoint.lineEnd) === '[160,60]' && JSON.stringify(secondViewPoint.pathEnd) === '[160,60]'
+          && secondViewPoint.label.text === 'B' && secondViewPoint.label.x === 168 && secondViewPoint.label.y === 50
+          && secondViewPoint.viewBox === initialPointViewBox && secondViewPoint.movingCircle === false
+          ? true : '切换第二视图后共享 point、路径终点或共享画幅不同步');
         check('staticDrawingView', () => {
           const host = r3.staticDrawing;
           const graph = host.querySelector('svg[data-iui-drawing]');
@@ -1629,6 +1697,9 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-comparison-choice="ok"/u,'对照切换应同步图元、按钮和可访问图注')
   assert.match(html,/data-comparison-fallback="ok"/u,'选中条件隐藏时应回退到第一个可用条件')
   assert.match(html,/data-comparison-restored="ok"/u,'普通重渲染应保留显式选择')
+  assert.match(html,/data-point-anchored-initial="ok"/u,'初始 point 应统一驱动 circle、line、path 和偏移标签')
+  assert.match(html,/data-point-anchored-state="ok"/u,'改变 state point 后不同图元与标签坐标应一起移动')
+  assert.match(html,/data-point-anchored-second-view="ok"/u,'第二视图复用相同 point，且共享 viewBox 保持不变')
   assert.match(html,/data-static-drawing-view="ok"/u,'单个绘图视图应呈现静态标签与关联图注、无切换控件和横溢')
   assert.match(html,/data-comparison-live="ok"/u,'尚未定稿的流式对照选项应禁用')
   assert.match(html,/data-bound-views="ok"/u,'切换完整视图应更新共享状态')

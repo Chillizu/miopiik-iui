@@ -38,11 +38,11 @@ export const REGISTRY = Object.freeze({
   drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
   view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
   repeat: { props: { items: 'value' }, children: true },
-  rect: { props: { x: 'number', y: 'number', width: 'number', height: 'number', rx: 'number?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
-  circle: { props: { cx: 'number', cy: 'number', r: 'number', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
-  line: { props: { x1: 'number', y1: 'number', x2: 'number', y2: 'number', stroke: 'string?', strokeWidth: 'number?', strokeDasharray: 'string?', opacity: 'number?' }, children: false },
-  path: { props: { d: 'string', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
-  label: { props: { x: 'number', y: 'number', text: 'value', fill: 'string?', size: 'number?', align: 'string?', opacity: 'number?' }, children: false },
+  rect: { props: { x: 'number', y: 'number', at: 'value?', width: 'number', height: 'number', rx: 'number?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
+  circle: { props: { cx: 'number', cy: 'number', at: 'value?', r: 'number', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
+  line: { props: { x1: 'number', y1: 'number', x2: 'number', y2: 'number', from: 'value?', to: 'value?', stroke: 'string?', strokeWidth: 'number?', strokeDasharray: 'string?', opacity: 'number?' }, children: false },
+  path: { props: { d: 'string', points: 'value?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
+  label: { props: { x: 'number', y: 'number', at: 'value?', dx: 'number?', dy: 'number?', text: 'value', fill: 'string?', size: 'number?', align: 'string?', opacity: 'number?' }, children: false },
   segmented: { props: { label: 'string?', options: 'value', bind: 'string' }, children: false },
   divider: { props: { label: 'string?' }, children: false },
   // 本地交互控件：只写 $state，与 segmented 同一模型，不产生消息/工具调用
@@ -290,6 +290,9 @@ const DRAWING_MAX_VIEWS = 6
 const DRAWING_COLOR = new Set(['text', 'muted', 'border', 'surface', 'accent', 'neutral', 'success', 'warning', 'danger', 'info', 'none'])
 const DRAWING_ALIGN = new Map([['start', 'start'], ['middle', 'middle'], ['end', 'end'], ['left', 'start'], ['center', 'middle'], ['right', 'end']])
 const DRAWING_STATIC = new Set(['d', 'align', 'strokeDasharray'])
+const DRAWING_POINT_INPUTS = new Set(['at', 'from', 'to', 'points', 'dx', 'dy'])
+const DRAWING_POINT_LIMIT = 32
+const DRAWING_POINT_PROBE = Object.freeze([0, 0])
 const DRAWING_AXIS = [-2048, 2048]
 const DRAWING_VIEWPORT = [24, 1024]
 const DRAWING_LENGTH = [0.1, 2048]
@@ -359,13 +362,65 @@ function drawingAttribute(type, key, value) {
   return boundedDrawingNumber(value, ...limits) ? value : null
 }
 
+function drawingPoint(value) {
+  return Array.isArray(value) && value.length === 2
+    && boundedDrawingNumber(value[0], ...DRAWING_AXIS) && boundedDrawingNumber(value[1], ...DRAWING_AXIS)
+}
+
+/** Resolve a position once, then pass ordinary geometry through the same SVG limits. */
+function expandDrawingPoints(type, props, resolve, inlineValue) {
+  if (props.at === undefined && props.from === undefined && props.to === undefined
+    && props.points === undefined && props.dx === undefined && props.dy === undefined) return props
+  const read = (key, probe) => {
+    const value = props[key]
+    if (readBinding(value).scope !== undefined) return resolve === null ? probe : resolve(value)
+    if (typeof value !== 'string') return value
+    const calculated = inlineValue?.(key, value)
+    if (calculated === undefined) return value
+    return resolve === null ? probe : calculated
+  }
+  if (type === 'line') {
+    if (props.from === undefined && props.to === undefined) return props
+    if (props.x1 !== undefined || props.y1 !== undefined || props.x2 !== undefined || props.y2 !== undefined) return null
+    const from = read('from', DRAWING_POINT_PROBE)
+    const to = read('to', DRAWING_POINT_PROBE)
+    return drawingPoint(from) && drawingPoint(to) ? { ...props, x1: from[0], y1: from[1], x2: to[0], y2: to[1] } : null
+  }
+  if (type === 'path') {
+    if (props.points === undefined) return props
+    if (props.d !== undefined) return null
+    const points = read('points', [DRAWING_POINT_PROBE, DRAWING_POINT_PROBE])
+    if (!Array.isArray(points) || points.length < 2 || points.length > DRAWING_POINT_LIMIT) return null
+    const commands = []
+    for (const [index, point] of points.entries()) {
+      if (!drawingPoint(point)) return null
+      commands.push(`${index === 0 ? 'M' : 'L'} ${point[0]} ${point[1]}`)
+    }
+    return { ...props, d: commands.join(' ') }
+  }
+  if (type === 'rect' || type === 'circle' || type === 'label') {
+    const hasOffset = type === 'label' && (props.dx !== undefined || props.dy !== undefined)
+    if (props.at === undefined) return hasOffset ? null : props
+    const [x, y] = type === 'circle' ? ['cx', 'cy'] : ['x', 'y']
+    if (props[x] !== undefined || props[y] !== undefined) return null
+    const at = read('at', DRAWING_POINT_PROBE)
+    const dx = hasOffset && props.dx !== undefined ? read('dx', 0) : 0
+    const dy = hasOffset && props.dy !== undefined ? read('dy', 0) : 0
+    if (!drawingPoint(at) || !boundedDrawingNumber(dx, ...DRAWING_AXIS) || !boundedDrawingNumber(dy, ...DRAWING_AXIS)) return null
+    return { ...props, [x]: at[0] + dx, [y]: at[1] + dy }
+  }
+  return props
+}
+
 /** SVG props are allowlisted and revalidated after resolving local values. */
 export function drawingProps(type, props, resolve = null, inlineValue = null) {
   if (type !== 'drawing' && type !== 'view' && !DRAWING_SHAPES.has(type)) return null
+  const expanded = expandDrawingPoints(type, props ?? {}, resolve, inlineValue)
+  if (expanded === null) return null
   const safe = {}
   for (const [key, rule] of Object.entries(REGISTRY[type].props)) {
-    if (type === 'view' && key === 'value') continue
-    let value = props?.[key]
+    if (DRAWING_POINT_INPUTS.has(key) || (type === 'view' && key === 'value')) continue
+    let value = expanded[key]
     if (value === undefined && rule.endsWith('?')) continue
     const canBind = !DRAWING_STATIC.has(key) && (type !== 'drawing' || key === 'label')
     const bound = canBind && readBinding(value).scope !== undefined

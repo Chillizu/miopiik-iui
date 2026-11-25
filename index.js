@@ -13,6 +13,7 @@ export const IUI_CHARTER = [
   '要探索可调的系统，先让读者看清当前发生什么。把最相关的控件和关键读数放在主图旁，沿用同一份 state 和 derive。让受影响的位置、范围、颜色或显隐真正在主图里变化。补充图表只回答主图没回答的问题，细节可放进 details。',
   '用 iui 围栏包住 miopiik-ml 的 <ui density="auto" fallback="一句话保留核心解释">…</ui>。drawing 用 width/height/label，内部可混用共享图形和 2–6 个 <view label="条件" caption="图上变化所说明的事">…</view>。每个 view 只放该条件下的图形。固定条件对照的选择器和图注由宿主生成；连续量或多控件联动时用共享 state。',
   '图形原语 rect(x,y,width,height,rx)、circle(cx,cy,r)、line(x1,y1,x2,y2)、path(d)、label(x,y,text,size,align)。fill/stroke 用主题色 text/muted/border/surface/accent/neutral/success/warning/danger/info/none，线宽 stroke-width。图元参数可用完整 $state 路径绑定。显隐写 when="$state.mode" is="short"，布尔值仅写 when。标签用 align="middle" 居中。',
+  `把同一个位置写成一份 [x,y] 数据。圆、矩形、标签可用 at="$state.p"，标签用 dx/dy 微调。线段用 from/to，例如 from="$state.p" to="[80,40]"。折线路径用 points='[$state.p,[80,40],$state.q]'。在多条线和不同视图中沿用同一份端点；检查路径确实越过边界再到目标。`,
   '成组对象可共用一套图元：<repeat items="$state.points"><circle cx="$data.item.x" cy="30" r="4"/><label x="$data.item.x" y="50" text="$data.item.name"/></repeat>。items 取数组，$data.index 从 0 开始。同一图最多展开 64 个图元。',
   `时间或范围的重叠用 <chart kind="interval" label="共享时间轴" x-unit="分" domain='[0,4]' series='[["甲",0,2,"准备"],["乙",1,3,"执行","success"]]'/>。每行是轨道、起点、终点、标签、可选主题色。宿主根据数值绘制位置，点选区间读完整时间。`,
   `对象之间的流向可用 diagram，由宿主布置。先写 <node id="a" label="起点"/> 和 <node id="b" label="下一站"/>，然后写 <edge from="a" to="b" label="作用"/>。可用 lane(label) 分组，node.note 补充短说明，node 和 edge 允许用 when="$state.名称" 显示对应状态。数字关系使用 chart(kind=bar/line/donut)、table、metric，步骤用 steps(step)。row 横向就近、column 纵向。chart.series 和 table.rows 可用数组、完整绑定或纯表达式。table 同时写 columns。state 的 value、segmented 的 options 用合法 JSON，如 <state name="mode" value='"short"'/> 和 options='[{"label":"短","value":"short"}]'。控件 bind="$state.名称"，slider 设 min/max/step，toggle 绑定布尔。button 支持 set/append/pop/reset（bind、value、max 或 min）和用户触发的 copy。`,
@@ -20,16 +21,18 @@ export const IUI_CHARTER = [
   `例如讲影长时，把竖杆和地面画成共享图层，用两片光线对照。同一个物体的哪一处变化，直接看图：
 ${FENCE}iui
 <ui density="auto" fallback="光线越贴近地面，同一根竖杆的影子越长">
+<state name="top" value="[83,37]"/>
+<state name="foot" value="[83,94]"/>
 <drawing width="300" height="122" label="太阳高度如何改变同一根杆的影长">
-  <line x1="24" y1="94" x2="282" y2="94" stroke="border" stroke-width="2"/>
-  <line x1="83" y1="37" x2="83" y2="94" stroke="text" stroke-width="4"/>
+  <line from="[24,94]" to="[282,94]" stroke="border" stroke-width="2"/>
+  <line from="$state.top" to="$state.foot" stroke="text" stroke-width="4"/>
   <view label="太阳较低" caption="斜光擦过杆顶，在很远处遇到地面。">
-    <line x1="83" y1="37" x2="265" y2="94" stroke="accent"/>
-    <line x1="83" y1="94" x2="265" y2="94" stroke="warning" stroke-width="5"/>
+    <line from="$state.top" to="[265,94]" stroke="accent"/>
+    <line from="$state.foot" to="[265,94]" stroke="warning" stroke-width="5"/>
   </view>
   <view label="太阳较高" caption="光线更陡，影子的末端更接近杆底。">
-    <line x1="83" y1="37" x2="117" y2="94" stroke="accent"/>
-    <line x1="83" y1="94" x2="117" y2="94" stroke="warning" stroke-width="5"/>
+    <line from="$state.top" to="[117,94]" stroke="accent"/>
+    <line from="$state.foot" to="[117,94]" stroke="warning" stroke-width="5"/>
   </view>
 </drawing>
 </ui>

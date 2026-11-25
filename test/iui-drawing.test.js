@@ -80,6 +80,36 @@ test('drawings keep safe siblings and discard unsupported graphics attributes', 
   assert.equal(checked.ast.root.children[4].props.text, '210')
 })
 
+test('drawing position pairs share local data and normalize to ordinary bounded SVG geometry', () => {
+  const checked = check(`<ui><state name="p" value="[20,30]"/><drawing width="160" height="100" label="端点">
+    <circle at="$state.p" r="5"/>
+    <line from="[0,0]" to="$state.p"/>
+    <path points='[[0,0],[10,20],$state.p]' stroke="accent"/>
+    <text at="$state.p" dx="4" dy="-5">端点</text>
+    <rect at="[40,30]" width="20" height="10"/>
+  </drawing></ui>`)
+  assert.equal(checked.ok, true)
+  assert.equal(checked.degraded, 0)
+  const resolve = (value) => resolveValue(value, { state: checked.ast.state })
+  const shapes = checked.ast.root.children.map((node) => drawingProps(node.type, node.props, resolve, (key) => {
+    const expression = node.geometryExpressions?.[key]
+    return expression === undefined ? undefined : evaluateExpr(expression, { state: checked.ast.state }).value
+  }))
+  assert.deepEqual(shapes, [
+    { cx: 20, cy: 30, r: 5 },
+    { x1: 0, y1: 0, x2: 20, y2: 30 },
+    { d: 'M 0 0 L 10 20 L 20 30', stroke: 'accent' },
+    { x: 24, y: 25, text: '端点' },
+    { x: 40, y: 30, width: 20, height: 10 },
+  ])
+  assert.equal(drawingProps('circle', { at: '$state.p', r: 5 }, () => [3000, 20]), null)
+  assert.equal(drawingProps('label', { at: [2048, 10], dx: 1, text: '溢出' }), null)
+  assert.equal(drawingProps('circle', { at: [1, 2], cx: 1, cy: 2, r: 5 }), null)
+  assert.equal(drawingProps('line', { from: [1, 2], x1: 1, y1: 2, x2: 3, y2: 4 }), null)
+  assert.equal(drawingProps('path', { d: 'M0 0 L1 1', points: [[0, 0], [1, 1]] }), null)
+  assert.equal(drawingProps('path', { points: Array.from({ length: 33 }, (_, i) => [i, i]) }), null)
+})
+
 test('numeric drawing expressions use local state and retain SVG field bounds', () => {
   const checked = check(`<ui><drawing width="300" height="120" label="负载示意">
     <rect x="20" y="20" width="$state.load * 10" height="30" opacity="$state.load / 10"/>

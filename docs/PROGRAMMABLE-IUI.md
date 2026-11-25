@@ -33,6 +33,18 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 | `path` | `d` |
 | `label` | `x y text size align` |
 
+位置可以写成一对 `[x,y]`。`rect`、`circle` 和 `label` 读 `at`，`line` 读 `from` 和 `to`，`path` 读 2–32 个点的 `points` 并画成折线。标签可以用 `dx` 和 `dy` 从共用点旁移。位置可填 JSON 数组、完整绑定或引用本地状态的表达式。同一个图元使用一套坐标写法。
+
+```xml
+<state name="start" value="[40,80]"/>
+<state name="target" value="[160,40]"/>
+<drawing width="210" height="100" label="路径与目的地">
+  <path points='[$state.start,[100,80],$state.target]' stroke="accent"/>
+  <circle at="$state.target" r="5" fill="accent"/>
+  <label at="$state.target" dy="-12" align="middle" text="目的地"/>
+</drawing>
+```
+
 `fill` 和 `stroke` 使用 `text`、`muted`、`border`、`surface`、`accent`、`neutral`、`success`、`warning`、`danger`、`info` 或 `none`。用 `stroke-width` 指定线宽，`opacity` 接收 0–1 的数字或绑定。
 
 同一幅 `drawing` 可包含最多六个 `<view label="条件" caption="图注">`。直接放在 `drawing` 下的形状始终共用，`view` 容纳该条件的图形。一个可用视图直接呈现图和图注。至少两个可用视图时，宿主在图旁显示切换选项，并默认显示第一个可用条件。按声明顺序绘制，共享和各条件合计最多声明 64 个图元。直线的 `stroke-dasharray` 可用有界的数字列表，例如 `"3 4"`。

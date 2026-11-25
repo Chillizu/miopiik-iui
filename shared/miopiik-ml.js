@@ -360,11 +360,11 @@ const TEXT_PROPS = Object.freeze({
   drawing: ['width', 'height', 'label'],
   view: ['label', 'caption'],
   repeat: ['items'],
-  rect: ['x', 'y', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],
-  circle: ['cx', 'cy', 'r', 'fill', 'stroke', 'strokeWidth', 'opacity'],
-  line: ['x1', 'y1', 'x2', 'y2', 'stroke', 'strokeWidth', 'strokeDasharray', 'opacity'],
-  path: ['d', 'fill', 'stroke', 'strokeWidth', 'opacity'],
-  label: ['x', 'y', 'text', 'fill', 'size', 'align', 'opacity'],
+  rect: ['x', 'y', 'at', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],
+  circle: ['cx', 'cy', 'at', 'r', 'fill', 'stroke', 'strokeWidth', 'opacity'],
+  line: ['x1', 'y1', 'x2', 'y2', 'from', 'to', 'stroke', 'strokeWidth', 'strokeDasharray', 'opacity'],
+  path: ['d', 'points', 'fill', 'stroke', 'strokeWidth', 'opacity'],
+  label: ['x', 'y', 'at', 'dx', 'dy', 'text', 'fill', 'size', 'align', 'opacity'],
   segmented: ['label', 'bind', 'options'],
   table: ['columns', 'rows', 'caption', 'filter'],
   toggle: ['label', 'bind'],
@@ -452,7 +452,7 @@ export function parseMiopiikMl(source, { streaming = false } = {}) {
     if (element.name === '#text') return { kind: 'text', text: String(element.text ?? '') }
     const attrs = normalizeAttrs(element)
     const drawingLabel = element.name === 'text' && (parentType === 'drawing' || parentType === 'drawing-view' || parentType === 'repeat')
-      && attrs.x !== undefined && attrs.y !== undefined
+      && (attrs.at !== undefined || attrs.x !== undefined && attrs.y !== undefined)
     const tagName = drawingLabel ? 'label' : element.name
     const type = Object.hasOwn(ML_TAGS, tagName) ? ML_TAGS[tagName] : undefined
     const control = readProps(attrs, ['when', 'is', 'weight'])
