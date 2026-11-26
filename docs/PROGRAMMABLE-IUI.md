@@ -51,7 +51,9 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 
 `fill` 和 `stroke` 使用 `text`、`muted`、`border`、`surface`、`accent`、`neutral`、`success`、`warning`、`danger`、`info` 或 `none`。用 `stroke="$state.online ? 'success' : 'border'"` 可让描边随状态变化，求值后仍从同一组主题色选取。用 `stroke-width` 指定线宽，`opacity` 接收 0–1 的数字或绑定。
 
-同一幅 `drawing` 可包含最多六个 `<view label="条件" caption="图注">`。直接放在 `drawing` 下的形状始终共用，`view` 容纳该条件的图形。一个可用视图直接呈现图和图注。至少两个可用视图时，宿主在图旁显示切换选项，并默认显示第一个可用条件。按声明顺序绘制，共享和各条件合计最多声明 64 个图元。直线的 `stroke-dasharray` 可用有界的数字列表，例如 `"3 4"`。
+同一幅 `drawing` 可包含最多六个 `<view label="条件" caption="图注">`。直接放在 `drawing` 下的形状始终共用，`view` 容纳该条件的图形。一个可用视图直接呈现图和图注。至少两个可用视图时，宿主在图旁显示切换选项。独立使用时默认显示第一个可用条件。按声明顺序绘制，共享和各条件合计最多声明 64 个图元。直线的 `stroke-dasharray` 可用有界的数字列表，例如 `"3 4"`。
+
+`drawing` 和 `views` 都能用 `bind="$state.mode"` 共享当前选择。绑定时声明 2–6 个视图，每个 `view` 的 `value` 使用不同的 JSON 标量，并把一个可用值设为初始状态。选择器、外部操作、图形和读数共读这份状态。只需更新共享图形时，视图可以只提供标题和图注。
 
 `density="auto"` 的完整回复会把略超边缘的静态图形收入画幅。路径和贴边文字使用浏览器的实际几何边界，结果在同一份绘图的交互中复用。共享图层与各个视图使用同一画幅，切换时位置和比例保持一致。带 `x`、`y` 的绘图内 `text` 沿用 `label` 的文字、绑定和几何规则。
 

@@ -205,6 +205,65 @@ test('drawing view declarations preserve source order and revalidate label and c
   assert.equal(drawingProps('label', { ...label.props, align: 'right' }).align, 'end')
 })
 
+test('drawing view selection shares state binding validation with views', () => {
+  const parsed = parseMiopiikMl(`<ui><state name="mode" value='"before"'/>
+    <drawing width="240" height="120" label="状态对照" bind="$state.mode">
+      <line from="[10,80]" to="[230,80]" stroke="border"/>
+      <view label="之前" value="before"/>
+      <view label="之后" value="after"/>
+    </drawing></ui>`)
+  assert.equal(parsed.ok, true)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.ok, true)
+  const drawing = checked.ast.root
+  assert.equal(drawing.props.bind, '$state.mode')
+  assert.deepEqual(drawing.children.filter((node) => node.type === 'view').map((view) => view.props.value), ['before', 'after'])
+
+  const legacy = check(`<ui><drawing width="80" height="60" label="旧图">
+    <circle cx="10" cy="10" r="4"/><view label="一个视图" value="ignored" caption="保留旧行为。"/>
+  </drawing></ui>`)
+  assert.equal(legacy.degraded, 0)
+  assert.equal(legacy.ast.root.children[1].props.value, undefined)
+
+  const badValues = [
+    ['same', 'same'],
+    ['same', undefined],
+    [{ bad: 1 }, 'other'],
+  ]
+  for (const [first, second] of badValues) {
+    const pane = (label, value) => ({ type: 'view', props: {
+      label, ...(value === undefined ? {} : { value }), caption: label,
+    }, children: [] })
+    const result = validateAst({ state: { mode: 'same' }, root: { type: 'drawing', props: {
+      width: 80, height: 60, label: '坏', bind: '$state.mode',
+    }, children: [
+      { type: 'circle', props: { cx: 10, cy: 10, r: 4 } }, pane('甲', first), pane('乙', second),
+    ] } })
+    assert.equal(result.ok, false, JSON.stringify([first, second]))
+  }
+
+  const conflict = validateAst({ state: { mode: 'before' }, root: { type: 'column', children: [
+    { type: 'drawing', props: { width: 80, height: 60, label: '绑定', bind: '$state.mode' }, children: [
+      { type: 'circle', props: { cx: 10, cy: 10, r: 4 } },
+      { type: 'view', props: { label: '甲', value: 'before', caption: '甲' }, children: [] },
+      { type: 'view', props: { label: '乙', value: 'after', caption: '乙' }, children: [] },
+    ] },
+    { type: 'derive', props: { name: 'mode', expr: '"after"' } },
+  ] } })
+  assert.equal(conflict.ok, true)
+  assert.equal(conflict.ast.root.children[0].type, 'drawing')
+  assert.equal(conflict.ast.root.children[1].degraded, true, 'derive 不能覆盖绘图控件绑定路径')
+
+  const partialViews = validateAst({ state: { mode: 'valid' }, root: { type: 'views', props: {
+    bind: '$state.mode',
+  }, children: [
+    { type: 'view', props: { label: '保留', value: 'valid', caption: '可读' }, children: [] },
+    { type: 'view', props: { label: '降级', value: { bad: 1 }, caption: '无效值' }, children: [] },
+  ] } })
+  assert.equal(partialViews.degraded, 1)
+  assert.deepEqual(partialViews.ast.root.children.map((view) => view.props.value), ['valid'])
+})
+
 test('view counts and all declared shapes share the drawing budget', () => {
   const place = (content) => `<ui fallback="无图对照"><drawing width="240" height="120" label="对照">${content}</drawing></ui>`
   const shape = '<circle cx="10" cy="20" r="2"/>'

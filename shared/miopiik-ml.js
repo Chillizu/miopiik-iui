@@ -357,7 +357,7 @@ const TEXT_PROPS = Object.freeze({
   metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
   chart: ['kind', 'type', 'series', 'source', 'title', 'domain', 'xScale', 'xUnit', 'yUnit', 'cursor', 'scrub', 'play', 'bind', 'marks'],
   views: ['label', 'bind'],
-  drawing: ['width', 'height', 'label'],
+  drawing: ['width', 'height', 'label', 'bind'],
   view: ['label', 'caption'],
   repeat: ['items'],
   rect: ['x', 'y', 'at', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],

@@ -336,6 +336,22 @@ const SCALAR_READOUT_ML = `<ui density="auto">
   <text text="保留原话：$state.n * 2 是公式示意，不参与数值更新。"/>
 </ui>`
 
+const BOUND_DRAWING_VIEWS_ML = `<ui density="auto">
+  <state name="mode" value='"contain"'/>
+  <drawing width="200" height="100" label="覆盖方式" bind="$state.mode">
+    <view label="包含" value='"contain"' caption="形状处在边框内部。">
+      <rect x="25" y="20" width="150" height="60" fill="success" opacity="0.35"/>
+      <label x="100" y="55" text="包含模式" align="middle"/>
+    </view>
+    <view label="覆盖" value='"cover"' caption="形状铺满边框。">
+      <rect x="15" y="10" width="170" height="80" fill="warning" opacity="0.35"/>
+      <label x="100" y="55" text="覆盖模式" align="middle"/>
+    </view>
+  </drawing>
+  <metric label="当前模式" value="$state.mode"/>
+  <button label="重置模式" action="reset" bind="$state.mode"/>
+</ui>`
+
 const INTERVAL_CHART_ML = `<ui density="auto">
   <state name="mode" value='"baseline"'/>
   <derive name="spans" expr="$state.mode == 'baseline' ? [['组装',0,3,'装配','info'],['组装',2,5,'检查','warning'],['交付',1,4,'发送','accent']] : [['组装',0,2,'装配','info'],['交付',3,6,'发送','accent']]"/>
@@ -689,6 +705,7 @@ const MAIN_RUN = `
       sharedChartScrub:mountBlock(${JSON.stringify(SHARED_CHART_SCRUB_ML)}),
       rangePlayback:mountBlock(${JSON.stringify(RANGE_PLAYBACK_ML)}),
       scalarReadout:mountBlock(${JSON.stringify(SCALAR_READOUT_ML)}),
+      boundDrawingViews:mountBlock(${JSON.stringify(BOUND_DRAWING_VIEWS_ML)}),
       intervalChart:mountBlock(${JSON.stringify(INTERVAL_CHART_ML)}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
@@ -1091,6 +1108,33 @@ const MAIN_RUN = `
         compare.querySelector('button[role="switch"]').click();
         await wait(25);
         check('comparisonRestored', () => laterActive() ? true : '重新显示后项时没有保留选择');
+        const boundDrawing = r3.boundDrawingViews;
+        const boundDrawingFigure = () => boundDrawing.querySelector('figure[data-iui-drawing-comparison]');
+        const boundDrawingGraph = () => boundDrawingFigure()?.querySelector('svg[data-iui-drawing]');
+        const boundDrawingOptions = () => [...(boundDrawingFigure()?.querySelectorAll('button[data-iui-drawing-option]') ?? [])];
+        const boundDrawingMetric = () => boundDrawing.querySelector('[data-iui-metric="当前模式"] .miopiik-metric-value')?.textContent.trim();
+        const boundDrawingInitialViewBox = boundDrawingGraph()?.getAttribute('viewBox');
+        check('boundDrawingInitial', () => boundDrawing.querySelector('[data-iui-output="ok"][data-iui-degraded="0"]') !== null
+          && boundDrawingOptions().length === 2
+          && boundDrawingFigure()?.querySelectorAll('.miopiik-choices[role="group"]').length === 1
+          && boundDrawingOptions()[0]?.getAttribute('aria-pressed') === 'true'
+          && boundDrawingMetric() === 'contain' && boundDrawingGraph()?.textContent.includes('包含模式')
+          && boundDrawingInitialViewBox !== undefined
+          ? true : '绑定绘图未按初始 state 选择视图，或内建 selector 不唯一');
+        boundDrawingOptions()[1]?.click();
+        await wait(25);
+        check('boundDrawingSelect', () => boundDrawingOptions()[1]?.getAttribute('aria-pressed') === 'true'
+          && boundDrawingMetric() === 'cover' && boundDrawingGraph()?.textContent.includes('覆盖模式')
+          && boundDrawingGraph()?.getAttribute('viewBox') === boundDrawingInitialViewBox
+          ? true : '内建视图切换未更新外部 metric、图层或共享画幅');
+        boundDrawing.querySelector('button[data-iui-action="reset"]')?.click();
+        await wait(25);
+        check('boundDrawingExternalUpdate', () => boundDrawingMetric() === 'contain'
+          && boundDrawingOptions()[0]?.getAttribute('aria-pressed') === 'true'
+          && boundDrawingGraph()?.textContent.includes('包含模式')
+          && boundDrawingGraph()?.getAttribute('viewBox') === boundDrawingInitialViewBox
+          && boundDrawing.querySelectorAll('.miopiik-choices[role="group"]').length === 1
+          ? true : '外部 state reset 未同步绘图，或改变了 selector/画幅');
         const pointAnchored = r3.pointAnchoredDrawing;
         const pointFigure = () => pointAnchored.querySelector('figure[data-iui-drawing-comparison]');
         const pointGraph = () => pointFigure()?.querySelector('svg[data-iui-drawing]');
@@ -1904,6 +1948,9 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-comparison-choice="ok"/u,'对照切换应同步图元、按钮和可访问图注')
   assert.match(html,/data-comparison-fallback="ok"/u,'选中条件隐藏时应回退到第一个可用条件')
   assert.match(html,/data-comparison-restored="ok"/u,'普通重渲染应保留显式选择')
+  assert.match(html,/data-bound-drawing-initial="ok"/u,'绘图应按绑定 state 初始选择唯一内建视图切换器')
+  assert.match(html,/data-bound-drawing-select="ok"/u,'绘图内建选择应更新外部 metric 与活动图层并共享 viewBox')
+  assert.match(html,/data-bound-drawing-external-update="ok"/u,'外部本地 set/reset 应同步绘图视图而不增加切换器')
   assert.match(html,/data-point-anchored-initial="ok"/u,'初始 point 应统一驱动 circle、line、path 和偏移标签')
   assert.match(html,/data-point-anchored-state="ok"/u,'改变 state point 后不同图元与标签坐标应一起移动')
   assert.match(html,/data-point-anchored-second-view="ok"/u,'第二视图复用相同 point，且共享 viewBox 保持不变')

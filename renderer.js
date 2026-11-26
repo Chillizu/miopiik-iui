@@ -292,8 +292,31 @@
       )
     }
 
-    function IuiDrawing({ item, resolve, resolveDataset, scope, visible, streaming, adaptive, weight }) {
+    function useIuiViewSelection({ item, resolve, visible, updateState, streaming }) {
       const [choice, choose] = React.useState(null)
+      const binding = IUI_AST.readBinding(item.props.bind)
+      const bound = binding.scope === 'state'
+      const current = bound ? resolve(item.props.bind) : choice
+      const options = []
+      let hasViews = false
+      for (const [index, child] of item.children.entries()) {
+        if (child.type !== 'view') continue
+        hasViews = true
+        if (!visible(child)) continue
+        const props = IUI_AST.drawingProps('view', child.props, resolve)
+        if (props !== null) options.push({ index, ...props, value: bound ? child.props.value : index })
+      }
+      const active = options.find(({ value }) => sameValue(value, current)) ?? options[0]
+      const select = (option) => {
+        if (streaming === true) return
+        if (bound) updateState(binding.key, option.value)
+        else choose(option.value)
+      }
+      return { options, hasViews, active, select }
+    }
+
+    function IuiDrawing({ item, resolve, resolveDataset, scope, visible, updateState, streaming, adaptive, weight }) {
+      const { options, hasViews, active: selected, select } = useIuiViewSelection({ item, resolve, visible, updateState, streaming })
       const captionId = React.useId()
       const weightStyle = weight === undefined ? {} : WEIGHT_STYLE[weight]
       const viewport = IUI_AST.drawingProps('drawing', item.props, resolve)
@@ -320,16 +343,6 @@
       const frame = measured?.baseFrame === baseFrame ? measured.frame : baseFrame
       if (viewport === null) return h('div', { 'data-iui-drawing-invalid': '1', 'data-iui-weight': weight, style: { color: C.muted, ...weightStyle } }, '示意图暂不可用')
 
-      const options = []
-      let hasViews = false
-      for (const [index, child] of item.children.entries()) {
-        if (child.type !== 'view') continue
-        hasViews = true
-        if (!visible(child)) continue
-        const props = IUI_AST.drawingProps('view', child.props, resolve)
-        if (props !== null) options.push({ index, ...props })
-      }
-      const selected = options.find(({ index }) => index === choice) ?? options[0]
       const caption = selected?.caption
       const shapeContext = { resolve, scope, visible, streaming, frame }
       const entries = item.children.flatMap((child, index) => {
@@ -371,7 +384,7 @@
             'data-iui-drawing-option': String(option.index),
             'aria-pressed': active,
             disabled: streaming === true,
-            onClick: () => choose(option.index),
+            onClick: () => select(option),
           }, option.label)
         })) : null,
       graph, repeatNotice,
@@ -385,22 +398,8 @@
 
     function IuiViews({ item, render, resolve, visible, updateState, streaming, weight }) {
       const id = React.useId()
-      const [choice, choose] = React.useState(null)
-      const binding = IUI_AST.readBinding(item.props.bind)
-      const bound = binding.scope === 'state'
-      const current = bound ? resolve(item.props.bind) : choice
-      const options = item.children.flatMap((pane, index) => {
-        if (pane.type !== 'view' || !visible(pane)) return []
-        const props = IUI_AST.drawingProps('view', pane.props, resolve)
-        return props === null ? [] : [{ ...props, index, value: bound ? pane.props.value : index }]
-      })
-      const active = options.find(({ value }) => sameValue(value, current)) ?? options[0]
+      const { options, active, select } = useIuiViewSelection({ item, resolve, visible, updateState, streaming })
       if (active === undefined) return null
-      const select = (option) => {
-        if (streaming === true) return
-        if (bound) updateState(binding.key, option.value)
-        else choose(option.value)
-      }
       const title = resolve(item.props.label)
       const useTabs = options.length > 1
       const focusOnKey = (event, index) => {
@@ -1322,6 +1321,7 @@
       const fallbackNode = (text, key, tag) => typeof text === 'string' && text.trim() !== ''
         ? h(tag, { key, 'data-iui-node-fallback': '1', style: { overflowWrap: 'anywhere' } }, text)
         : null
+      const updateState = (path, value) => setState((prev) => writeStatePath(prev, path, value))
       const toggleDetails = (detailsId) => {
         setOpenDetails((prev) => {
           const next = new Map(prev)
@@ -1552,11 +1552,10 @@
           return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(text))
         }
         if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve, resolveText, visible })
-        if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, resolveDataset, scope, visible, streaming, adaptive })
+        if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, resolveDataset, scope, visible, updateState, streaming, adaptive })
         if (item.type === 'views') return h(IuiViews, {
-          key, item, resolve, visible, streaming,
+          key, item, resolve, visible, updateState, streaming,
           render: (child, index) => node(child, `${key}-${index}`),
-          updateState: (path, value) => setState((prev) => writeStatePath(prev, path, value)),
         })
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')

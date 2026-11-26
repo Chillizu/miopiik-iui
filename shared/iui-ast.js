@@ -35,7 +35,7 @@ export const REGISTRY = Object.freeze({
   empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
   chart: { props: { kind: 'string', series: 'value', source: 'string?', title: 'string?', domain: 'value?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', play: 'number?', bind: 'string?', marks: 'value?' }, children: false },
   views: { props: { label: 'string?', bind: 'string?' }, children: true },
-  drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
+  drawing: { props: { width: 'number', height: 'number', label: 'string', bind: 'string?' }, children: true },
   view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
   repeat: { props: { items: 'value' }, children: true },
   rect: { props: { x: 'number', y: 'number', at: 'value?', width: 'number', height: 'number', rx: 'number?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
@@ -237,6 +237,15 @@ function compileReadoutExpression(value) {
   return compiled !== null && compiled.refs.length > 0 && compiled.refs.every((ref) => ref.scope === 'state') ? compiled : null
 }
 
+function hasDistinctViewValues(panes) {
+  const values = panes.map((pane) => pane.props?.value)
+  return !values.includes(undefined) && new Set(values).size === values.length
+}
+
+function isSafeViewValue(value) {
+  return (value === null || typeof value !== 'object') && fitsStateBudget(value)
+}
+
 /** 本地状态也是来自模型的 JSON；避免超大对象和原型属性污染。 */
 function stateSafe(value, depth = 0, budget = { remaining: LIMITS.stateBytes }) {
   // 每个值和键至少占一个字符，先限制遍历，再对有限结果计算序列化体积。
@@ -429,6 +438,7 @@ export function drawingProps(type, props, resolve = null, inlineValue = null) {
   if (expanded === null) return null
   const safe = {}
   for (const [key, rule] of Object.entries(REGISTRY[type].props)) {
+    if (type === 'drawing' && key === 'bind') continue
     if (DRAWING_POINT_INPUTS.has(key) || (type === 'view' && key === 'value')) continue
     let value = expanded[key]
     if (value === undefined && rule.endsWith('?')) continue
@@ -598,7 +608,7 @@ export function validateAst(input) {
     return { id: `${path}-degraded`, type: 'text', props: { text }, children: [], degraded: true }
   }
 
-  const walk = (node, depth, path, parentType) => {
+  const walk = (node, depth, path, parentType, parentBoundDrawing = false) => {
     if (depth > LIMITS.depth) {
       fatal.push(`${path} 超过最大深度 ${LIMITS.depth}`)
       return null
@@ -632,7 +642,7 @@ export function validateAst(input) {
     }
     let writesState = Object.hasOwn(spec.props, 'bind')
     if (node.type === 'button') writesState = LOCAL_BUTTON_ACTIONS.includes(props.action)
-    if (node.type === 'views' || node.type === 'chart') writesState = props.bind !== undefined
+    if (node.type === 'views' || node.type === 'chart' || node.type === 'drawing') writesState = props.bind !== undefined
     const binding = writesState ? readBinding(props.bind) : null
     if (binding !== null && binding.scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
     if (node.type === 'views') {
@@ -643,19 +653,29 @@ export function validateAst(input) {
       if (props.label !== undefined && readBinding(props.label).scope === undefined && drawingAttribute('views', 'label', props.label) === null) {
         return failNode(node, path, 'views.label 需要简短文本或状态绑定')
       }
-      if (binding !== null) {
-        const values = panes.map((pane) => pane.props?.value)
-        if (values.some((value) => value === undefined) || new Set(values).size !== values.length) {
-          return failNode(node, path, '绑定状态的 views 需要为每个 view 指定不同的 value')
-        }
+      if (binding !== null && !hasDistinctViewValues(panes)) {
+        return failNode(node, path, '绑定状态的 views 需要为每个 view 指定不同的 value')
       }
     }
-    if (node.type === 'view' && parentType === 'views') {
+    if (node.type === 'drawing' && binding !== null) {
+      const panes = (Array.isArray(node.children) ? node.children : []).filter((child) => child?.type === 'view')
+      if (panes.length < 2 || panes.length > DRAWING_MAX_VIEWS || !hasDistinctViewValues(panes)
+        || !panes.every((pane) => isSafeViewValue(pane.props.value))) {
+        return failNode(node, path, '绑定状态的 drawing 需要 2–6 个含不同安全 value 的直接 view')
+      }
+      const current = resolveValue(props.bind, { state })
+      if (!panes.every((pane) => Object.is(pane.props.value, current)
+        || writeStatePath(state, binding.key, pane.props.value) !== state)) {
+        return failNode(node, path, 'drawing.bind 需要可写的 $state.* 路径')
+      }
+    }
+    if (node.type === 'view' && (parentType === 'views' || parentType === 'drawing' && parentBoundDrawing)) {
       const { value } = props
-      if (value !== undefined && (!fitsStateBudget(value) || (value !== null && typeof value === 'object'))) {
+      if (value !== undefined && !isSafeViewValue(value)) {
         return failNode(node, path, 'view.value 需要安全的 JSON 标量')
       }
-      if ((!Array.isArray(node.children) || node.children.length === 0) && (typeof props.caption !== 'string' || props.caption.trim() === '')) {
+      if (parentType === 'views' && (!Array.isArray(node.children) || node.children.length === 0)
+        && (typeof props.caption !== 'string' || props.caption.trim() === '')) {
         return failNode(node, path, 'views 的 view 需要正文或图注')
       }
     }
@@ -1008,7 +1028,8 @@ export function validateAst(input) {
     if (spec.children && Array.isArray(node.children)) {
       const childParent = node.type === 'view' && parentType === 'drawing' ? 'drawing-view' : node.type
       for (const [index, child] of node.children.entries()) {
-        const walked = walk(child, depth + 1, `${path}.children[${index}]`, childParent)
+        const walked = walk(child, depth + 1, `${path}.children[${index}]`, childParent,
+          node.type === 'drawing' && binding !== null)
         if (walked === null) return null
         if (node.type === 'views' && walked.type !== 'view') continue
         children.push(walked)
@@ -1025,7 +1046,7 @@ export function validateAst(input) {
     const allowed = new Set([...Object.keys(spec.props), ...UNIVERSAL_PROPS])
     const safeProps = {}
     for (const key of Object.keys(props)) {
-      if (node.type === 'view' && parentType === 'drawing' && key === 'value') continue
+      if (node.type === 'view' && parentType === 'drawing' && !parentBoundDrawing && key === 'value') continue
       if (allowed.has(key)) safeProps[key] = props[key]
     }
     const normalized = { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props: safeProps, children }

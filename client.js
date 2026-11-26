@@ -809,7 +809,7 @@ window.__ModuleLoader__.load({
         empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
         chart: { props: { kind: 'string', series: 'value', source: 'string?', title: 'string?', domain: 'value?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', play: 'number?', bind: 'string?', marks: 'value?' }, children: false },
         views: { props: { label: 'string?', bind: 'string?' }, children: true },
-        drawing: { props: { width: 'number', height: 'number', label: 'string' }, children: true },
+        drawing: { props: { width: 'number', height: 'number', label: 'string', bind: 'string?' }, children: true },
         view: { props: { label: 'string', caption: 'string?', value: 'value?' }, children: true },
         repeat: { props: { items: 'value' }, children: true },
         rect: { props: { x: 'number', y: 'number', at: 'value?', width: 'number', height: 'number', rx: 'number?', fill: 'string?', stroke: 'string?', strokeWidth: 'number?', opacity: 'number?' }, children: false },
@@ -1011,6 +1011,15 @@ window.__ModuleLoader__.load({
         return compiled !== null && compiled.refs.length > 0 && compiled.refs.every((ref) => ref.scope === 'state') ? compiled : null
       }
 
+      function hasDistinctViewValues(panes) {
+        const values = panes.map((pane) => pane.props?.value)
+        return !values.includes(undefined) && new Set(values).size === values.length
+      }
+
+      function isSafeViewValue(value) {
+        return (value === null || typeof value !== 'object') && fitsStateBudget(value)
+      }
+
       /** 本地状态也是来自模型的 JSON；避免超大对象和原型属性污染。 */
       function stateSafe(value, depth = 0, budget = { remaining: LIMITS.stateBytes }) {
         // 每个值和键至少占一个字符，先限制遍历，再对有限结果计算序列化体积。
@@ -1203,6 +1212,7 @@ window.__ModuleLoader__.load({
         if (expanded === null) return null
         const safe = {}
         for (const [key, rule] of Object.entries(REGISTRY[type].props)) {
+          if (type === 'drawing' && key === 'bind') continue
           if (DRAWING_POINT_INPUTS.has(key) || (type === 'view' && key === 'value')) continue
           let value = expanded[key]
           if (value === undefined && rule.endsWith('?')) continue
@@ -1372,7 +1382,7 @@ window.__ModuleLoader__.load({
           return { id: `${path}-degraded`, type: 'text', props: { text }, children: [], degraded: true }
         }
 
-        const walk = (node, depth, path, parentType) => {
+        const walk = (node, depth, path, parentType, parentBoundDrawing = false) => {
           if (depth > LIMITS.depth) {
             fatal.push(`${path} 超过最大深度 ${LIMITS.depth}`)
             return null
@@ -1406,7 +1416,7 @@ window.__ModuleLoader__.load({
           }
           let writesState = Object.hasOwn(spec.props, 'bind')
           if (node.type === 'button') writesState = LOCAL_BUTTON_ACTIONS.includes(props.action)
-          if (node.type === 'views' || node.type === 'chart') writesState = props.bind !== undefined
+          if (node.type === 'views' || node.type === 'chart' || node.type === 'drawing') writesState = props.bind !== undefined
           const binding = writesState ? readBinding(props.bind) : null
           if (binding !== null && binding.scope !== 'state') return failNode(node, path, `${node.type} 需要 bind="$state.*"`)
           if (node.type === 'views') {
@@ -1417,19 +1427,29 @@ window.__ModuleLoader__.load({
             if (props.label !== undefined && readBinding(props.label).scope === undefined && drawingAttribute('views', 'label', props.label) === null) {
               return failNode(node, path, 'views.label 需要简短文本或状态绑定')
             }
-            if (binding !== null) {
-              const values = panes.map((pane) => pane.props?.value)
-              if (values.some((value) => value === undefined) || new Set(values).size !== values.length) {
-                return failNode(node, path, '绑定状态的 views 需要为每个 view 指定不同的 value')
-              }
+            if (binding !== null && !hasDistinctViewValues(panes)) {
+              return failNode(node, path, '绑定状态的 views 需要为每个 view 指定不同的 value')
             }
           }
-          if (node.type === 'view' && parentType === 'views') {
+          if (node.type === 'drawing' && binding !== null) {
+            const panes = (Array.isArray(node.children) ? node.children : []).filter((child) => child?.type === 'view')
+            if (panes.length < 2 || panes.length > DRAWING_MAX_VIEWS || !hasDistinctViewValues(panes)
+              || !panes.every((pane) => isSafeViewValue(pane.props.value))) {
+              return failNode(node, path, '绑定状态的 drawing 需要 2–6 个含不同安全 value 的直接 view')
+            }
+            const current = resolveValue(props.bind, { state })
+            if (!panes.every((pane) => Object.is(pane.props.value, current)
+              || writeStatePath(state, binding.key, pane.props.value) !== state)) {
+              return failNode(node, path, 'drawing.bind 需要可写的 $state.* 路径')
+            }
+          }
+          if (node.type === 'view' && (parentType === 'views' || parentType === 'drawing' && parentBoundDrawing)) {
             const { value } = props
-            if (value !== undefined && (!fitsStateBudget(value) || (value !== null && typeof value === 'object'))) {
+            if (value !== undefined && !isSafeViewValue(value)) {
               return failNode(node, path, 'view.value 需要安全的 JSON 标量')
             }
-            if ((!Array.isArray(node.children) || node.children.length === 0) && (typeof props.caption !== 'string' || props.caption.trim() === '')) {
+            if (parentType === 'views' && (!Array.isArray(node.children) || node.children.length === 0)
+              && (typeof props.caption !== 'string' || props.caption.trim() === '')) {
               return failNode(node, path, 'views 的 view 需要正文或图注')
             }
           }
@@ -1782,7 +1802,8 @@ window.__ModuleLoader__.load({
           if (spec.children && Array.isArray(node.children)) {
             const childParent = node.type === 'view' && parentType === 'drawing' ? 'drawing-view' : node.type
             for (const [index, child] of node.children.entries()) {
-              const walked = walk(child, depth + 1, `${path}.children[${index}]`, childParent)
+              const walked = walk(child, depth + 1, `${path}.children[${index}]`, childParent,
+                node.type === 'drawing' && binding !== null)
               if (walked === null) return null
               if (node.type === 'views' && walked.type !== 'view') continue
               children.push(walked)
@@ -1799,7 +1820,7 @@ window.__ModuleLoader__.load({
           const allowed = new Set([...Object.keys(spec.props), ...UNIVERSAL_PROPS])
           const safeProps = {}
           for (const key of Object.keys(props)) {
-            if (node.type === 'view' && parentType === 'drawing' && key === 'value') continue
+            if (node.type === 'view' && parentType === 'drawing' && !parentBoundDrawing && key === 'value') continue
             if (allowed.has(key)) safeProps[key] = props[key]
           }
           const normalized = { id: typeof node.id === 'string' && node.id !== '' ? node.id : path, type: node.type, props: safeProps, children }
@@ -2229,7 +2250,7 @@ window.__ModuleLoader__.load({
         metric: ['label', 'value', 'unit', 'note', 'delta', 'caption', 'tone'],
         chart: ['kind', 'type', 'series', 'source', 'title', 'domain', 'xScale', 'xUnit', 'yUnit', 'cursor', 'scrub', 'play', 'bind', 'marks'],
         views: ['label', 'bind'],
-        drawing: ['width', 'height', 'label'],
+        drawing: ['width', 'height', 'label', 'bind'],
         view: ['label', 'caption'],
         repeat: ['items'],
         rect: ['x', 'y', 'at', 'width', 'height', 'rx', 'fill', 'stroke', 'strokeWidth', 'opacity'],
@@ -3428,8 +3449,31 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function IuiDrawing({ item, resolve, resolveDataset, scope, visible, streaming, adaptive, weight }) {
+    function useIuiViewSelection({ item, resolve, visible, updateState, streaming }) {
       const [choice, choose] = React.useState(null)
+      const binding = IUI_AST.readBinding(item.props.bind)
+      const bound = binding.scope === 'state'
+      const current = bound ? resolve(item.props.bind) : choice
+      const options = []
+      let hasViews = false
+      for (const [index, child] of item.children.entries()) {
+        if (child.type !== 'view') continue
+        hasViews = true
+        if (!visible(child)) continue
+        const props = IUI_AST.drawingProps('view', child.props, resolve)
+        if (props !== null) options.push({ index, ...props, value: bound ? child.props.value : index })
+      }
+      const active = options.find(({ value }) => sameValue(value, current)) ?? options[0]
+      const select = (option) => {
+        if (streaming === true) return
+        if (bound) updateState(binding.key, option.value)
+        else choose(option.value)
+      }
+      return { options, hasViews, active, select }
+    }
+
+    function IuiDrawing({ item, resolve, resolveDataset, scope, visible, updateState, streaming, adaptive, weight }) {
+      const { options, hasViews, active: selected, select } = useIuiViewSelection({ item, resolve, visible, updateState, streaming })
       const captionId = React.useId()
       const weightStyle = weight === undefined ? {} : WEIGHT_STYLE[weight]
       const viewport = IUI_AST.drawingProps('drawing', item.props, resolve)
@@ -3456,16 +3500,6 @@ window.__ModuleLoader__.load({
       const frame = measured?.baseFrame === baseFrame ? measured.frame : baseFrame
       if (viewport === null) return h('div', { 'data-iui-drawing-invalid': '1', 'data-iui-weight': weight, style: { color: C.muted, ...weightStyle } }, '示意图暂不可用')
 
-      const options = []
-      let hasViews = false
-      for (const [index, child] of item.children.entries()) {
-        if (child.type !== 'view') continue
-        hasViews = true
-        if (!visible(child)) continue
-        const props = IUI_AST.drawingProps('view', child.props, resolve)
-        if (props !== null) options.push({ index, ...props })
-      }
-      const selected = options.find(({ index }) => index === choice) ?? options[0]
       const caption = selected?.caption
       const shapeContext = { resolve, scope, visible, streaming, frame }
       const entries = item.children.flatMap((child, index) => {
@@ -3507,7 +3541,7 @@ window.__ModuleLoader__.load({
             'data-iui-drawing-option': String(option.index),
             'aria-pressed': active,
             disabled: streaming === true,
-            onClick: () => choose(option.index),
+            onClick: () => select(option),
           }, option.label)
         })) : null,
       graph, repeatNotice,
@@ -3521,22 +3555,8 @@ window.__ModuleLoader__.load({
 
     function IuiViews({ item, render, resolve, visible, updateState, streaming, weight }) {
       const id = React.useId()
-      const [choice, choose] = React.useState(null)
-      const binding = IUI_AST.readBinding(item.props.bind)
-      const bound = binding.scope === 'state'
-      const current = bound ? resolve(item.props.bind) : choice
-      const options = item.children.flatMap((pane, index) => {
-        if (pane.type !== 'view' || !visible(pane)) return []
-        const props = IUI_AST.drawingProps('view', pane.props, resolve)
-        return props === null ? [] : [{ ...props, index, value: bound ? pane.props.value : index }]
-      })
-      const active = options.find(({ value }) => sameValue(value, current)) ?? options[0]
+      const { options, active, select } = useIuiViewSelection({ item, resolve, visible, updateState, streaming })
       if (active === undefined) return null
-      const select = (option) => {
-        if (streaming === true) return
-        if (bound) updateState(binding.key, option.value)
-        else choose(option.value)
-      }
       const title = resolve(item.props.label)
       const useTabs = options.length > 1
       const focusOnKey = (event, index) => {
@@ -4458,6 +4478,7 @@ window.__ModuleLoader__.load({
       const fallbackNode = (text, key, tag) => typeof text === 'string' && text.trim() !== ''
         ? h(tag, { key, 'data-iui-node-fallback': '1', style: { overflowWrap: 'anywhere' } }, text)
         : null
+      const updateState = (path, value) => setState((prev) => writeStatePath(prev, path, value))
       const toggleDetails = (detailsId) => {
         setOpenDetails((prev) => {
           const next = new Map(prev)
@@ -4688,11 +4709,10 @@ window.__ModuleLoader__.load({
           return h('span', { key, 'data-iui-badge': String(props.tone ?? 'neutral'), style: { display: 'inline-block', padding: '0 6px', borderRadius: 999, fontSize: 11, background: tone[0], color: tone[1] } }, textOf(text))
         }
         if (item.type === 'diagram') return h(IuiDiagram, { key, item, resolve, resolveText, visible })
-        if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, resolveDataset, scope, visible, streaming, adaptive })
+        if (item.type === 'drawing') return h(IuiDrawing, { key, item, resolve, resolveDataset, scope, visible, updateState, streaming, adaptive })
         if (item.type === 'views') return h(IuiViews, {
-          key, item, resolve, visible, streaming,
+          key, item, resolve, visible, updateState, streaming,
           render: (child, index) => node(child, `${key}-${index}`),
-          updateState: (path, value) => setState((prev) => writeStatePath(prev, path, value)),
         })
         if (item.type === 'callout') {
           const tone = String(props.tone ?? 'neutral')
