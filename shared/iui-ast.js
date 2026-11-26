@@ -480,49 +480,26 @@ export function localActionValue(state, initialState, props, value) {
 }
 
 /** 在通过结构校验的节点中检测派生路径冲突和循环。 */
-function planDerives(defs, bindPaths, state) {
-  const rejected = new Map()
-  if (defs.length === 0) return { ordered: [], rejected }
+function deriveNamesConflict(a, b) {
+  return a === b || a.startsWith(b + '.') || b.startsWith(a + '.')
+}
 
-  // 初始 state 的每个顶层路径都拥有整个子树，比较根键即可。
-  const statePaths = Object.keys(state)
-  const byName = new Map()
-  const conflict = (a, b) => a === b || a.startsWith(b + '.') || b.startsWith(a + '.')
+function deriveGuardsDisjoint(left = [], right = []) {
+  return left.some((a) => right.some((b) => a.path === b.path && a.value !== b.value))
+}
+
+function orderDerives(entries) {
   const deps = new Map()
-  for (const [index, def] of defs.entries()) {
-    const { name, expr } = def.node.props
-    if (typeof name !== 'string' || name.length > 200 || !DERIVE_NAME.test(name) || name.split('.').some((part) => RESERVED.has(part))) {
-      rejected.set(index, 'derive.name 需要安全的点号路径')
-    } else if (byName.has(name)) {
-      rejected.set(index, `derive.name 重复：${name}`)
-    } else {
-      const deriveHit = [...byName.keys()].find((path) => conflict(name, path))
-      const bindHit = bindPaths.find((path) => conflict(name, path))
-      const stateHit = statePaths.find((path) => conflict(name, path))
-      if (deriveHit !== undefined) rejected.set(index, `derive.name 与派生路径冲突：${deriveHit}`)
-      else if (bindHit !== undefined) rejected.set(index, `derive.name 与控件绑定冲突：${bindHit}`)
-      else if (stateHit !== undefined) rejected.set(index, `derive.name 与初始 state 冲突：${stateHit}`)
-      else if (typeof expr !== 'string' || expr.trim() === '') rejected.set(index, 'derive.expr 必填')
-      else if (expr.length > EXPR_LIMITS.chars) rejected.set(index, `derive.expr 超过 ${EXPR_LIMITS.chars} 字符`)
-      else {
-        const compiled = compileExpr(expr)
-        if (!compiled.ok) rejected.set(index, `derive.expr 不合法：${compiled.error}`)
-        else byName.set(name, { index, name, compiled })
-      }
-    }
-  }
-
-  for (const { index, compiled } of byName.values()) {
+  for (const entry of entries) {
     const set = new Set()
-    for (const ref of compiled.refs) {
+    for (const ref of entry.compiled.refs) {
       if (ref.scope !== 'state') continue
-      for (const [name, target] of byName) {
-        if (ref.key === name || ref.key.startsWith(name + '.')) set.add(target.index)
+      for (const target of entries) {
+        if (ref.key === target.name || ref.key.startsWith(target.name + '.')) set.add(target.index)
       }
     }
-    deps.set(index, set)
+    deps.set(entry.index, set)
   }
-  // 自环与循环检测（DFS 三色）
   const color = new Map()
   const stack = []
   const cyclic = new Set()
@@ -539,20 +516,12 @@ function planDerives(defs, bindPaths, state) {
     stack.pop()
     color.set(index, 2)
   }
-  for (const index of deps.keys()) if (color.get(index) === undefined) visit(index)
-  for (const index of cyclic) rejected.set(index, `derive 循环引用：${defs[index].node.props.name}`)
-  let deriveCount = 0
-  for (const { index } of byName.values()) {
-    if (rejected.has(index)) continue
-    deriveCount += 1
-    if (deriveCount > LIMITS.derive) rejected.set(index, `derive 最多 ${LIMITS.derive} 个`)
-  }
+  for (const entry of entries) if (color.get(entry.index) === undefined) visit(entry.index)
 
-  // 按原运行时的就绪队列排序。无依赖条目先按文档顺序入队，再加入解除依赖的条目。
-  const active = [...byName.values()].filter(({ index }) => !rejected.has(index))
+  const active = entries.filter((entry) => !cyclic.has(entry.index))
   const waiting = new Map(active.map((entry) => [entry.index, { entry, count: 0, dependents: [] }]))
   for (const [index, item] of waiting) {
-    for (const dependency of deps.get(index)) {
+    for (const dependency of deps.get(index) ?? []) {
       const target = waiting.get(dependency)
       if (target === undefined) continue
       item.count += 1
@@ -563,13 +532,89 @@ function planDerives(defs, bindPaths, state) {
   const ordered = []
   for (let cursor = 0; cursor < ready.length; cursor += 1) {
     const { entry, dependents } = ready[cursor]
-    ordered.push({ name: entry.name, compiled: entry.compiled })
+    ordered.push({ name: entry.name, compiled: entry.compiled, index: entry.index })
     for (const dependent of dependents) {
       dependent.count -= 1
       if (dependent.count === 0) ready.push(dependent)
     }
   }
-  return { ordered, rejected }
+  return { ordered, cyclic }
+}
+
+const derivePlanCache = new WeakMap()
+
+/** Select guarded alternatives from the current base state and topologically order active derivations. */
+export function selectDerivePlan(plan, state) {
+  const cached = derivePlanCache.get(plan)
+  const paths = cached?.paths ?? [...new Set(plan.flatMap((entry) => entry.guards?.map((guard) => guard.path) ?? []))]
+  const values = paths.map((path) => resolveValue(`$state.${path}`, { state }))
+  if (cached !== undefined && values.every((value, index) => value === cached.values[index])) return cached.result
+  if (paths.length === 0) {
+    const result = { ordered: plan, errors: 0 }
+    derivePlanCache.set(plan, { paths, values, result })
+    return result
+  }
+  const selection = new Map(paths.map((path, index) => [path, values[index]]))
+  const active = plan.filter((entry) => entry.guards.every(({ path, value }) => selection.get(path) === value))
+  const ordered = orderDerives(active)
+  const result = { ordered: ordered.ordered.map(({ name, compiled }) => ({ name, compiled })), errors: ordered.cyclic.size }
+  derivePlanCache.set(plan, { paths, values, result })
+  return result
+}
+
+function planDerives(defs, bindPaths, state) {
+  const rejected = new Map()
+  const statePaths = Object.keys(state)
+  const candidates = []
+  for (const [index, def] of defs.entries()) {
+    const { name, expr } = def.node.props
+    const guards = Array.isArray(def.guards) ? def.guards : []
+    const seenGuards = new Map()
+    for (const guard of guards) {
+      if (seenGuards.has(guard.path) && seenGuards.get(guard.path) !== guard.value) {
+        rejected.set(index, 'derive.view 选择条件无法同时成立')
+        break
+      }
+      seenGuards.set(guard.path, guard.value)
+    }
+    if (rejected.has(index)) continue
+    if (typeof name !== 'string' || name.length > 200 || !DERIVE_NAME.test(name) || name.split('.').some((part) => RESERVED.has(part))) {
+      rejected.set(index, 'derive.name 需要安全的点号路径')
+    } else if (typeof expr !== 'string' || expr.trim() === '') {
+      rejected.set(index, 'derive.expr 必填')
+    } else if (expr.length > EXPR_LIMITS.chars) {
+      rejected.set(index, `derive.expr 超过 ${EXPR_LIMITS.chars} 字符`)
+    } else {
+      const bindHit = bindPaths.find((path) => deriveNamesConflict(name, path))
+      const stateHit = statePaths.find((path) => deriveNamesConflict(name, path))
+      if (bindHit !== undefined) rejected.set(index, `derive.name 与控件绑定冲突：${bindHit}`)
+      else if (stateHit !== undefined) rejected.set(index, `derive.name 与初始 state 冲突：${stateHit}`)
+      else {
+        const compiled = compileExpr(expr)
+        if (!compiled.ok) rejected.set(index, `derive.expr 不合法：${compiled.error}`)
+        else candidates.push({ index, name, compiled, guards })
+      }
+    }
+  }
+
+  const accepted = []
+  for (const candidate of candidates) {
+    const collision = accepted.find((prior) => deriveNamesConflict(candidate.name, prior.name)
+      && !deriveGuardsDisjoint(candidate.guards, prior.guards))
+    if (collision !== undefined) rejected.set(candidate.index, candidate.name === collision.name
+      ? `derive.name 重复：${candidate.name}`
+      : `derive.name 与派生路径冲突：${collision.name}`)
+    else accepted.push(candidate)
+  }
+  const staticEntries = accepted.filter((entry) => entry.guards.length === 0)
+  const staticOrder = orderDerives(staticEntries)
+  for (const index of staticOrder.cyclic) rejected.set(index, `derive 循环引用：${defs[index].node.props.name}`)
+  const eligible = accepted.filter((entry) => !rejected.has(entry.index))
+  for (const entry of eligible.slice(LIMITS.derive)) rejected.set(entry.index, `derive 最多 ${LIMITS.derive} 个`)
+  const plan = eligible.slice(0, LIMITS.derive)
+  if (plan.some((entry) => entry.guards.length > 0)) return { ordered: plan, rejected }
+  const ordered = staticOrder.ordered.length === plan.length ? staticOrder.ordered : orderDerives(plan).ordered
+  return { ordered: ordered.map(({ name, compiled }) => ({ name, compiled })), rejected }
 }
 
 /**
@@ -608,7 +653,7 @@ export function validateAst(input) {
     return { id: `${path}-degraded`, type: 'text', props: { text }, children: [], degraded: true }
   }
 
-  const walk = (node, depth, path, parentType, parentBoundDrawing = false) => {
+  const walk = (node, depth, path, parentType, parentBoundDrawing = false, deriveGuards = []) => {
     if (depth > LIMITS.depth) {
       fatal.push(`${path} 超过最大深度 ${LIMITS.depth}`)
       return null
@@ -655,6 +700,13 @@ export function validateAst(input) {
       }
       if (binding !== null && !hasDistinctViewValues(panes)) {
         return failNode(node, path, '绑定状态的 views 需要为每个 view 指定不同的 value')
+      }
+      if (binding !== null) {
+        const current = resolveValue(props.bind, { state })
+        if (!panes.every((pane) => pane.props.value === current
+          || writeStatePath(state, binding.key, pane.props.value) !== state)) {
+          return failNode(node, path, 'views.bind 需要可写的 $state.* 路径')
+        }
       }
     }
     if (node.type === 'drawing' && binding !== null) {
@@ -1025,11 +1077,15 @@ export function validateAst(input) {
       }
     }
     const children = []
+    const deriveStart = derives.length
     if (spec.children && Array.isArray(node.children)) {
       const childParent = node.type === 'view' && parentType === 'drawing' ? 'drawing-view' : node.type
       for (const [index, child] of node.children.entries()) {
+        const childGuards = node.type === 'views' && binding !== null && child?.type === 'view'
+          ? [...deriveGuards, { path: binding.key, value: child.props?.value }]
+          : deriveGuards
         const walked = walk(child, depth + 1, `${path}.children[${index}]`, childParent,
-          node.type === 'drawing' && binding !== null)
+          node.type === 'drawing' && binding !== null, childGuards)
         if (walked === null) return null
         if (node.type === 'views' && walked.type !== 'view') continue
         children.push(walked)
@@ -1055,7 +1111,8 @@ export function validateAst(input) {
     if (Object.keys(geometryExpressions).length > 0) normalized.geometryExpressions = geometryExpressions
     if (Object.keys(readoutExpressions).length > 0) normalized.readoutExpressions = readoutExpressions
     if (conditionExpression !== null) normalized.conditionExpression = conditionExpression
-    if (node.type === 'derive') derives.push({ node: normalized, source: node, path })
+    if (node.type === 'derive') derives.push({ node: normalized, source: node, path, guards: deriveGuards })
+    if (node.type === 'views' && binding !== null && derives.length > deriveStart) normalized.hasConditionalDerives = true
     if (binding !== null) bindPaths.push(binding.key)
     return normalized
   }

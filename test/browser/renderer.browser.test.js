@@ -321,6 +321,24 @@ const BOUND_VIEWS_ML = `<ui density="auto">
   <button label="返回初始" action="set" bind="$state.phase" value="before"/>
 </ui>`
 
+const BOUND_VIEW_DERIVES_ML = `<ui density="auto">
+  <state name="mode" value='"normal"'/>
+  <state name="n" value="10"/>
+  <views label="计算分支" bind="$state.mode">
+    <view label="常规" value="normal"><derive name="activeValue" expr="$state.n + 1"/><text text="常规计算"/></view>
+    <view label="加倍" value="double"><derive name="activeValue" expr="$state.n * 2"/><text text="加倍计算"/></view>
+  </views>
+  <slider label="输入值" bind="$state.n" min="0" max="20" step="1"/>
+  <metric label="活动结果" value="$state.activeValue"/>
+  <drawing width="160" height="80" label="活动结果位置">
+    <circle cx="$state.activeValue" cy="35" r="8" fill="accent"/>
+    <line x1="0" y1="50" x2="160" y2="50" stroke="border"/>
+  </drawing>
+  <button label="设为加倍" action="set" bind="$state.mode" value="double"/>
+  <button label="设为未知" action="set" bind="$state.mode" value="missing"/>
+  <button label="重置模式" action="reset" bind="$state.mode"/>
+</ui>`
+
 const NUMERIC_AXIS_ML = `<ui density="auto">
   <state name="t" value="0"/>
   <slider label="观察时刻" bind="$state.t" min="0" max="20" step="1" unit="秒"/>
@@ -546,7 +564,7 @@ const SETUP = `
           if (event === 'change') el.addEventListener('input', value);
           continue;
         }
-        if (value === undefined || value === null || value === false) continue;
+        if (value === undefined || value === null || (value === false && !name.startsWith('aria-'))) continue;
         const attr = el.namespaceURI === 'http://www.w3.org/2000/svg' ? svgAttributes[name] ?? name : name;
         try { el.setAttribute(attr, String(value)); } catch (error) { failures.push('attr:' + String(error && error.message)); }
       }
@@ -732,6 +750,7 @@ const MAIN_RUN = `
       repeatDrawing:mountBlock(${JSON.stringify(DRAWING_REPEAT_ML)}),
       repeatOverflowDrawing:mountBlock(${JSON.stringify(DRAWING_REPEAT_OVERFLOW_ML)}),
       boundViews:mountBlock(${JSON.stringify(BOUND_VIEWS_ML)}),
+      boundViewDerives:mountBlock(${JSON.stringify(BOUND_VIEW_DERIVES_ML)}),
       numericAxis:mountBlock(${JSON.stringify(NUMERIC_AXIS_ML)}),
       chartScrub:mountBlock(${JSON.stringify(CHART_SCRUB_ML)}),
       multiChartScrub:mountBlock(${JSON.stringify(MULTI_CHART_SCRUB_ML)}),
@@ -1398,6 +1417,59 @@ const MAIN_RUN = `
         await wait(25);
         check('boundViewsReset', () => tabs()[0]?.getAttribute('aria-selected') === 'true'
           && switchedPanel()?.textContent === '初始状态' ? true : '外部动作未同步视图');
+        const boundViewDerives = r3.boundViewDerives;
+        const deriveTabs = () => [...boundViewDerives.querySelectorAll('[role="tab"]')];
+        const deriveMetricValue = () => boundViewDerives.querySelector('[data-iui-metric="活动结果"] .miopiik-metric-value');
+        const deriveCircle = () => boundViewDerives.querySelector('svg[data-iui-drawing] circle[fill]');
+        const deriveInput = boundViewDerives.querySelector('[data-iui-slider] input[type="range"]');
+        check('boundViewDeriveInitial', () => deriveTabs().length === 2
+          && deriveTabs()[0]?.getAttribute('aria-selected') === 'true'
+          && deriveTabs()[1]?.getAttribute('aria-selected') === 'false'
+          && deriveMetricValue()?.textContent.trim() === '11'
+          && deriveCircle()?.getAttribute('cx') === '11'
+          && boundViewDerives.querySelector('[data-iui-output="ok"][data-iui-degraded="0"]') !== null
+          ? true : '常规 view 的局部 derive 未共享给 metric 和绘图坐标');
+        if (deriveInput !== null) {
+          deriveInput.value = '12';
+          deriveInput.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(25);
+        }
+        check('boundViewDeriveInput', () => deriveInput !== null
+          && deriveMetricValue()?.textContent.trim() === '13' && deriveCircle()?.getAttribute('cx') === '13'
+          ? true : '局部计算未随共享 slider 输入同步更新');
+        deriveTabs()[1]?.click();
+        await wait(25);
+        check('boundViewDeriveSwitch', () => deriveTabs()[1]?.getAttribute('aria-selected') === 'true'
+          && deriveMetricValue()?.textContent.trim() === '24' && deriveCircle()?.getAttribute('cx') === '24'
+          ? true : '切换分支后同名 derive 未改用活动分支计算');
+        deriveTabs()[0]?.click();
+        await wait(25);
+        check('boundViewDeriveSwitchBack', () => deriveTabs()[0]?.getAttribute('aria-selected') === 'true'
+          && deriveMetricValue()?.textContent.trim() === '13' && deriveCircle()?.getAttribute('cx') === '13'
+          ? true : '切回分支后读数或图元仍残留前一分支值');
+        [...boundViewDerives.querySelectorAll('button[data-iui-action="set"]')].find(button => button.textContent === '设为加倍')?.click();
+        await wait(25);
+        check('boundViewDeriveExternalSet', () => deriveTabs()[1]?.getAttribute('aria-selected') === 'true'
+          && deriveMetricValue()?.textContent.trim() === '24' && deriveCircle()?.getAttribute('cx') === '24'
+          ? true : '本地 set 操作未同步活动 derive');
+        [...boundViewDerives.querySelectorAll('button[data-iui-action="set"]')].find(button => button.textContent === '设为未知')?.click();
+        await wait(25);
+        check('boundViewDeriveUnknown', () => deriveTabs().length === 2
+          && deriveTabs().every(tab => tab.getAttribute('aria-selected') === 'false')
+          && deriveMetricValue()?.textContent.trim() === '—'
+          && deriveMetricValue()?.getAttribute('data-iui-binding-unavailable') === '1'
+          && deriveCircle() === null
+          ? true : '未知绑定值应保留真实选项、清除活动派生读数和图元');
+        deriveTabs()[1]?.click();
+        await wait(25);
+        check('boundViewDeriveRecover', () => deriveTabs()[1]?.getAttribute('aria-selected') === 'true'
+          && deriveMetricValue()?.textContent.trim() === '24' && deriveCircle()?.getAttribute('cx') === '24'
+          ? true : '未知绑定值后应可选择真实分支并恢复共享读数');
+        boundViewDerives.querySelector('button[data-iui-action="reset"]')?.click();
+        await wait(25);
+        check('boundViewDeriveReset', () => deriveTabs()[0]?.getAttribute('aria-selected') === 'true'
+          && deriveMetricValue()?.textContent.trim() === '13' && deriveCircle()?.getAttribute('cx') === '13'
+          ? true : '本地 reset 未恢复初始分支并重算共享值');
         check('numericAxis', () => {
           const plot = r3.numericAxis.querySelector('[data-iui-chart-scale="linear"]');
           const xs = plot?.querySelector('polyline')?.getAttribute('points')?.split(' ').map(point => Number(point.split(',')[0]));
@@ -2044,6 +2116,14 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-comparison-live="ok"/u,'尚未定稿的流式对照选项应禁用')
   assert.match(html,/data-bound-views="ok"/u,'切换完整视图应更新共享状态')
   assert.match(html,/data-bound-views-reset="ok"/u,'外部动作应切换完整视图')
+  assert.match(html,/data-bound-view-derive-initial="ok"/u,'活动 view 局部派生值应供外部 metric 与绘图坐标共用')
+  assert.match(html,/data-bound-view-derive-input="ok"/u,'活动分支派生值应响应共享本地输入')
+  assert.match(html,/data-bound-view-derive-switch="ok"/u,'切换分支应使用重复同名的活动 derive')
+  assert.match(html,/data-bound-view-derive-switch-back="ok"/u,'切回分支应重算且不残留另一分支值')
+  assert.match(html,/data-bound-view-derive-external-set="ok"/u,'外部本地 set 应更新活动分支派生输出')
+  assert.match(html,/data-bound-view-derive-unknown="ok"/u,'未知 view 值应清空读数并保留未选中的真实标签')
+  assert.match(html,/data-bound-view-derive-recover="ok"/u,'未知 view 值时仍可选择真实分支并恢复读数')
+  assert.match(html,/data-bound-view-derive-reset="ok"/u,'reset 应恢复初始 view 并同步共享输出')
   assert.match(html,/data-numeric-axis="ok"/u,'时间轴应保留数值间距和当前时刻标记')
   assert.match(html,/data-numeric-axis-write="ok"/u,'旧时间轴应继续响应外部滑轨')
   assert.match(html,/data-scalar-readout-initial="ok"/u,'metric.value/delta 与 progress.value/max 应计算 state 表达式，保留纯绑定和字面说明')

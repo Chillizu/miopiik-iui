@@ -42,7 +42,7 @@ export function build() {
     "      error: 'var(--dsw-alias-state-error-primary, #d1242f)',",
     '    }',
     closure('iui-expr.js', 'IUI_EXPR', ['EXPR_LIMITS', 'compileExpr', 'evaluateExpr', 'exprRefs']),
-    closure('iui-ast.js', 'IUI_AST', ['IUI_VERSION', 'REGISTRY', 'LIMITS', 'INLINE_TYPES', 'TONES', 'ICONS', 'readBinding', 'resolveValue', 'validateAst', 'writeStatePath', 'localActionValue', 'drawingProps', 'positionalTableColumns', 'tableMatrix', 'chartMatrix', 'chartTraces', 'chartMarks', 'chartIntervals', 'degradeToText'], 'const { EXPR_LIMITS, compileExpr } = IUI_EXPR'),
+    closure('iui-ast.js', 'IUI_AST', ['IUI_VERSION', 'REGISTRY', 'LIMITS', 'INLINE_TYPES', 'TONES', 'ICONS', 'readBinding', 'resolveValue', 'validateAst', 'selectDerivePlan', 'writeStatePath', 'localActionValue', 'drawingProps', 'positionalTableColumns', 'tableMatrix', 'chartMatrix', 'chartTraces', 'chartMarks', 'chartIntervals', 'degradeToText'], 'const { EXPR_LIMITS, compileExpr } = IUI_EXPR'),
     closure('miopiik-ml.js', 'MIOPIIK_ML', ['ML_VERSION', 'ML_TAGS', 'parseMiopiikMl']),
     closure('markdown-segments.js', 'MARKDOWN_SEGMENTS', ['INLINE_TOKEN', 'BLOCK_FENCE', 'splitTrustedMarkdown', 'hasTrustedMarkup', 'splitTrustedBlocks', 'splitStreamingFence', 'graftTrustedInline']),
     closure('diagram-geometry.js', 'DIAGRAM_GEO', ['diagramEdges', 'diagramFallbackAnchors', 'placeDiagramCaptions']),

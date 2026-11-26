@@ -333,7 +333,8 @@
         const props = IUI_AST.drawingProps('view', child.props, resolve)
         if (props !== null) options.push({ index, ...props, value: bound ? child.props.value : index })
       }
-      const active = options.find(({ value }) => sameValue(value, current)) ?? options[0]
+      const active = options.find(({ value }) => sameValue(value, current))
+        ?? (item.hasConditionalDerives ? undefined : options[0])
       const select = (option) => {
         if (streaming === true) return
         if (bound) updateState(binding.key, option.value)
@@ -427,9 +428,9 @@
     function IuiViews({ item, render, resolve, visible, updateState, streaming, weight }) {
       const id = React.useId()
       const { options, active, select } = useIuiViewSelection({ item, resolve, visible, updateState, streaming })
-      if (active === undefined) return null
+      if (options.length === 0) return null
       const title = resolve(item.props.label)
-      const useTabs = options.length > 1
+      const useTabs = options.length > 1 || item.hasConditionalDerives
       const focusOnKey = (event, index) => {
         if (streaming === true || !['Home', 'End', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
@@ -449,10 +450,12 @@
         return h('button', {
           key: option.index, id: `${id}-tab-${option.index}`, type: 'button', role: 'tab',
           'aria-selected': selected, 'aria-controls': `${id}-panel-${option.index}`,
-          tabIndex: selected ? 0 : -1, disabled: streaming === true, className: 'miopiik-ctl miopiik-choice',
+          tabIndex: selected || (active === undefined && index === 0) ? 0 : -1,
+          disabled: streaming === true, className: 'miopiik-ctl miopiik-choice',
           onClick: () => select(option), onKeyDown: (event) => focusOnKey(event, index),
         }, option.label)
       })) : null,
+      active === undefined ? renderIuiNotice('选择一个情景查看对应结果。') : null,
       ...options.map((option) => {
         const selected = option === active
         return h('section', {
@@ -1220,11 +1223,12 @@
       return value !== null && typeof value === 'object' && !Array.isArray(value)
     }
 
-    /** 文档校验已确定依赖顺序。局部交互时只重算结果，不重新扫描、编译或排序节点。 */
+    /** Compile once, then reuse the order for the current selection. */
     function deriveState(plan, baseState) {
+      const selected = IUI_AST.selectDerivePlan(plan, baseState)
       let state = baseState
-      let errors = 0
-      for (const { name, compiled } of plan) {
+      let errors = selected.errors
+      for (const { name, compiled } of selected.ordered) {
         const result = IUI_EXPR.evaluateExpr(compiled, { state })
         const next = result.ok ? writeStatePath(state, name, result.value) : state
         if (next === state) errors += 1

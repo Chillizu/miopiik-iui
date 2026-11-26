@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { IUI_VERSION, chartIntervals, chartMarks, chartTraces, readBinding, resolveValue, validateAst } from '../shared/iui-ast.js'
+import { IUI_VERSION, chartIntervals, chartMarks, chartTraces, readBinding, resolveValue, selectDerivePlan, validateAst } from '../shared/iui-ast.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
 
 const good = () => ({
@@ -263,6 +263,58 @@ test('时间轴支持状态联动、节点标签和派生写入保护', () => {
   assert.deepEqual(checked.ast.state, {})
   assert.deepEqual(checked.derivePlan.map(({ name }) => name), ['elapsed'])
   assert.match(checked.diagnostics[0], /derive\.name 与控件绑定冲突：time/u)
+})
+
+test('互斥视图按当前状态排序同名公式并共享外层依赖', () => {
+  const parsed = parseMiopiikMl(`<ui>
+    <state name="mode" value='"first"'/>
+    <derive name="total" expr="$state.x + $state.y"/>
+    <views bind="$state.mode">
+      <view label="甲" value="first">
+        <derive name="y" expr="$state.x + 1"/><derive name="x" expr="2"/>
+      </view>
+      <view label="乙" value="second">
+        <derive name="x" expr="$state.y + 1"/><derive name="y" expr="4"/>
+      </view>
+    </views>
+    <metric label="共享" value="$state.total"/>
+  </ui>`)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.degraded, 0)
+  assert.equal(checked.ast.root.children.find((node) => node.type === 'views').hasConditionalDerives, true)
+  const first = selectDerivePlan(checked.derivePlan, { mode: 'first' })
+  assert.equal(first.errors, 0)
+  assert.deepEqual(first.ordered.map(({ name }) => name), ['x', 'y', 'total'])
+  assert.equal(selectDerivePlan(checked.derivePlan, { mode: 'first', slider: 10 }), first)
+  const second = selectDerivePlan(checked.derivePlan, { mode: 'second' })
+  assert.equal(second.errors, 0)
+  assert.deepEqual(second.ordered.map(({ name }) => name), ['y', 'x', 'total'])
+  assert.deepEqual(selectDerivePlan(checked.derivePlan, {}).ordered.map(({ name }) => name), ['total'])
+})
+
+test('绑定视图只在选中循环分支时计错，并拒绝可同时存在的重名', () => {
+  const parsed = parseMiopiikMl(`<ui>
+    <state name="mode" value='"valid"'/>
+    <derive name="shared" expr="1"/>
+    <views bind="$state.mode">
+      <view label="循环" value="loop">
+        <derive name="x" expr="$state.y"/><derive name="y" expr="$state.x"/>
+      </view>
+      <view label="有效" value="valid">
+        <derive name="x" expr="2"/><derive name="y" expr="3"/>
+        <derive name="shared" expr="4"/>
+      </view>
+    </views>
+  </ui>`)
+  const checked = validateAst(parsed.doc)
+  assert.equal(checked.degraded, 1)
+  assert.match(checked.diagnostics[0], /derive\.name 重复：shared/u)
+  const loop = selectDerivePlan(checked.derivePlan, { mode: 'loop' })
+  assert.equal(loop.errors, 2)
+  assert.deepEqual(loop.ordered.map(({ name }) => name), ['shared'])
+  const valid = selectDerivePlan(checked.derivePlan, { mode: 'valid' })
+  assert.equal(valid.errors, 0)
+  assert.deepEqual(valid.ordered.map(({ name }) => name), ['shared', 'x', 'y'])
 })
 
 test('时间轴只接受可写的 scrub 绑定、升序节点和完整的节点数据绑定', () => {
