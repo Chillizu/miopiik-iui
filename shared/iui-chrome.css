@@ -284,6 +284,7 @@
 [data-iui-metric] { flex: 1 1 0; padding-block: 2px; }
 .miopiik-metric-row > [data-iui-metric] { flex-basis: 104px; }
 .miopiik-metric-row > [data-iui-metric-narrative] { flex-basis: 100%; }
+.miopiik-metric-strip { inline-size: min(100%, 40rem); margin-inline: auto; justify-content: center; }
 .miopiik-metric-value { line-height: 1.25; }
 .miopiik-metric-unit {
   margin-inline-start: .35em;

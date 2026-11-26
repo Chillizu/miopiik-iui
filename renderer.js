@@ -120,23 +120,50 @@
       // Fit modest overhangs across every view. A stray distant coordinate should not shrink the scene.
       const extraX = width / 4
       const extraY = height / 4
+      let contentTop = Infinity
+      let contentBottom = -Infinity
+      let canCompact = true
       for (const child of children) {
+        if (child.type === 'repeat') canCompact = false
         if (!Object.hasOwn(DRAWING_TAGS, child.type)) continue
         const shape = getDrawingShapePlan(child).props
-        if (shape == null) continue
+        if (shape == null) {
+          canCompact = false
+          continue
+        }
         let bounds
         if (child.type === 'rect') bounds = [shape.x, shape.y, shape.x + shape.width, shape.y + shape.height]
         else if (child.type === 'circle') bounds = [shape.cx - shape.r, shape.cy - shape.r, shape.cx + shape.r, shape.cy + shape.r]
         else if (child.type === 'line') bounds = [Math.min(shape.x1, shape.x2), Math.min(shape.y1, shape.y2), Math.max(shape.x1, shape.x2), Math.max(shape.y1, shape.y2)]
         else bounds = drawingMeasuredBounds.get(child)
-        if (bounds == null) continue
+        if (bounds == null) {
+          if (child.type === 'label') {
+            const size = shape.size ?? 13
+            contentTop = Math.min(contentTop, shape.y - size * 1.25)
+            contentBottom = Math.max(contentBottom, shape.y + size / 2)
+          } else canCompact = false
+          continue
+        }
         const [left, top, right, bottom] = bounds
-        if (left < -extraX || top < -extraY || right > width + extraX || bottom > height + extraY) continue
+        if (left < -extraX || top < -extraY || right > width + extraX || bottom > height + extraY) {
+          canCompact = false
+          continue
+        }
         const inset = Math.ceil((shape.strokeWidth ?? 1.5) / 2)
+        contentTop = Math.min(contentTop, top - inset)
+        contentBottom = Math.max(contentBottom, bottom + inset)
         if (left < 0) frame.x = Math.min(frame.x, left - inset)
         if (top < 0) frame.y = Math.min(frame.y, top - inset)
         if (right > width) frame.right = Math.max(frame.right, right + inset)
         if (bottom > height) frame.bottom = Math.max(frame.bottom, bottom + inset)
+      }
+      // Preserve the displayed width and scale when removing a verified empty edge.
+      frame.layoutHeight = frame.bottom - frame.y
+      if (canCompact && contentBottom >= contentTop) {
+        const padding = Math.max(8, Math.min(20, Math.ceil(height * 0.06)))
+        const threshold = Math.max(24, height / 4)
+        if (contentTop - frame.y > threshold) frame.y = Math.floor(contentTop - padding)
+        if (frame.bottom - contentBottom > threshold) frame.bottom = Math.ceil(contentBottom + padding)
       }
       return frame
     }
@@ -337,7 +364,8 @@
         if (primitives === null) return
         measureDrawingBounds(primitives, widthHint, heightHint)
         const next = fitDrawingFrame(primitives, widthHint, heightHint)
-        if (next.x === baseFrame.x && next.y === baseFrame.y && next.right === baseFrame.right && next.bottom === baseFrame.bottom) return
+        if (next.x === baseFrame.x && next.y === baseFrame.y && next.right === baseFrame.right
+          && next.bottom === baseFrame.bottom && next.layoutHeight === baseFrame.layoutHeight) return
         updateMeasured({ baseFrame, frame: next })
       }, [primitives, widthHint, heightHint, baseFrame])
       const frame = measured?.baseFrame === baseFrame ? measured.frame : baseFrame
@@ -358,7 +386,7 @@
       const graphLabel = selected === undefined ? viewport.label : `${viewport.label} · ${selected.label}`
       const width = frame === null ? viewport.width : frame.right - frame.x
       const height = frame === null ? viewport.height : frame.bottom - frame.y
-      const aspect = width / height
+      const aspect = width / (frame?.layoutHeight ?? height)
       // ViewBox dimensions describe geometry. A wide drawing can grow with its column.
       const fluid = adaptive && aspect >= 1.5
       const visualWidth = fluid ? Math.max(width, Math.round(aspect * 340)) : width
@@ -1737,14 +1765,39 @@
           else if (isRow) Object.assign(style, { display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, item.children.length)}, minmax(0, 1fr))` })
           else if (isMetricColumn) Object.assign(style, { display: 'flex', flexWrap: 'wrap', minWidth: 0 })
           else Object.assign(style, { display: 'flex', flexDirection: 'column' })
+          let contents = item.children.map((child, index) => {
+            const childKey = `${key}-${index}`
+            const content = node(child, childKey)
+            return isFlowRow && content !== null ? h('div', { key: childKey, style: flowItemStyle(child) }, content) : content
+          })
+          if (!isRow && adaptive && !isMetricColumn) {
+            const groups = []
+            for (let index = 0; index < item.children.length;) {
+              if (item.children[index].type !== 'metric') {
+                groups.push(contents[index])
+                index += 1
+                continue
+              }
+              const start = index
+              while (item.children[index]?.type === 'metric') index += 1
+              const metrics = contents.slice(start, index).filter((content) => content !== null)
+              if (metrics.length < 2) {
+                groups.push(...metrics)
+                continue
+              }
+              const followsDrawing = item.children[start - 1]?.type === 'drawing' && contents[start - 1] !== null
+              groups.push(h('div', {
+                key: `${key}-metric-run-${start}`,
+                className: followsDrawing ? 'miopiik-metric-row miopiik-metric-strip' : 'miopiik-metric-row',
+                style: { display: 'flex', flexWrap: 'wrap', minWidth: 0, gap: style.gap },
+              }, ...metrics))
+            }
+            contents = groups
+          }
           return h(
             'div',
             { key, 'data-iui-container': item.type, className: isMetricColumn ? 'miopiik-metric-row' : undefined, style },
-            ...item.children.map((child, index) => {
-              const childKey = `${key}-${index}`
-              const content = node(child, childKey)
-              return isFlowRow && content !== null ? h('div', { key: childKey, style: flowItemStyle(child) }, content) : content
-            }),
+            ...contents,
           )
         }
         if (item.type === 'chart') {

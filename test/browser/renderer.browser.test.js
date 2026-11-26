@@ -259,6 +259,34 @@ const ADAPTIVE_DRAWING_ML = `<ui density="auto">
   </drawing>
 </ui>`
 
+const SNUG_DRAWING_ML = `<ui density="auto">
+  <drawing width="200" height="180" label="跨视图收紧画幅">
+    <view label="上方图层" caption="上方内容仍有边距。"><rect x="40" y="60" width="120" height="14" fill="info"/></view>
+    <view label="下方图层" caption="画幅按全部静态图层计算。"><rect x="40" y="112" width="120" height="14" fill="success"/></view>
+  </drawing>
+</ui>`
+
+const DYNAMIC_VIEWPORT_ML = `<ui density="auto">
+  <state name="y" value="90"/>
+  <drawing width="200" height="180" label="动态内容保留画布">
+    <circle cx="100" cy="$state.y" r="8" fill="accent"/>
+  </drawing>
+</ui>`
+
+const REPEAT_VIEWPORT_ML = `<ui density="auto">
+  <drawing width="200" height="180" label="重复内容保留画布">
+    <repeat items='[{"x":100,"y":90}]'><circle cx="$data.item.x" cy="$data.item.y" r="8" fill="accent"/></repeat>
+  </drawing>
+</ui>`
+
+const METRIC_RUN_ML = `<ui density="auto">
+  <column>
+    <drawing width="160" height="100" label="指标来源"><circle cx="80" cy="50" r="12" fill="accent"/></drawing>
+    <metric label="命中" value="12"/>
+    <metric label="未命中" value="3"/>
+  </column>
+</ui>`
+
 const DRAWING_REPEAT_ML = `<ui density="auto">
   <state name="items" value='[{"x":30,"name":"Alpha"},{"x":90,"name":"Beta"}]'/>
   <state name="shift" value="0"/>
@@ -696,6 +724,11 @@ const MAIN_RUN = `
       drawingSmallReadable:mountBlock(${JSON.stringify(DRAWING_SMALL_READABLE_ML)}, '320px'),
       staticDrawing:mountBlock(${JSON.stringify(STATIC_DRAWING_ML)}),
       adaptiveDrawing:mountBlock(${JSON.stringify(ADAPTIVE_DRAWING_ML)}),
+      snugDrawing:mountBlock(${JSON.stringify(SNUG_DRAWING_ML)}),
+      dynamicViewport:mountBlock(${JSON.stringify(DYNAMIC_VIEWPORT_ML)}),
+      repeatViewport:mountBlock(${JSON.stringify(REPEAT_VIEWPORT_ML)}),
+      metricRun:mountBlock(${JSON.stringify(METRIC_RUN_ML)}),
+      legacyMetricRun:mountBlock(${JSON.stringify(METRIC_RUN_ML.replace(' density="auto"', ''))}),
       repeatDrawing:mountBlock(${JSON.stringify(DRAWING_REPEAT_ML)}),
       repeatOverflowDrawing:mountBlock(${JSON.stringify(DRAWING_REPEAT_OVERFLOW_ML)}),
       boundViews:mountBlock(${JSON.stringify(BOUND_VIEWS_ML)}),
@@ -1280,6 +1313,49 @@ const MAIN_RUN = `
           && adaptiveGraph()?.getAttribute('viewBox') === initialAdaptiveViewBox
           && adaptiveBounds()?.viewRight >= adaptiveBounds()?.right
           ? true : '切换视图后包围盒或共享视口发生变化');
+        const snugDrawing = r3.snugDrawing;
+        const snugGraph = () => snugDrawing.querySelector('svg[data-iui-drawing]');
+        const snugOptions = () => [...(snugDrawing.querySelectorAll('button[data-iui-drawing-option]'))];
+        const snugViewBox = snugGraph()?.getAttribute('viewBox') ?? '';
+        const snugParts = snugViewBox.trim().split(/[ ,]+/).map(Number);
+        check('snugDrawingFrame', () => {
+          const svg = snugGraph();
+          return svg?.getAttribute('width') === '200' && snugParts.length === 4
+            && snugParts[0] === 0 && snugParts[2] === 200
+            && snugParts[1] > 0 && snugParts[1] < 60
+            && snugParts[1] <= 52 && snugParts[1] + snugParts[3] >= 134
+            && snugParts[3] < 120
+            ? true : '静态图层应只收紧纵向空白并保留画幅宽度: ' + snugViewBox;
+        });
+        snugOptions()[1]?.click();
+        await wait(25);
+        check('snugDrawingViewSwitch', () => snugOptions()[1]?.getAttribute('aria-pressed') === 'true'
+          && snugGraph()?.getAttribute('viewBox') === snugViewBox
+          && snugGraph()?.querySelector('rect[y="112"]') !== null
+          ? true : '切换图层后应维持跨视图联合收紧边界');
+        const dynamicGraph = r3.dynamicViewport.querySelector('svg[data-iui-drawing]');
+        check('dynamicDrawingFrame', () => dynamicGraph?.getAttribute('viewBox') === '0 0 200 180'
+          ? true : '动态几何应保留作者画幅: ' + dynamicGraph?.getAttribute('viewBox'));
+        const repeatViewportGraph = r3.repeatViewport.querySelector('svg[data-iui-drawing]');
+        check('repeatDrawingFrame', () => repeatViewportGraph?.getAttribute('viewBox') === '0 0 200 180'
+          ? true : 'repeat 几何应保留作者画幅: ' + repeatViewportGraph?.getAttribute('viewBox'));
+        const metricColumn = r3.metricRun.querySelector('[data-iui-container="column"]');
+        const metricRow = metricColumn?.querySelector(':scope > .miopiik-metric-row');
+        const metricRowStyle = metricRow === null ? null : getComputedStyle(metricRow);
+        check('autoMetricRun', () => metricColumn !== null && metricRow !== null
+          && metricRow.querySelectorAll('[data-iui-metric]').length === 2
+          && metricRow.classList.contains('miopiik-metric-strip')
+          && metricRow.previousElementSibling?.querySelector('svg[data-iui-drawing]') !== null
+          && metricRowStyle?.display === 'flex' && metricRowStyle.flexWrap === 'wrap'
+          ? true : '相邻指标应在绘图后组成自适应行');
+        const legacyMetricColumn = r3.legacyMetricRun.querySelector('[data-iui-container="column"]');
+        const legacyMetricStyle = legacyMetricColumn === null ? null : getComputedStyle(legacyMetricColumn);
+        check('legacyMetricRun', () => legacyMetricColumn !== null
+          && legacyMetricColumn.querySelector('.miopiik-metric-row') === null
+          && [...legacyMetricColumn.querySelectorAll('[data-iui-metric]')].length === 2
+          && [...legacyMetricColumn.querySelectorAll('[data-iui-metric]')].every(metric => metric.parentElement === legacyMetricColumn)
+          && legacyMetricStyle?.display === 'flex' && legacyMetricStyle.flexDirection === 'column'
+          ? true : '无密度声明的历史列式指标应保持直接纵向排列');
         const repeatDrawing = r3.repeatDrawing;
         const repeatGraph = () => repeatDrawing.querySelector('svg[data-iui-drawing]');
         const repeatValues = () => [...(repeatGraph()?.querySelectorAll('circle') ?? [])].map(circle => circle.getAttribute('cx')).join(',');
@@ -1959,6 +2035,12 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-drawing-zoom-collapse="ok"/u,'收起放大态应复位局部平移且保持 viewBox')
   assert.match(html,/data-drawing-small-readable="ok"/u,'原生已可读的小图应达到 12px 且不显示放大控制')
   assert.match(html,/data-static-drawing-view="ok"/u,'单个绘图视图应呈现静态标签与关联图注、无切换控件和横溢')
+  assert.match(html,/data-snug-drawing-frame="ok"/u,'静态多视图应按联合内容纵向收紧画幅并保持作者宽度')
+  assert.match(html,/data-snug-drawing-view-switch="ok"/u,'切换静态图层应保留联合画幅')
+  assert.match(html,/data-dynamic-drawing-frame="ok"/u,'动态绘图应保留作者视口')
+  assert.match(html,/data-repeat-drawing-frame="ok"/u,'重复绘图应保留作者视口')
+  assert.match(html,/data-auto-metric-run="ok"/u,'自适应列中绘图后的相邻指标应成行分组')
+  assert.match(html,/data-legacy-metric-run="ok"/u,'历史精确列式指标不应被自动分组')
   assert.match(html,/data-comparison-live="ok"/u,'尚未定稿的流式对照选项应禁用')
   assert.match(html,/data-bound-views="ok"/u,'切换完整视图应更新共享状态')
   assert.match(html,/data-bound-views-reset="ok"/u,'外部动作应切换完整视图')
