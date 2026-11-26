@@ -805,7 +805,7 @@ window.__ModuleLoader__.load({
         link: { props: { text: 'string', href: 'string' }, children: false },
         // 块级反馈原语
         callout: { props: { tone: 'string?', title: 'string?', text: 'string?' }, children: true },
-        progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
+        progress: { props: { label: 'string?', value: 'value', max: 'value?', tone: 'string?' }, children: false },
         empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
         chart: { props: { kind: 'string', series: 'value', source: 'string?', title: 'string?', domain: 'value?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', play: 'number?', bind: 'string?', marks: 'value?' }, children: false },
         views: { props: { label: 'string?', bind: 'string?' }, children: true },
@@ -1000,6 +1000,15 @@ window.__ModuleLoader__.load({
         if (typeof value !== 'string' || readBinding(value).scope !== undefined) return null
         const compiled = compileExpr(value)
         return compiled.ok ? compiled : null
+      }
+
+      const READOUT_FIELDS = { metric: ['value', 'delta'], progress: ['value', 'max'] }
+
+      /** Readout expressions are state-only; other strings retain their existing interpretation. */
+      function compileReadoutExpression(value) {
+        if (typeof value !== 'string' || !value.includes('$state.')) return null
+        const compiled = compileDataset(value)
+        return compiled !== null && compiled.refs.length > 0 && compiled.refs.every((ref) => ref.scope === 'state') ? compiled : null
       }
 
       /** 本地状态也是来自模型的 JSON；避免超大对象和原型属性污染。 */
@@ -1681,6 +1690,11 @@ window.__ModuleLoader__.load({
             if (count === 0 || count > DRAWING_MAX_SHAPES) return failNode(node, path, `drawing 需要 1–${DRAWING_MAX_SHAPES} 个图形原语`)
           }
           const geometryExpressions = {}
+          const readoutExpressions = {}
+          for (const key of READOUT_FIELDS[node.type] ?? []) {
+            const expression = compileReadoutExpression(props[key])
+            if (expression !== null) readoutExpressions[key] = expression
+          }
           const compileGeometry = (key, source) => {
             if (!source.includes('$state.') && !(inRepeatTemplate && source.includes('$data.'))) return undefined
             const expression = compileDataset(source)
@@ -1746,13 +1760,16 @@ window.__ModuleLoader__.load({
             if (!/^(https:\/\/[^\s]+|\/(?!\/)[^\s]*|#[A-Za-z][A-Za-z0-9_-]*)$/u.test(href)) return failNode(node, path, 'link 只接受 https、站内路径或安全锚点')
           }
           if (node.type === 'progress') {
-            // value 允许 $state 绑定（渲染时解析为数字）；字面量则必须是 >= 0 的数字
-            const bound = typeof props.value === 'string' && readBinding(props.value).scope === 'state'
-            if (!bound && (typeof props.value !== 'number' || !Number.isFinite(props.value) || props.value < 0)) {
-              return failNode(node, path, 'progress.value 需要 >= 0 的数字或 $state 绑定')
+            // State bindings and compiled readouts are runtime values; literals retain numeric bounds.
+            const bound = readBinding(props.value).scope === 'state'
+            if (!bound && readoutExpressions.value === undefined
+              && (typeof props.value !== 'number' || !Number.isFinite(props.value) || props.value < 0)) {
+              return failNode(node, path, 'progress.value 需要非负数字、$state 绑定或纯算式')
             }
-            if (props.max !== undefined && (typeof props.max !== 'number' || props.max <= 0)) {
-              return failNode(node, path, 'progress.max 需要正数')
+            const maxBound = readBinding(props.max).scope === 'state'
+            if (props.max !== undefined && !maxBound && readoutExpressions.max === undefined
+              && (typeof props.max !== 'number' || !Number.isFinite(props.max) || props.max <= 0)) {
+              return failNode(node, path, 'progress.max 需要正数、$state 绑定或纯算式')
             }
           }
           if (node.type === 'grid' && props.columns !== undefined) {
@@ -1789,6 +1806,7 @@ window.__ModuleLoader__.load({
           if (typeof node.fallback === 'string' && node.fallback.trim() !== '') normalized.fallback = node.fallback.slice(0, LIMITS.text)
           if (datasetExpression !== null) normalized.datasetExpression = datasetExpression
           if (Object.keys(geometryExpressions).length > 0) normalized.geometryExpressions = geometryExpressions
+          if (Object.keys(readoutExpressions).length > 0) normalized.readoutExpressions = readoutExpressions
           if (conditionExpression !== null) normalized.conditionExpression = conditionExpression
           if (node.type === 'derive') derives.push({ node: normalized, source: node, path })
           if (binding !== null) bindPaths.push(binding.key)
@@ -4412,11 +4430,16 @@ window.__ModuleLoader__.load({
       const scope = { state: scopedState, data: {} }
       const resolve = (value) => IUI_AST.resolveValue(value, scope)
       const visible = (item) => isItemVisible(item, resolve, scope)
-      const resolveDataset = (item, value) => {
-        if (item.datasetExpression === undefined) return resolve(value)
-        const result = IUI_EXPR.evaluateExpr(item.datasetExpression, scope)
-        return result.ok ? result.value : undefined
+      const expressionResults = new Map()
+      const evaluateInSheet = (expression) => {
+        if (expressionResults.has(expression.source)) return expressionResults.get(expression.source)
+        const result = IUI_EXPR.evaluateExpr(expression, scope)
+        const value = result.ok ? result.value : undefined
+        expressionResults.set(expression.source, value)
+        return value
       }
+      const resolveDataset = (item, value) => item.datasetExpression === undefined
+        ? resolve(value) : evaluateInSheet(item.datasetExpression)
       const isTextScalar = (value) => typeof value === 'string' || typeof value === 'boolean' || Number.isFinite(value)
       const textOf = (value) => isTextScalar(value) ? String(value) : ''
       const resolveText = (value) => {
@@ -4425,6 +4448,12 @@ window.__ModuleLoader__.load({
         if (binding.scope === undefined && typeof value === 'string' && /^\$(?:state|data)\.[A-Za-z0-9_.]+$/u.test(value)) return undefined
         const resolved = resolve(value)
         return isTextScalar(resolved) ? resolved : undefined
+      }
+      const resolveReadout = (item, field) => {
+        const expression = item.readoutExpressions?.[field]
+        if (expression === undefined) return resolveText(item.props[field])
+        const value = evaluateInSheet(expression)
+        return isTextScalar(value) ? value : undefined
       }
       const fallbackNode = (text, key, tag) => typeof text === 'string' && text.trim() !== ''
         ? h(tag, { key, 'data-iui-node-fallback': '1', style: { overflowWrap: 'anywhere' } }, text)
@@ -4462,7 +4491,7 @@ window.__ModuleLoader__.load({
         if (item.type === 'metric') {
           const tone = TONE_COLORS[props.tone] ?? [null, C.muted]
           const label = resolveText(props.label)
-          const value = resolveText(props.value)
+          const value = resolveReadout(item, 'value')
           const unit = resolveText(props.unit)
           const unavailable = value === undefined || value === null
           if (unavailable && item.fallback) return renderIuiNotice(item.fallback, { key, 'data-iui-binding-unavailable': '1' })
@@ -4470,7 +4499,7 @@ window.__ModuleLoader__.load({
           const displayedValue = grouped ? chartNumber.format(value) : String(value)
           const displayedUnit = textOf(unit)
           const narrative = adaptive && typeof value === 'string' && !/^[+-]?\d[\d,.]*(?::\d\d?){0,2}%?$/u.test(value.trim())
-          const delta = resolveText(props.delta)
+          const delta = resolveReadout(item, 'delta')
           const described = resolveText(props.caption ?? props.note)
           return h(
             'div',
@@ -4682,13 +4711,13 @@ window.__ModuleLoader__.load({
         }
         if (item.type === 'progress') {
           const label = resolveText(props.label)
-          const shown = resolve(props.value)
+          const shown = resolveReadout(item, 'value')
           const numeric = Number(shown)
-          const max = Number(props.max ?? 1)
-          if (shown === undefined || shown === null || shown === '' || !Number.isFinite(numeric) || numeric < 0) {
+          const max = props.max === undefined ? 1 : Number(resolveReadout(item, 'max'))
+          if (shown === '' || !Number.isFinite(numeric) || numeric < 0 || !Number.isFinite(max) || max <= 0) {
             return renderIuiNotice(item.fallback, { key, 'data-iui-progress-unavailable': '1' })
           }
-          const ratio = Math.min(1, numeric / (max === 0 ? 1 : max))
+          const ratio = Math.min(1, numeric / max)
           return h(
             'div',
             { key, style: { display: 'flex', flexDirection: 'column', gap: 4 } },

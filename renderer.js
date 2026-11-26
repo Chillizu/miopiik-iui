@@ -1294,11 +1294,16 @@
       const scope = { state: scopedState, data: {} }
       const resolve = (value) => IUI_AST.resolveValue(value, scope)
       const visible = (item) => isItemVisible(item, resolve, scope)
-      const resolveDataset = (item, value) => {
-        if (item.datasetExpression === undefined) return resolve(value)
-        const result = IUI_EXPR.evaluateExpr(item.datasetExpression, scope)
-        return result.ok ? result.value : undefined
+      const expressionResults = new Map()
+      const evaluateInSheet = (expression) => {
+        if (expressionResults.has(expression.source)) return expressionResults.get(expression.source)
+        const result = IUI_EXPR.evaluateExpr(expression, scope)
+        const value = result.ok ? result.value : undefined
+        expressionResults.set(expression.source, value)
+        return value
       }
+      const resolveDataset = (item, value) => item.datasetExpression === undefined
+        ? resolve(value) : evaluateInSheet(item.datasetExpression)
       const isTextScalar = (value) => typeof value === 'string' || typeof value === 'boolean' || Number.isFinite(value)
       const textOf = (value) => isTextScalar(value) ? String(value) : ''
       const resolveText = (value) => {
@@ -1307,6 +1312,12 @@
         if (binding.scope === undefined && typeof value === 'string' && /^\$(?:state|data)\.[A-Za-z0-9_.]+$/u.test(value)) return undefined
         const resolved = resolve(value)
         return isTextScalar(resolved) ? resolved : undefined
+      }
+      const resolveReadout = (item, field) => {
+        const expression = item.readoutExpressions?.[field]
+        if (expression === undefined) return resolveText(item.props[field])
+        const value = evaluateInSheet(expression)
+        return isTextScalar(value) ? value : undefined
       }
       const fallbackNode = (text, key, tag) => typeof text === 'string' && text.trim() !== ''
         ? h(tag, { key, 'data-iui-node-fallback': '1', style: { overflowWrap: 'anywhere' } }, text)
@@ -1344,7 +1355,7 @@
         if (item.type === 'metric') {
           const tone = TONE_COLORS[props.tone] ?? [null, C.muted]
           const label = resolveText(props.label)
-          const value = resolveText(props.value)
+          const value = resolveReadout(item, 'value')
           const unit = resolveText(props.unit)
           const unavailable = value === undefined || value === null
           if (unavailable && item.fallback) return renderIuiNotice(item.fallback, { key, 'data-iui-binding-unavailable': '1' })
@@ -1352,7 +1363,7 @@
           const displayedValue = grouped ? chartNumber.format(value) : String(value)
           const displayedUnit = textOf(unit)
           const narrative = adaptive && typeof value === 'string' && !/^[+-]?\d[\d,.]*(?::\d\d?){0,2}%?$/u.test(value.trim())
-          const delta = resolveText(props.delta)
+          const delta = resolveReadout(item, 'delta')
           const described = resolveText(props.caption ?? props.note)
           return h(
             'div',
@@ -1564,13 +1575,13 @@
         }
         if (item.type === 'progress') {
           const label = resolveText(props.label)
-          const shown = resolve(props.value)
+          const shown = resolveReadout(item, 'value')
           const numeric = Number(shown)
-          const max = Number(props.max ?? 1)
-          if (shown === undefined || shown === null || shown === '' || !Number.isFinite(numeric) || numeric < 0) {
+          const max = props.max === undefined ? 1 : Number(resolveReadout(item, 'max'))
+          if (shown === '' || !Number.isFinite(numeric) || numeric < 0 || !Number.isFinite(max) || max <= 0) {
             return renderIuiNotice(item.fallback, { key, 'data-iui-progress-unavailable': '1' })
           }
-          const ratio = Math.min(1, numeric / (max === 0 ? 1 : max))
+          const ratio = Math.min(1, numeric / max)
           return h(
             'div',
             { key, style: { display: 'flex', flexDirection: 'column', gap: 4 } },

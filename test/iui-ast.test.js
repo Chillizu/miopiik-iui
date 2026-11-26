@@ -362,6 +362,31 @@ test('progress.value 允许 $state 绑定（渲染时解析），字面量仍要
   assert.equal(compile(-1).degraded, 1)
 })
 
+test('metric/progress 数值读数编译 state 表达式并保留旧文本路径', () => {
+  const result = validateAst({ state: { n: 4 }, root: { type: 'column', children: [
+    { type: 'metric', props: { label: '结果', value: 'round($state.n * 2)', delta: '$state.n - 3', note: '原样说明' } },
+    { type: 'metric', props: { label: '文字', value: '等待输入', delta: '保持稳定' } },
+    { type: 'metric', props: { label: '旧语法', value: 'sqrt($state.n)' } },
+    { type: 'metric', props: { label: '数据域', value: '$state.n + $data.x' } },
+    { type: 'progress', props: { label: '进度', value: '$state.n * 5', max: 'max($state.n, 1)' } },
+    { type: 'progress', props: { label: '绑定上限', value: 2, max: '$state.n' } },
+  ] } })
+  assert.equal(result.ok, true)
+  assert.equal(result.degraded, 0)
+  const [computed, plain, unsupported, mixed, progress, boundMax] = result.ast.root.children
+  assert.deepEqual(Object.keys(computed.readoutExpressions).sort(), ['delta', 'value'])
+  assert.equal(computed.readoutExpressions.value.refs[0].scope, 'state')
+  assert.equal(computed.props.note, '原样说明')
+  assert.equal(plain.readoutExpressions, undefined)
+  assert.equal(unsupported.readoutExpressions, undefined, '不支持的旧表达式仍按字面值保留')
+  assert.equal(mixed.readoutExpressions, undefined, '$data 不参与读数表达式')
+  assert.deepEqual(Object.keys(progress.readoutExpressions).sort(), ['max', 'value'])
+  assert.equal(boundMax.props.max, '$state.n')
+
+  const invalidProgress = validateAst({ root: { type: 'progress', props: { value: '$state.n + $data.x' } } })
+  assert.equal(invalidProgress.ok, false, 'progress 仍要求数字、状态绑定或 state 表达式')
+})
+
 test('diagram：坏 id / 重复 id / 未知引用只局部降级，预算超限整图降级', () => {
   const compile = (children) => validateAst({ fallback: 'f', root: { id: 'r', type: 'column', children: [{ id: 'd', type: 'diagram', props: {}, children }] } })
   const nodes = (result) => result.ast.root.children[0].children.filter((child) => child.type === 'node')

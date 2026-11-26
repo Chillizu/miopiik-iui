@@ -31,7 +31,7 @@ export const REGISTRY = Object.freeze({
   link: { props: { text: 'string', href: 'string' }, children: false },
   // 块级反馈原语
   callout: { props: { tone: 'string?', title: 'string?', text: 'string?' }, children: true },
-  progress: { props: { label: 'string?', value: 'number', max: 'number?', tone: 'string?' }, children: false },
+  progress: { props: { label: 'string?', value: 'value', max: 'value?', tone: 'string?' }, children: false },
   empty: { props: { text: 'string?', title: 'string?', description: 'string?', icon: 'string?' }, children: false },
   chart: { props: { kind: 'string', series: 'value', source: 'string?', title: 'string?', domain: 'value?', xScale: 'string?', xUnit: 'string?', yUnit: 'string?', cursor: 'value?', scrub: 'string?', play: 'number?', bind: 'string?', marks: 'value?' }, children: false },
   views: { props: { label: 'string?', bind: 'string?' }, children: true },
@@ -226,6 +226,15 @@ function compileDataset(value) {
   if (typeof value !== 'string' || readBinding(value).scope !== undefined) return null
   const compiled = compileExpr(value)
   return compiled.ok ? compiled : null
+}
+
+const READOUT_FIELDS = { metric: ['value', 'delta'], progress: ['value', 'max'] }
+
+/** Readout expressions are state-only; other strings retain their existing interpretation. */
+function compileReadoutExpression(value) {
+  if (typeof value !== 'string' || !value.includes('$state.')) return null
+  const compiled = compileDataset(value)
+  return compiled !== null && compiled.refs.length > 0 && compiled.refs.every((ref) => ref.scope === 'state') ? compiled : null
 }
 
 /** 本地状态也是来自模型的 JSON；避免超大对象和原型属性污染。 */
@@ -907,6 +916,11 @@ export function validateAst(input) {
       if (count === 0 || count > DRAWING_MAX_SHAPES) return failNode(node, path, `drawing 需要 1–${DRAWING_MAX_SHAPES} 个图形原语`)
     }
     const geometryExpressions = {}
+    const readoutExpressions = {}
+    for (const key of READOUT_FIELDS[node.type] ?? []) {
+      const expression = compileReadoutExpression(props[key])
+      if (expression !== null) readoutExpressions[key] = expression
+    }
     const compileGeometry = (key, source) => {
       if (!source.includes('$state.') && !(inRepeatTemplate && source.includes('$data.'))) return undefined
       const expression = compileDataset(source)
@@ -972,13 +986,16 @@ export function validateAst(input) {
       if (!/^(https:\/\/[^\s]+|\/(?!\/)[^\s]*|#[A-Za-z][A-Za-z0-9_-]*)$/u.test(href)) return failNode(node, path, 'link 只接受 https、站内路径或安全锚点')
     }
     if (node.type === 'progress') {
-      // value 允许 $state 绑定（渲染时解析为数字）；字面量则必须是 >= 0 的数字
-      const bound = typeof props.value === 'string' && readBinding(props.value).scope === 'state'
-      if (!bound && (typeof props.value !== 'number' || !Number.isFinite(props.value) || props.value < 0)) {
-        return failNode(node, path, 'progress.value 需要 >= 0 的数字或 $state 绑定')
+      // State bindings and compiled readouts are runtime values; literals retain numeric bounds.
+      const bound = readBinding(props.value).scope === 'state'
+      if (!bound && readoutExpressions.value === undefined
+        && (typeof props.value !== 'number' || !Number.isFinite(props.value) || props.value < 0)) {
+        return failNode(node, path, 'progress.value 需要非负数字、$state 绑定或纯算式')
       }
-      if (props.max !== undefined && (typeof props.max !== 'number' || props.max <= 0)) {
-        return failNode(node, path, 'progress.max 需要正数')
+      const maxBound = readBinding(props.max).scope === 'state'
+      if (props.max !== undefined && !maxBound && readoutExpressions.max === undefined
+        && (typeof props.max !== 'number' || !Number.isFinite(props.max) || props.max <= 0)) {
+        return failNode(node, path, 'progress.max 需要正数、$state 绑定或纯算式')
       }
     }
     if (node.type === 'grid' && props.columns !== undefined) {
@@ -1015,6 +1032,7 @@ export function validateAst(input) {
     if (typeof node.fallback === 'string' && node.fallback.trim() !== '') normalized.fallback = node.fallback.slice(0, LIMITS.text)
     if (datasetExpression !== null) normalized.datasetExpression = datasetExpression
     if (Object.keys(geometryExpressions).length > 0) normalized.geometryExpressions = geometryExpressions
+    if (Object.keys(readoutExpressions).length > 0) normalized.readoutExpressions = readoutExpressions
     if (conditionExpression !== null) normalized.conditionExpression = conditionExpression
     if (node.type === 'derive') derives.push({ node: normalized, source: node, path })
     if (binding !== null) bindPaths.push(binding.key)

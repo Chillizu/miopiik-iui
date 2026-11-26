@@ -323,6 +323,19 @@ const RANGE_PLAYBACK_ML = `<ui density="auto">
   <metric label="共享时刻" value="$state.time" unit="秒"/>
 </ui>`
 
+const SCALAR_READOUT_ML = `<ui density="auto">
+  <state name="n" value="12"/>
+  <state name="d" value="4"/>
+  <state name="base" value="4"/>
+  <state name="cap" value="20"/>
+  <slider label="数值" bind="$state.n" min="0" max="20" step="1"/>
+  <slider label="除数" bind="$state.d" min="0" max="4" step="1"/>
+  <metric label="计算值" value="$state.n / $state.d" delta="$state.n - $state.base"/>
+  <metric label="旧式绑定" value="$state.n"/>
+  <progress label="完成度" value="$state.n * 2" max="$state.cap * $state.d / 2" fallback="进度暂不可用"/>
+  <text text="保留原话：$state.n * 2 是公式示意，不参与数值更新。"/>
+</ui>`
+
 const INTERVAL_CHART_ML = `<ui density="auto">
   <state name="mode" value='"baseline"'/>
   <derive name="spans" expr="$state.mode == 'baseline' ? [['组装',0,3,'装配','info'],['组装',2,5,'检查','warning'],['交付',1,4,'发送','accent']] : [['组装',0,2,'装配','info'],['交付',3,6,'发送','accent']]"/>
@@ -675,6 +688,7 @@ const MAIN_RUN = `
       multiChartScrub:mountBlock(${JSON.stringify(MULTI_CHART_SCRUB_ML)}),
       sharedChartScrub:mountBlock(${JSON.stringify(SHARED_CHART_SCRUB_ML)}),
       rangePlayback:mountBlock(${JSON.stringify(RANGE_PLAYBACK_ML)}),
+      scalarReadout:mountBlock(${JSON.stringify(SCALAR_READOUT_ML)}),
       intervalChart:mountBlock(${JSON.stringify(INTERVAL_CHART_ML)}),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
@@ -1283,6 +1297,42 @@ const MAIN_RUN = `
           r3.numericAxis.querySelector('[data-iui-chart-cursor="8"]') !== null
           && r3.numericAxis.querySelector('[data-iui-chart-scrub], [data-iui-chart-readout]') === null
         ) || '外部滑轨未同步旧式图表游标');
+        const scalarReadout = r3.scalarReadout;
+        const scalarInput = (label) => scalarReadout.querySelector('input[type="range"][aria-label="' + label + '"]');
+        const scalarMetric = (label) => scalarReadout.querySelector('[data-iui-metric="' + label + '"]');
+        const scalarMetricValue = (label) => scalarMetric(label)?.querySelector('.miopiik-metric-value');
+        const scalarProgress = () => scalarReadout.querySelector('[role="progressbar"]');
+        const scalarDelta = () => scalarMetric('计算值')?.querySelector('[data-iui-delta]');
+        check('scalarReadoutInitial', () => scalarReadout.querySelector('[data-iui-output="ok"][data-iui-degraded="0"]') !== null
+          && scalarMetricValue('计算值')?.textContent.trim() === '3' && scalarDelta()?.textContent === '8'
+          && scalarMetricValue('旧式绑定')?.textContent.trim() === '12'
+          && scalarProgress()?.getAttribute('aria-valuenow') === '60'
+          && scalarReadout.textContent.includes('保留原话：$state.n * 2 是公式示意，不参与数值更新。')
+          ? true : '初始 metric 算式/delta、旧绑定、progress 表达式或字面文案错误');
+        const scalarNumberInput = scalarInput('数值');
+        if (scalarNumberInput !== null) {
+          scalarNumberInput.value = '20';
+          scalarNumberInput.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(25);
+        }
+        check('scalarReadoutSeek', () => scalarNumberInput !== null && scalarMetricValue('计算值')?.textContent.trim() === '5'
+          && scalarDelta()?.textContent === '16' && scalarMetricValue('旧式绑定')?.textContent.trim() === '20'
+          && scalarProgress()?.getAttribute('aria-valuenow') === '100'
+          && scalarReadout.textContent.includes('保留原话：$state.n * 2 是公式示意，不参与数值更新。')
+          ? true : '控制输入后计算读数/进度未从同一状态更新或原文字被改写');
+        const scalarDenominatorInput = scalarInput('除数');
+        if (scalarDenominatorInput !== null) {
+          scalarDenominatorInput.value = '0';
+          scalarDenominatorInput.dispatchEvent(new Event('input', { bubbles: true }));
+          await wait(25);
+        }
+        check('scalarReadoutDivisionZero', () => scalarDenominatorInput !== null
+          && scalarMetricValue('计算值')?.textContent.trim() === '—'
+          && scalarMetricValue('计算值')?.getAttribute('data-iui-binding-unavailable') === '1'
+          && scalarMetricValue('计算值')?.getAttribute('aria-label') === '结果暂不可用'
+          && scalarDelta()?.textContent === '16' && scalarProgress() === null
+          && scalarReadout.querySelector('[data-iui-progress-unavailable]')?.textContent === '进度暂不可用'
+          ? true : '除零结果没有标为不可用，或其他有效读数受到影响');
         const scrubInput = (host, label = '经过时间') => host.querySelector('[data-iui-chart-scrub] input[type="range"][aria-label="' + label + '"]');
         const scrubFits = (host) => host.scrollWidth <= host.clientWidth + 1
           && document.documentElement.scrollWidth <= window.innerWidth;
@@ -1867,6 +1917,9 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-bound-views-reset="ok"/u,'外部动作应切换完整视图')
   assert.match(html,/data-numeric-axis="ok"/u,'时间轴应保留数值间距和当前时刻标记')
   assert.match(html,/data-numeric-axis-write="ok"/u,'旧时间轴应继续响应外部滑轨')
+  assert.match(html,/data-scalar-readout-initial="ok"/u,'metric.value/delta 与 progress.value/max 应计算 state 表达式，保留纯绑定和字面说明')
+  assert.match(html,/data-scalar-readout-seek="ok"/u,'改变状态后数值读数与进度应从同一表达式更新')
+  assert.match(html,/data-scalar-readout-division-zero="ok"/u,'除零读数应显示不可用，其他有效读数继续呈现')
   assert.match(html,/data-chart-scrub-initial="ok"/u,'时间轴 scrub 应默认选择首点且适合窄列')
   assert.match(html,/data-chart-scrub-samples="ok"/u,'拖动应同步滑轨、游标和分阶段读数，原曲线保持不变')
   assert.match(html,/data-multi-chart-scrub-initial="ok"/u,'两条曲线应共用滑轨，起点按两条曲线的联合范围确定')

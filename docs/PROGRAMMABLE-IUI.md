@@ -16,6 +16,8 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 
 `slider` 或带 `scrub` 的线性折线可写 `play="6"`，让读者点击播放，用 6 秒走完时间范围。其余图形和读数可共用这一个时刻。时长范围为 0.5–60 秒。暂停后可继续，拖动滑杆或选择阶段点会停在指定时刻，抵达终点可重播。离开页面时暂停，返回后由读者重新播放。
 
+`metric.value`、`metric.delta`、`progress.value` 和 `progress.max` 支持现有的字面量和状态绑定，也可以写引用 `$state` 的纯算式。例如 `<metric label="通过率" value="round($state.passed / $state.total * 100, 1)" unit="%"/>`。一项计算由多个图形或读数引用时，可以用 `derive` 给它命名。无效的求值结果显示为不可用，进度的上限必须是正数。
+
 - `len(a)`、`at(a,i)`、`gather(a,indices)` 和 `join(a,separator)` 适合序列。索引从零开始。
 - `dot(a,b)`、`matvec(m,v)`、`scale(a,k)`、`softmax(a)` 和 `roundEach(a,n)` 适合数值计算。softmax 使用减最大值的形式归一化，矩阵最多 4,096 个元素。
 - `zip(a,b,…)` 将 2–6 个等长数组按位置合成二维表格。数组每维最多 128 项，求值另有运算次数与结果预算。
