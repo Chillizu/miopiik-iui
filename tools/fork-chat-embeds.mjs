@@ -135,7 +135,7 @@ const HELPER = `${MARK_BEGIN}
 		}
 		function miopiikRenderText(text, markdownProps, key) {
 			const props = { ...markdownProps, text };
-			if (text.includes("{{") && miopiikEnabled()) {
+			if (markdownProps.streaming !== true && text.includes("{{") && miopiikEnabled()) {
 				try {
 					const registry = miopiikRegistry();
 					if (typeof registry?.segments === "function" && registry.segments(text).some(part => part.kind === "inline")) {

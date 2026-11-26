@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 
-import { splitTrustedBlocks } from '../shared/markdown-segments.js'
+import { splitTrustedBlocks, splitTrustedMarkdown } from '../shared/markdown-segments.js'
 import { isDshInstalled, resolveUpstreamDir } from '../tools/fork-chat-embeds.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -84,7 +84,7 @@ test('生成器 --check 只读：不删除 fork、不删除依赖链接', { skip
   assert.match(readFileSync(patch, 'utf8'), /miopiik:markdown-embeds/u)
 })
 
-test('宿主在流式、闭合和中途停止时使用同一块组件和挂载位置', { skip: hostSkip }, () => {
+function renderPatchedText(registry, hooks = {}) {
   if (!existsSync(join(tmp, 'lib', 'client.js'))) run()
   const client = readFileSync(join(tmp, 'lib', 'client.js'), 'utf8')
   const helperStart = client.indexOf('// >>> miopiik:markdown-embeds')
@@ -93,22 +93,28 @@ test('宿主在流式、闭合和中途停止时使用同一块组件和挂载�
   const reasoningStart = client.indexOf('case "reasoning":', textStart)
   assert.ok(helperStart >= 0 && assistantStart > helperStart && textStart > assistantStart && reasoningStart > textStart)
 
-  const render = runInNewContext(`${client.slice(helperStart, assistantStart)}
+  return runInNewContext(`${client.slice(helperStart, assistantStart)}
     (function render(text, streaming) {
       const block = { kind: "text", text };
       const labels = {}, mentions = [], pathImages = {}, rendered = [], i = 0, textInteractionSource = false;
       switch (block.kind) { ${client.slice(textStart, reasoningStart)} }
       return rendered[0];
     })`, {
-    react: { memo: (component) => component },
+    react: { memo: (component) => component, ...hooks },
     react_jsx_runtime: { jsx: (type, props, key) => ({ type, props, key }) },
     _deepseek_ai_dsh_client_ui_primitives: { MarkdownText: 'markdown' },
     __miopiikMarkdownEmbeds: {
       segmentsBlocks: splitTrustedBlocks,
-      renderBlock: () => 'closed',
-      renderBlockStreaming: () => 'live',
-      renderBlockInterrupted: () => 'interrupted',
+      ...registry,
     },
+  })
+}
+
+test('宿主在流式、闭合和中途停止时使用同一块组件和挂载位置', { skip: hostSkip }, () => {
+  const render = renderPatchedText({
+    renderBlock: () => 'closed',
+    renderBlockStreaming: () => 'live',
+    renderBlockInterrupted: () => 'interrupted',
   })
 
   const source = '正文\n```iui\n<ui><text>图解</text></ui>\n'
@@ -123,4 +129,42 @@ test('宿主在流式、闭合和中途停止时使用同一块组件和挂载�
     assert.equal(block.type, live.props.children.type)
     assert.equal(block.type(block.props), result)
   }
+})
+
+test('行内标记在流式期间保持原生正文组件，回复定稿后嫁接', { skip: hostSkip }, () => {
+  const scans = []
+  const grafted = []
+  const rootNode = {}
+  const render = renderPatchedText({
+    renderBlock: () => null,
+    segments(text) {
+      scans.push(text)
+      return splitTrustedMarkdown(text)
+    },
+    graftInline: (node) => grafted.push(node),
+  }, {
+    useRef: () => ({ current: rootNode }),
+    useLayoutEffect: (effect) => effect(),
+  })
+
+  const partial = '**状态 {{badge:success:完成'
+  const token = partial + '}}'
+  const final = token + '，继续输出**。'
+  for (const text of [partial, token, final]) {
+    const markdown = render(text, true)
+    assert.equal(markdown.type, 'markdown')
+    assert.equal(markdown.key, 0)
+    assert.equal(markdown.props.text, text)
+  }
+  assert.deepEqual(scans, [])
+  assert.deepEqual(grafted, [])
+
+  const settled = render(final, false)
+  assert.equal(settled.type.name, 'MiopiikGraftText')
+  assert.equal(settled.key, 0)
+  const markdown = settled.type(settled.props).props.children
+  assert.equal(markdown.type, 'markdown')
+  assert.equal(markdown.props.text, final)
+  assert.deepEqual(scans, [final])
+  assert.deepEqual(grafted, [rootNode])
 })
