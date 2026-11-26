@@ -405,6 +405,15 @@ const INTERVAL_CHART_ML = `<ui density="auto">
   <chart kind="interval" label="处理时段" x-unit="分钟" domain='[0,6]' series="$state.spans"/>
 </ui>`
 
+const SHARED_INTERVAL_CHART_ML = `<ui density="auto">
+  <state name="time" value="0"/>
+  <chart kind="interval" label="琴音" x-unit="秒" domain='[0,4]' bind="$state.time" scrub="观察发声时刻" play="0.5"
+    marks='[[0,"开始"],[2,"两音相叠"]]' series='[["先音",0,3,"发声"],["后音",2,3,"发声"]]'/>
+  <chart kind="interval" label="踏板" x-unit="秒" domain='[0,4]' bind="$state.time"
+    marks='[[0,"开始"],[3,"抬踏板"]]' series='[["踏板",1,3,"踩下"]]'/>
+  <metric label="观察时刻" value="$state.time" unit="秒"/>
+</ui>`
+
 const R3_WEIGHT_AST = {
   title: '语义权重',
   root: {
@@ -759,6 +768,7 @@ const MAIN_RUN = `
       scalarReadout:mountBlock(${JSON.stringify(SCALAR_READOUT_ML)}),
       boundDrawingViews:mountBlock(${JSON.stringify(BOUND_DRAWING_VIEWS_ML)}),
       intervalChart:mountBlock(${JSON.stringify(INTERVAL_CHART_ML)}),
+      sharedIntervalChart:mountBlock(${JSON.stringify(SHARED_INTERVAL_CHART_ML)}, '320px'),
       weight:mountBlock(${JSON.stringify(JSON.stringify(R3_WEIGHT_AST))}),
       details:mountBlock(${JSON.stringify(JSON.stringify(R3_DETAILS_AST))}),
       copy:mountBlock(${JSON.stringify(JSON.stringify(R3_COPY_AST))}),
@@ -794,6 +804,20 @@ const MAIN_RUN = `
     mountElement(embeds.renderBlockStreaming('<ui title="流式" fallback="F"><row><metric label="A" value="1"/>'), live);
     const streamRoot=document.querySelector('[data-iui-streaming="1"]');
     document.body.dataset.streamingOk = (streamRoot !== null && String(streamRoot.className) === '' && streamRoot.getAttribute('data-iui-output') === 'ok') ? 'ok' : 'failed';
+    const handoff = document.createElement('div');
+    document.getElementById('root').appendChild(handoff);
+    const stepsMarkup = '<ui><steps><step title="准备"/><step title="执行"/></steps></ui>';
+    const liveSteps = mountElement(embeds.renderBlockStreaming(stepsMarkup), handoff);
+    const animationOfSteps = (host) => {
+      const steps = host.querySelector('[data-iui-steps]');
+      return steps === null ? '' : getComputedStyle(steps).animationName;
+    };
+    const during = animationOfSteps(handoff);
+    liveSteps.element = embeds.renderBlock(stepsMarkup);
+    __renderRoot(liveSteps);
+    const finished = animationOfSteps(handoff);
+    const cold = animationOfSteps(mountBlock(stepsMarkup));
+    document.body.dataset.streamingHandoff = during === 'none' && finished === 'none' && cold === 'miopiik-enter' ? 'ok' : 'failed';
     const liveComparison=document.createElement('div');
     document.getElementById('root').appendChild(liveComparison);
     mountElement(embeds.renderBlockStreaming(${JSON.stringify(DRAWING_COMPARISON_ML)}), liveComparison);
@@ -1748,6 +1772,45 @@ const MAIN_RUN = `
             && (detail === null || detail.hidden || detail.getClientRects().length === 0 || detail.textContent.trim() === '')
             ? true : 'state/segmented 更新后移除的区间仍保留选择读数';
         });
+        const sharedInterval = r3.sharedIntervalChart;
+        const intervalScales = () => [...sharedInterval.querySelectorAll('[data-iui-chart="interval"]')];
+        const intervalTimeInput = () => scrubInput(sharedInterval, '观察发声时刻');
+        const intervalMilestone = (chart, time) => intervalScales()[chart]?.querySelector('[data-iui-chart-mark="' + time + '"]');
+        const intervalSample = () => [
+          intervalTimeInput()?.valueAsNumber,
+          Number.parseFloat(sharedInterval.querySelector('[data-iui-metric="观察时刻"] .miopiik-metric-value')?.textContent ?? ''),
+          ...intervalScales().map(chart => [
+            Number(chart.querySelector('[data-iui-chart-cursor]')?.getAttribute('data-iui-chart-cursor') ?? NaN),
+            chart.querySelectorAll('[data-iui-interval-active="1"]').length,
+          ]),
+        ];
+        const intervalPlay = () => sharedInterval.querySelector('[data-iui-range-play]');
+        check('sharedIntervalInitial', () => sharedInterval.querySelector('[data-iui-output="ok"][data-iui-degraded="0"]') !== null
+          && sharedInterval.querySelectorAll('input[type="range"]').length === 1 && intervalPlay() !== null
+          && intervalMilestone(0, 2)?.textContent.includes('两音相叠') && scrubFits(sharedInterval)
+          && JSON.stringify(intervalSample()) === '[0,0,[0,1],[0,0]]'
+          ? true : JSON.stringify(intervalSample()));
+        if (intervalTimeInput() !== null) {
+          const intervalSamples = [];
+          intervalScales()[1]?.querySelector('[data-iui-interval-mark]')?.click();
+          await wait(25);
+          intervalSamples.push(intervalSample());
+          intervalMilestone(0, 2)?.click();
+          await wait(25);
+          intervalSamples.push(intervalSample());
+          intervalMilestone(1, 3)?.click();
+          await wait(25);
+          intervalSamples.push(intervalSample());
+          await setScrubTime(sharedInterval, 2, '观察发声时刻');
+          intervalSamples.push(intervalSample());
+          check('sharedIntervalSeek', () => scrubFits(sharedInterval)
+            && JSON.stringify(intervalSamples) === '[[1,1,[1,1],[1,1]],[2,2,[2,2],[2,1]],[3,3,[3,0],[3,0]],[2,2,[2,2],[2,1]]]'
+            ? true : JSON.stringify(intervalSamples));
+          intervalPlay()?.click();
+          await waitUntil(() => intervalTimeInput()?.valueAsNumber === 4, 700);
+          check('sharedIntervalPlayback', () => JSON.stringify(intervalSample()) === '[4,4,[4,0],[4,0]]'
+            ? true : JSON.stringify(intervalSample()));
+        }
         check('r3Weight', () => {
           const host = r3.weight;
           const primary = host.querySelector('[data-iui-weight="primary"]');
@@ -2068,6 +2131,7 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   // L-11 基础：DOM 级嫁接与流式部分渲染
   assert.match(html,/data-graft-ok="ok"/u,'行内嫁接应保留加粗并把 token 原位替换（幂等）')
   assert.match(html,/data-streaming-ok="ok"/u,'流式部分渲染应无入场动画并带流式标记')
+  assert.match(html,/data-streaming-handoff="ok"/u,'流式交接不应重播子组件入场，直接挂载的完整回复仍可入场')
   assert.match(html,/data-html-ok="ok"/u,'```html 应渲染为无脚本沙箱 iframe：sandbox 空、CSP 注入、脚本剔除、超预算降级')
   assert.match(html,/data-autosize-tall="ok"/u,'沙箱帧应长到内容高度（700px 内容不能被初始高度截断）')
   assert.match(html,/data-autosize-short="ok"/u,'沙箱帧应收回到内容高度（height 提示 900 不得残留成空白）')
@@ -2144,6 +2208,9 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-interval-chart-initial="ok"/u,'区间图应在同 lane 的重叠时段分配不同轨道，并适配 320px')
   assert.match(html,/data-interval-chart-select="ok"/u,'点击区间应显示准确 lane、标签和起止分钟')
   assert.match(html,/data-interval-chart-rebind="ok"/u,'state 重绑移除已选区间时应清除旧读数')
+  assert.match(html,/data-shared-interval-initial="ok"/u,'共享区间图应保留里程碑与滑轨，在 320px 内显示初始游标和活动区间')
+  assert.match(html,/data-shared-interval-seek="ok"/u,'点选区间、里程碑和拖动应同步图表与读数，结束时刻应取消高亮')
+  assert.match(html,/data-shared-interval-playback="ok"/u,'区间图播放应推进同一时刻并同步其他图表和读数')
   assert.match(html,/data-r3-weight="ok"/u,'weight 三态应输出 data-iui-weight 并给出强弱视觉（primary 加粗 / secondary·optional 弱化）')
   assert.match(html,/data-r3-details-closed="ok"/u,'details 初始应收起并带 aria-expanded=false')
   assert.match(html,/data-r3-details-open="ok"/u,'details 由 IuiSheet 受控展开（aria-controls 指向内容）')

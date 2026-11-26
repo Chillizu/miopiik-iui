@@ -148,7 +148,7 @@ test('chart.kind 放行 donut，其余未知 kind 仍拒绝', () => {
 test('区间图表归一化车道、时间顺序、范围与绑定数据', () => {
   const series = [
     ['API', 4, 8, '发布', 'success'],
-    ['Worker', 2, 6, '构建'],
+    ['Worker', '2', '6.0', '构建'],
     ['API', 1, 5, '准备'],
     ['API', 3, 7, '重叠阶段'],
   ]
@@ -167,6 +167,7 @@ test('区间图表归一化车道、时间顺序、范围与绑定数据', () =>
   for (const invalid of [
     [], [['A', 0, 0, 'x']], [['A', 2, 1, 'x']], [[' ', 0, 1, 'x']], [['A', 0, 1, ' ']],
     [['A', Infinity, 2, 'x']], [['A', 0, NaN, 'x']], [['A', 0, 1, 'x', 'purple']],
+    [['A', '', '1', 'x']], [['A', null, 1, 'x']], [['A', 0, '0x10', 'x']], [['A', 0, '3秒', 'x']],
     [['A', 0, 1, 'x', null]], [['A', 0, 1, 'x', 'success', 'extra']],
   ]) assert.equal(chartIntervals(invalid), null, JSON.stringify(invalid))
   assert.equal(chartIntervals(Array.from({ length: 61 }, (_, i) => ['A', i, i + 1, 'x'])), null)
@@ -207,10 +208,58 @@ test('区间图表归一化车道、时间顺序、范围与绑定数据', () =>
   const interval = (overrides) => validateAst({ root: { type: 'chart', props: {
     kind: 'interval', series: [['A', 1, 2, 'x']], ...overrides,
   } } })
-  for (const forbidden of ['cursor', 'scrub', 'bind', 'marks', 'xScale', 'yUnit']) {
-    assert.equal(interval({ [forbidden]: forbidden === 'marks' ? [] : 'x' }).ok, false, forbidden)
-  }
+  assert.equal(interval({ xScale: 'linear' }).ok, false)
+  assert.equal(interval({ yUnit: '件' }).ok, false)
   assert.equal(interval({ domain: [0, 1] }).ok, true)
+})
+
+test('区间图从 miopiik-ml 读取时间轴标签、播放时长和节点', () => {
+  const ml = parseMiopiikMl(`<ui><column>
+    <chart kind="interval" label="发布窗口" x-unit="分钟" scrub=" 经过时间 " play="2.5"
+      bind="$state.time" marks='[[1," 准备 "],[4,"发布"]]' series='[["API",1,5,"准备"]]'/>
+    <chart kind="interval" cursor="2.5" series='[["API",1,5,"准备"]]'/>
+    <chart kind="interval" cursor="$state.time" marks="$state.marks" series='[["API",1,5,"准备"]]'/>
+    <derive name="time" expr="4"/>
+  </column></ui>`)
+  assert.equal(ml.ok, true)
+  const checked = validateAst(ml.doc)
+  assert.equal(checked.ok, true)
+  const [timeline, fixed, bound] = checked.ast.root.children
+  assert.equal(timeline.props.title, '发布窗口')
+  assert.equal(timeline.props.xUnit, '分钟')
+  assert.equal(timeline.props.scrub, '经过时间')
+  assert.equal(timeline.props.play, 2.5)
+  assert.equal(timeline.props.bind, '$state.time')
+  assert.equal(timeline.props.xScale, undefined)
+  assert.deepEqual(chartMarks(timeline.props.marks), [[1, '准备'], [4, '发布']])
+  assert.equal(fixed.props.cursor, 2.5)
+  assert.equal(bound.props.cursor, '$state.time')
+  assert.equal(bound.props.marks, '$state.marks')
+  assert.match(checked.diagnostics[0], /derive\.name 与控件绑定冲突：time/u)
+})
+
+test('区间图接受独立绑定和时间节点，并按可写路径和控制冲突校验', () => {
+  const state = { times: [0] }
+  const interval = (overrides) => validateAst({ state, root: { type: 'chart', props: {
+    kind: 'interval', series: [['A', 1, 5, '准备']], ...overrides,
+  } } })
+  for (const overrides of [
+    { bind: '$state.time' }, { bind: '$state.times.1' }, { scrub: '时间' },
+    { marks: [[0, '准备']] }, { marks: '$data.marks' },
+  ]) assert.equal(interval(overrides).ok, true, JSON.stringify(overrides))
+  const redundant = interval({ bind: '$state.time', cursor: '$state.time' })
+  assert.equal(redundant.ok, true)
+  assert.equal(redundant.ast.root.props.bind, '$state.time')
+  assert.equal(redundant.ast.root.props.cursor, undefined)
+  for (const overrides of [
+    { cursor: 0, scrub: '时间' }, { cursor: 0, bind: '$state.time' }, { cursor: '$data.time' },
+    { cursor: '$state.other', bind: '$state.time' },
+    { cursor: NaN }, { scrub: '   ' }, { scrub: '$state.time' }, { scrub: '字'.repeat(121) },
+    { play: 2 }, { play: 2, bind: '$state.time' }, { scrub: '时间', play: 60.01 },
+    { bind: '$data.time' }, { bind: '$state.__proto__' }, { bind: '$state.times.2' },
+    { marks: [[4, '发布'], [1, '准备']] },
+    { marks: Array.from({ length: 7 }, (_, x) => [x, '准备']) },
+  ]) assert.equal(interval(overrides).ok, false, JSON.stringify(overrides))
 })
 
 test('折线图 scrub 使用线性横轴，保留单位绑定并拒绝冲突控制', () => {

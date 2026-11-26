@@ -77,6 +77,8 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 
 `chart kind="interval"` 给持续时段和数值范围共用一条轴。每项是 `[轨道, 起点, 终点, 标签, 可选主题色]`，最多 8 条轨道、60 个区间。同一轨道里重叠的区间会排在不同行。可用 `domain="[0,6]"` 给不同状态提供共同的基准范围。数据超出基准时，横轴会扩展到完整范围。省略时从所有起止值求范围。`series` 可读同一份本地状态或派生结果。选中区间会显示完整标签及起止值。
 
+区间图和线性折线可共用一条时间线。用 `marks='[[0,"开始"],[2,"条件改变"]]'` 标记阶段，只显示轴范围内的标记。用 `cursor="$state.time"` 跟随另一处控件，或者用 `scrub="观察时刻"` 自带滑轨。滑轨可用 `bind="$state.time"` 同步其他图和读数，`play="6"` 提供由读者启动的播放。区间图也接受单独的 `bind`，可点区间起点或阶段标签更新同一时刻。区间在起点高亮，到终点解除高亮。超出图的时间范围时，轴上不显示游标。
+
 [电容屏示例](../test/fixtures/natural/capacitive-screen.md)组合手机正视图、盖板与电极剖面。触摸前后的 pF 读数为教学示意。互电容与自电容测量方式各有不同的量和变化方向。[Infineon 电容触摸传感设计指南](https://www.infineon.com/dgdl/Infineon-AN234185_PSOC_4_CAPSENSE_touchpad_design_guide-ApplicationNotes-v03_00-EN.pdf?fileId=8ac78c8c8e7ead30018ee43d60a1036a)
 
 ## 候选验收

@@ -100,6 +100,15 @@ export function resolveValue(value, scope) {
   return cursor
 }
 
+function chartCoordinate(value, unit) {
+  if (typeof value !== 'string' || value.length > 100) return value
+  const trimmed = value.trim()
+  const coordinate = typeof unit === 'string' && unit.length <= 16 && unit !== '' && !unit.startsWith('$') && trimmed.endsWith(unit)
+    ? trimmed.slice(0, -unit.length).trim()
+    : trimmed
+  return /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(coordinate) ? Number(coordinate) : value
+}
+
 /**
  * 把受信图表输入统一变成 [标签, 数值] 点列。
  * 模型常给数字数组、[label,value] 数组或 {label,value}；三种都受限解析，不用表达式。
@@ -111,14 +120,8 @@ export function chartMatrix(series, xScale, xUnit) {
     const item = series[i]
     if (xScale === 'linear') {
       if (!Array.isArray(item)) return null
-      let [x, y] = item
-      if (typeof x === 'string' && x.length <= 100) {
-        x = x.trim()
-        if (typeof xUnit === 'string' && xUnit.length <= 16 && xUnit !== '' && !xUnit.startsWith('$') && x.endsWith(xUnit)) {
-          x = x.slice(0, -xUnit.length).trim()
-        }
-        if (/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(x)) x = Number(x)
-      }
+      const [rawX, y] = item
+      const x = chartCoordinate(rawX, xUnit)
       if (!Number.isFinite(x) || !Number.isFinite(y) || (i > 0 && x < rows[i - 1][0])) return null
       rows.push([x, y])
       continue
@@ -190,7 +193,9 @@ export function chartIntervals(series, domain) {
   const byLabel = new Map()
   for (const row of series) {
     if (!Array.isArray(row) || (row.length !== 4 && row.length !== 5)) return null
-    const [rawLane, start, end, rawLabel, tone] = row
+    const [rawLane, rawStart, rawEnd, rawLabel, tone] = row
+    const start = chartCoordinate(rawStart)
+    const end = chartCoordinate(rawEnd)
     if (typeof rawLane !== 'string' || typeof rawLabel !== 'string'
       || rawLane.trim() === '' || rawLane.trim().length > 100
       || rawLabel.trim() === '' || rawLabel.trim().length > 100
@@ -901,7 +906,8 @@ export function validateAst(input) {
     }
     if (node.type === 'chart') {
       if (!['bar', 'line', 'donut', 'interval'].includes(props.kind ?? 'bar')) return failNode(node, path, 'chart.kind 只能为 bar/line/donut/interval')
-      if (props.kind === 'interval') {
+      const isInterval = props.kind === 'interval'
+      if (isInterval) {
         if (props.label !== undefined) {
           props = { ...props, title: props.title ?? props.label }
           delete props.label
@@ -909,9 +915,8 @@ export function validateAst(input) {
         if (props.title !== undefined && (typeof props.title !== 'string' || props.title.trim() === '' || props.title.length > 120)) {
           return failNode(node, path, 'chart.label 需要 120 字以内的非空标题')
         }
-        if (props.cursor !== undefined || props.scrub !== undefined || props.bind !== undefined || props.marks !== undefined
-          || props.xScale !== undefined || props.yUnit !== undefined) {
-          return failNode(node, path, 'chart.interval 不支持 cursor/scrub/bind/marks/xScale/yUnit')
+        if (props.xScale !== undefined || props.yUnit !== undefined) {
+          return failNode(node, path, 'chart.interval 不支持 xScale/yUnit')
         }
         const domainBinding = readBinding(props.domain)
         if (props.domain !== undefined && domainBinding.scope === undefined
@@ -927,26 +932,35 @@ export function validateAst(input) {
       }
       if (props.xScale !== undefined && (props.kind !== 'line' || props.xScale !== 'linear')) return failNode(node, path, '数值横轴只用于折线图')
       if (props.yUnit !== undefined && typeof props.yUnit !== 'string') return failNode(node, path, 'chart.yUnit 需要文本或状态绑定')
+      if (binding?.scope === 'state' && props.cursor === props.bind) {
+        // A redundant read of the same path adds no second source of time.
+        props = { ...props }
+        delete props.cursor
+      }
       if (props.scrub !== undefined) {
-        if (props.kind !== 'line' || props.cursor !== undefined) return failNode(node, path, 'chart.scrub 只用于折线图，且不能与 chart.cursor 同时使用')
+        if ((!isInterval && props.kind !== 'line') || props.cursor !== undefined) {
+          return failNode(node, path, 'chart.scrub 只用于折线图和区间图，且不能与 chart.cursor 同时使用')
+        }
         const label = typeof props.scrub === 'string' ? props.scrub.trim() : ''
         if (label === '' || props.scrub.length > 120 || readBinding(label).scope !== undefined) {
           return failNode(node, path, 'chart.scrub 需要 120 字以内的非空字面标签')
         }
-        props = { ...props, xScale: 'linear', scrub: label }
+        props = { ...props, scrub: label }
+        if (!isInterval) props.xScale = 'linear'
       }
       if (props.play !== undefined && (typeof props.play !== 'number' || !Number.isFinite(props.play)
-        || props.play < 0.5 || props.play > 60 || props.kind !== 'line' || props.scrub === undefined)) {
-        return failNode(node, path, 'chart.play 需要 0.5–60 秒，且仅用于启用 scrub 的折线图')
+        || props.play < 0.5 || props.play > 60 || props.scrub === undefined)) {
+        return failNode(node, path, 'chart.play 需要 0.5–60 秒，且要求启用 chart.scrub')
       }
       if (binding !== null) {
-        if (props.scrub === undefined) return failNode(node, path, 'chart.bind 需要 chart.scrub')
+        if (!isInterval && props.scrub === undefined) return failNode(node, path, 'chart.bind 需要 chart.scrub')
+        if (props.cursor !== undefined) return failNode(node, path, 'chart.bind 不能与 chart.cursor 同时使用')
         const current = resolveValue(props.bind, { state })
         if (writeStatePath(state, binding.key, Object.is(current, 0) ? 1 : 0) === state) {
           return failNode(node, path, 'chart.bind 需要可写的 $state.* 路径')
         }
       }
-      if (props.cursor !== undefined && (props.xScale !== 'linear'
+      if (props.cursor !== undefined && ((!isInterval && props.xScale !== 'linear')
         || (!Number.isFinite(props.cursor) && readBinding(props.cursor).scope !== 'state'))) {
         return failNode(node, path, 'chart.cursor 需要数值横轴，以及数值或 $state.* 绑定')
       }
@@ -955,11 +969,11 @@ export function validateAst(input) {
       if (namedTraces !== null && props.xScale === undefined) props = { ...props, xScale: 'linear' }
       if (props.marks !== undefined) {
         const marksBinding = readBinding(props.marks)
-        if (props.xScale !== 'linear' || (marksBinding.scope === undefined && chartMarks(marksBinding.literal) === null)) {
+        if ((!isInterval && props.xScale !== 'linear') || (marksBinding.scope === undefined && chartMarks(marksBinding.literal) === null)) {
           return failNode(node, path, 'chart.marks 需要数值横轴，以及 1–6 个升序时间节点或本地数据绑定')
         }
       }
-      if (props.kind === 'interval' && seriesBinding.scope === undefined) {
+      if (isInterval && seriesBinding.scope === undefined) {
         const domain = readBinding(props.domain)
         const staticIntervals = chartIntervals(seriesBinding.literal)
         if (staticIntervals !== null) {

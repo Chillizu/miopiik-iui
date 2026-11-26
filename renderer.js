@@ -505,23 +505,31 @@
       return { ...chart, lanes }
     }
 
-    function IuiIntervalChart({ series, domain, label, unit, source, fallback, streaming, enter, weight }) {
+    function IuiIntervalChart({ series, domain, label, xUnit, source, fallback, enter, weight, ...timeOptions }) {
       const chart = React.useMemo(() => prepareIntervalChart(series, domain), [series, domain])
       const [selected, select] = React.useState(null)
+      const { cursor, inRange, seek, controls, marks } = useChartTime({
+        ...timeOptions, min: chart?.min, max: chart?.max, unit: xUnit,
+      })
       if (chart === null) return renderIuiNotice(fallback, { 'data-iui-chart-empty': '1' })
       const { min, max, lanes } = chart
       const span = max - min
       const position = (value) => `${(value - min) / span * 100}%`
       let detail = ''
       const renderMark = (lane, mark) => {
-        const active = selected === mark.key
-        const description = `${lane} · ${mark.label} · ${formatChartValue(mark.start)}–${formatChartValue(mark.end)}${unit}`
-        if (active) detail = description
+        const inspected = selected === mark.key
+        const active = inRange && cursor >= mark.start && cursor < mark.end
+        const description = `${lane} · ${mark.label} · ${formatChartValue(mark.start)}–${formatChartValue(mark.end)}${xUnit}`
+        if (inspected) detail = description
         return h('button', {
           key: mark.key, type: 'button', className: 'miopiik-interval-mark',
           'data-iui-interval-mark': '1', 'data-start': mark.start, 'data-end': mark.end,
-          'aria-label': description, 'aria-pressed': active, title: description, disabled: streaming === true,
-          onClick: () => select(mark.key),
+          'data-iui-interval-active': active ? '1' : undefined,
+          'aria-label': description, 'aria-pressed': inspected, title: description, disabled: timeOptions.streaming === true,
+          onClick: () => {
+            select(mark.key)
+            seek?.(mark.start)
+          },
           style: { left: position(mark.start), width: `${(mark.end - mark.start) / span * 100}%`, '--iui-interval-tone': TONE_COLORS[mark.tone ?? 'accent'][1] },
         }, mark.label)
       }
@@ -540,24 +548,32 @@
         'data-iui-chart': 'interval', 'data-iui-weight': weight, 'aria-label': label || '区间图', style: weightStyle,
       },
       label === '' ? null : h('figcaption', { className: 'miopiik-interval-caption' }, label),
-      h('div', { className: 'miopiik-interval-row miopiik-interval-axis', 'aria-hidden': true },
-        h('span', null, unit),
-        h('div', null, ...[min, min + span / 2, max].map((value, index) => h('span', { key: index }, formatChartValue(value)))),
+      h('div', { className: 'miopiik-interval-plot' },
+        h('div', { className: 'miopiik-interval-row miopiik-interval-axis', 'aria-hidden': true },
+          h('span', null, xUnit),
+          h('div', null, ...[min, min + span / 2, max].map((value, index) => h('span', { key: index }, formatChartValue(value)))),
+        ),
+        ...rows,
+        inRange || marks.length > 0 ? h('div', { className: 'miopiik-interval-guides', 'aria-hidden': true },
+          ...marks.map(([time]) => h('span', { key: time, className: 'miopiik-interval-guide', style: { left: position(time) } })),
+          inRange ? h('span', { className: 'miopiik-interval-cursor', 'data-iui-chart-cursor': cursor, style: { left: position(cursor) } }) : null,
+        ) : null,
       ),
-      ...rows,
+      controls(),
+      renderChartTimeMarks(marks, cursor, xUnit, seek, timeOptions.streaming),
       h('div', { 'data-iui-interval-detail': '1', className: 'miopiik-interval-detail', role: 'status' }, detail),
       source === '' ? null : h('div', { className: 'miopiik-chart-source' }, `来源：${source}`),
       )
     }
 
-    function renderRangeInput({ min, max, step, value, label, valueText, onChange, onPointerDown }) {
+    function renderRangeInput({ min, max, step, value, label, valueText, onChange, onPointerDown, disabled }) {
       const span = max - min
       const ratio = Number.isFinite(span) ? (span > 0 ? (value - min) / span : 0)
         : (value / 2 - min / 2) / (max / 2 - min / 2)
       return h('span', { className: 'miopiik-range' },
         h('span', { className: 'miopiik-range-fill', 'aria-hidden': true, style: { transform: `translateY(-50%) scaleX(${ratio})` } }),
         h('input', {
-          type: 'range', min, max, step, value,
+          type: 'range', min, max, step, value, disabled,
           'aria-label': label, 'aria-valuetext': valueText,
           onPointerDown,
           onChange: (event) => {
@@ -667,6 +683,55 @@
       )
     }
 
+    function useChartTime({ min, max, unit, cursor: externalCursor, scrub, onScrub, marks: rawMarks, play, streaming, activePlayback, sampleKey, statePath }) {
+      const [localCursor, setLocalCursor] = React.useState(undefined)
+      const valid = Number.isFinite(min) && Number.isFinite(max)
+      const scrubbable = scrub !== undefined && max > min && Number.isFinite(max - min)
+      const candidate = onScrub === undefined ? localCursor : externalCursor
+      const value = Math.min(max, Math.max(min, Number.isFinite(candidate) ? candidate : min))
+      const cursor = scrubbable && onScrub === undefined ? value : externalCursor
+      const { seek, button, pauseBeforeSeek } = useRangePlayback({
+        min, max, step: 'any', value, play: scrubbable ? play : undefined, streaming, activePlayback, sampleKey, statePath,
+        apply: onScrub ?? setLocalCursor,
+      })
+      const inRange = valid && Number.isFinite(cursor) && cursor >= min && cursor <= max
+      const marks = React.useMemo(
+        () => (IUI_AST.chartMarks(rawMarks) ?? []).filter(([time]) => time >= min && time <= max),
+        [rawMarks, min, max],
+      )
+      const position = Number.isFinite(cursor) ? `${formatChartValue(cursor)}${unit}` : '未选择'
+      const stage = marks.find(([time]) => time === cursor)?.[1]
+      return {
+        cursor, inRange, marks,
+        seek: valid && (scrubbable || onScrub !== undefined) ? seek : undefined,
+        controls({ readout, readoutValue, description } = {}) {
+          if (!scrubbable) return null
+          return h('div', { 'data-iui-chart-scrub': '1' },
+            h('span', { className: 'miopiik-control-label' }, scrub, ' ', h('span', { className: 'miopiik-scrub-position' }, position)),
+            readout === undefined ? null : h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': readoutValue }, readout),
+            renderPlaybackRange(button, {
+              min, max, step: 'any', value, label: scrub, valueText: [position, stage, description].filter(Boolean).join('，'),
+              onChange: seek, onPointerDown: pauseBeforeSeek, disabled: streaming,
+            }),
+          )
+        },
+      }
+    }
+
+    function renderChartTimeMarks(marks, cursor, unit, seek, streaming) {
+      if (marks.length === 0) return null
+      return h('div', { className: 'miopiik-chart-marks', role: 'group', 'aria-label': '时间标记' },
+        ...marks.map(([time, title]) => {
+          const timestamp = h('span', { className: 'miopiik-chart-mark-time' }, `${formatChartValue(time)}${unit}`)
+          return seek === undefined ? h('span', { key: time, className: 'miopiik-control-label' }, title, ' ', timestamp) : h('button', {
+            key: time, type: 'button', className: 'miopiik-ctl miopiik-choice miopiik-chart-mark',
+            'data-iui-chart-mark': time, 'aria-current': time === cursor ? 'time' : undefined, disabled: streaming,
+            onClick: () => seek(time),
+          }, title, ' ', timestamp)
+        }),
+      )
+    }
+
     const traceDashes = [undefined, '7 4', '2 3', '8 3 2 3']
     const normalizedCharts = new WeakMap()
 
@@ -693,7 +758,7 @@
       return fromY * (1 - fraction) + toY * fraction
     }
 
-    function prepareLineChart(rows, traces, width, linear, xUnit, yUnit, rawMarks) {
+    function prepareLineChart(rows, traces, width, linear, xUnit, yUnit) {
       const multiple = traces !== null
       const height = multiple ? 182 : 152
       const top = 22
@@ -783,18 +848,12 @@
         const tick = chars.length > labelLimit ? `${chars.slice(0, labelLimit - 1).join('')}…` : pointLabel
         parts.push(h('text', { key: `lab-${index}`, x: toX(x), y: height - 9, fontSize: 11, fill: C.muted, fontFamily: SANS, textAnchor }, tick))
       }
-      const marks = (IUI_AST.chartMarks(rawMarks) ?? []).filter(([x]) => x >= domainMin && x <= domainMax)
-      for (const [time] of marks) {
-        const x = toX(time)
-        parts.push(h('line', { key: `mark-${time}`, className: 'miopiik-chart-mark-tick', 'aria-hidden': true, x1: x, x2: x, y1: bottom + 1, y2: bottom + 7, strokeWidth: 2 }))
-      }
-      return { parts, chartSeries, domainMin, domainMax, toX, toY, height, top, bottom, marks }
+      return { parts, chartSeries, domainMin, domainMax, toX, toY, height, top, bottom }
     }
 
-    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, cursor: externalCursor, scrub, onScrub, marks: rawMarks, play, streaming, activePlayback, sampleKey, statePath }) {
+    function IuiLineChart({ rows, traces = null, label, xScale, xUnit, yUnit, ...timeOptions }) {
       const containerRef = React.useRef(null)
       const [width, setWidth] = React.useState(360)
-      const [scrubValue, setScrubValue] = React.useState(undefined)
       React.useLayoutEffect(() => {
         const container = containerRef.current
         if (container === null) return
@@ -813,19 +872,15 @@
       }, [])
 
       const linear = xScale === 'linear'
-      const layout = React.useMemo(() => prepareLineChart(rows, traces, width, linear, xUnit, yUnit, rawMarks), [rows, traces, width, linear, xUnit, yUnit, rawMarks])
-      const { chartSeries, domainMin, domainMax, parts, toX, toY, height, top, bottom, marks } = layout
+      const layout = React.useMemo(() => prepareLineChart(rows, traces, width, linear, xUnit, yUnit), [rows, traces, width, linear, xUnit, yUnit])
+      const { chartSeries, domainMin, domainMax, parts, toX, toY, height, top, bottom } = layout
+      const { cursor, inRange, marks, controls, seek } = useChartTime({ ...timeOptions, min: domainMin, max: domainMax, unit: xUnit })
       const multiple = traces !== null
-      const scrubbable = scrub !== undefined && domainMax > domainMin && Number.isFinite(domainMax - domainMin)
-      const chosen = onScrub === undefined ? scrubValue : externalCursor
-      const controlValue = Math.min(domainMax, Math.max(domainMin, Number.isFinite(chosen) ? chosen : domainMin))
-      const cursor = scrubbable && onScrub === undefined ? controlValue : externalCursor
-      const { seek: chooseCursor, button, pauseBeforeSeek } = useRangePlayback({
-        min: domainMin, max: domainMax, step: 'any', value: controlValue, play: scrubbable ? play : undefined,
-        apply: onScrub ?? setScrubValue, streaming, activePlayback, sampleKey, statePath,
+      const active = linear && inRange
+      const cursorParts = marks.map(([time]) => {
+        const x = toX(time)
+        return h('line', { key: `mark-${time}`, className: 'miopiik-chart-mark-tick', 'aria-hidden': true, x1: x, x2: x, y1: bottom + 1, y2: bottom + 7, strokeWidth: 2 })
       })
-      const active = linear && Number.isFinite(cursor) && cursor >= domainMin && cursor <= domainMax
-      const cursorParts = []
       const readings = active ? chartSeries.map((trace) => lineValueAt(trace.rows, cursor)) : []
       if (active) {
         const x = toX(cursor)
@@ -839,7 +894,6 @@
           }))
         })
       }
-      const position = Number.isFinite(cursor) ? `${formatChartValue(cursor)}${xUnit}` : '未选择'
       const readingText = (value) => value === null ? '—' : `${formatChartValue(value)}${yUnit}`
       const legend = multiple ? h('div', {
         className: 'miopiik-trace-legend', role: 'list', 'aria-label': '曲线', 'data-iui-chart-readout': active ? 'multi' : undefined,
@@ -852,28 +906,14 @@
       ),
       active ? h('span', { className: 'miopiik-trace-value', 'data-iui-trace-value': trace.label, 'aria-label': readings[index] === null ? '无数据' : undefined }, readings[index] === null ? '—' : formatChartValue(readings[index])) : null,
       ))) : null
-      const readout = scrubbable && !multiple ? readingText(readings[0] ?? null) : ''
-      const currentMark = marks.find(([time]) => time === cursor)?.[1]
-      const ariaValue = !active ? '图表未覆盖此时刻' : multiple
+      const readout = multiple ? undefined : readingText(readings[0] ?? null)
+      const description = !active ? '图表未覆盖此时刻' : multiple
         ? traces.map((trace, index) => `${trace.label} ${readings[index] === null ? '无数据' : readingText(readings[index])}`).join('，')
         : readout
       return h('div', { ref: containerRef, style: { width: '100%', minWidth: 0 } },
         svgCanvas(width, height, [...parts, ...cursorParts], label, { fluid: true }),
-        scrubbable ? h('div', { 'data-iui-chart-scrub': '1' },
-          h('span', { className: 'miopiik-control-label' }, scrub, ' ', h('span', { className: 'miopiik-scrub-position' }, position)),
-          multiple ? null : h('output', { className: 'miopiik-range-value', 'aria-live': 'off', 'data-iui-chart-readout': readings[0] }, readout),
-          renderPlaybackRange(button, { min: domainMin, max: domainMax, step: 'any', value: controlValue, label: scrub, valueText: [position, currentMark, ariaValue].filter(Boolean).join('，'), onChange: chooseCursor, onPointerDown: pauseBeforeSeek }),
-        ) : null,
-        marks.length === 0 ? null : h('div', { className: 'miopiik-chart-marks', role: 'group', 'aria-label': '时间标记' },
-          ...marks.map(([time, title]) => {
-            const timestamp = h('span', { className: 'miopiik-chart-mark-time' }, `${formatChartValue(time)}${xUnit}`)
-            return scrubbable ? h('button', {
-              key: time, type: 'button', className: 'miopiik-ctl miopiik-choice miopiik-chart-mark',
-              'data-iui-chart-mark': time, 'aria-current': time === cursor ? 'time' : undefined,
-              onClick: () => chooseCursor(time),
-            }, title, ' ', timestamp) : h('span', { key: time, className: 'miopiik-control-label' }, title, ' ', timestamp)
-          }),
-        ),
+        controls({ readout, readoutValue: readings[0], description }),
+        renderChartTimeMarks(marks, cursor, xUnit, seek, timeOptions.streaming),
         legend,
       )
     }
@@ -1807,22 +1847,23 @@
         if (item.type === 'chart') {
           const series = resolveDataset(item, props.series)
           const kind = String(props.kind ?? 'bar')
-          if (kind === 'interval') return h(IuiIntervalChart, {
-            key, series, domain: props.domain === undefined ? undefined : resolve(props.domain) ?? null,
-            label: textOf(resolveText(props.title)), unit: textOf(resolveText(props.xUnit)).slice(0, 16),
-            source: textOf(resolveText(props.source)), fallback: item.fallback, streaming, enter,
-          })
-          const xUnit = props.xScale === 'linear' ? textOf(resolveText(props.xUnit)).slice(0, 16) : ''
-          const yUnit = textOf(resolveText(props.yUnit)).slice(0, 16)
-          const { rows, traces } = normalizeChart(series, props.xScale, xUnit)
-          if (rows === null && traces === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
           const binding = IUI_AST.readBinding(props.bind)
           const linked = binding.scope === 'state'
-          const chartOptions = {
-            xScale: props.xScale, xUnit, yUnit, cursor: resolve(linked ? props.bind : props.cursor), scrub: props.scrub, marks: resolve(props.marks),
+          const timeOptions = {
+            cursor: resolve(linked ? props.bind : props.cursor), scrub: props.scrub, marks: resolve(props.marks),
             play: props.play, streaming, activePlayback, sampleKey, statePath: linked ? binding.key : undefined,
             onScrub: linked ? (value) => setState((prev) => writeStatePath(prev, binding.key, value)) : undefined,
           }
+          const xUnit = kind === 'interval' || props.xScale === 'linear' ? textOf(resolveText(props.xUnit)).slice(0, 16) : ''
+          if (kind === 'interval') return h(IuiIntervalChart, {
+            key, series, domain: props.domain === undefined ? undefined : resolve(props.domain) ?? null,
+            label: textOf(resolveText(props.title)), xUnit, source: textOf(resolveText(props.source)),
+            fallback: item.fallback, enter, weight: props.weight, ...timeOptions,
+          })
+          const yUnit = textOf(resolveText(props.yUnit)).slice(0, 16)
+          const { rows, traces } = normalizeChart(series, props.xScale, xUnit)
+          if (rows === null && traces === null) return renderIuiNotice(item.fallback, { key, 'data-iui-chart-empty': '1' })
+          const chartOptions = { xScale: props.xScale, xUnit, yUnit, ...timeOptions }
           const plot = traces === null
             ? renderChart(rows, kind, chartSummary(rows, kind, xUnit, yUnit), chartOptions)
             : h(IuiLineChart, {
@@ -1889,6 +1930,7 @@
           'data-iui-degraded': String(degradedCount),
           'data-iui-diagnostics': degradation.length > 0 ? diagnosticText(degradation) : undefined,
           'data-iui-streaming': streaming === true ? '1' : undefined,
+          'data-iui-live-origin': mountedWhileStreaming.current ? '1' : undefined,
           'data-iui-density': density,
           'data-iui-surface': adaptive || density === 'inline' ? 'flow' : 'frame',
           'data-iui-derive-errors': String(deriveErrors),
