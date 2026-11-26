@@ -18,7 +18,7 @@ export const IUI_CHARTER = [
   `时间或范围的重叠用 <chart kind="interval" label="共享时间轴" x-unit="分" domain='[0,4]' series='[["甲",0,2,"准备"],["乙",1,3,"执行","success"]]'/>。行格式是 [轨道名, 起点, 终点, 标签, 可选色调]，名称和标签都要有文字。区间色调可省略，或用 neutral/success/warning/danger/info/accent。宿主用起止值画区间，点选可读具体时间。`,
   `对象之间的流向可用 diagram，由宿主布置。先写 <node id="a" label="起点"/> 和 <node id="b" label="下一站"/>，然后写 <edge from="a" to="b" label="作用"/>。可用 lane(label) 分组，node.note 补充短说明，node 和 edge 允许用 when="$state.名称" 显示对应状态。数字关系使用 chart(kind=bar/line/donut)、table、metric，步骤用 steps(step)。row 横向就近、column 纵向。chart.series 和 table.rows 可用数组、完整绑定或纯表达式。table 同时写 columns。state 的 value、segmented 的 options 用合法 JSON，如 <state name="mode" value='"short"'/> 和 options='[{"label":"短","value":"short"}]'。控件 bind="$state.名称"，slider 设 min/max/step，toggle 绑定布尔。button 支持 set/append/pop/reset（bind、value、max 或 min）和用户触发的 copy。`,
   `metric 的 value/delta 和 progress 的 value/max 可以写字面量、完整绑定或引用 $state 的算式。图和读数共用一项计算时写 <derive name="result" expr="round($state.input * 100, 1)"/>，读数写 <metric label="读数" value="$state.result"/>。绘图内的坐标、标签文字和颜色可用局部算式，图外 <text> 用字面量或完整绑定。控件绑定 <state> 声明的输入。用两组输入核对图形、读数和正文。`,
-  '算式使用四则运算、比较和 ?:，数值函数有 round、min、max、clamp、abs、floor、ceil、sin、cos、exp。数组用 len/at/gather/join/zip/dot/matvec/scale/softmax/roundEach，索引用 at(a,i)。其余需要的值可提前算好填入状态或数据行。',
+  '算式使用四则运算、比较和 ?:，数值函数有 round、min、max、clamp、abs、floor、ceil、exp、sqrt(x)、hypot(x,y)。角度用弧度和常量 pi，支持 sin/cos/tan、asin/acos/atan、atan2(y,x)。数组用 len/at/gather/join/zip/dot/matvec/scale/softmax/roundEach，索引用 at(a,i)。其余需要的值可提前算好填入状态或数据行。',
   `例如解释影长变化，让图旁的切换器同时更新光路、图注和影长：
 ${FENCE}iui
 <ui density="auto" fallback="光线越贴近地面，同一根竖杆的影子越长">
@@ -68,7 +68,7 @@ export const IUI_VISUAL_GUIDANCE = [
   '构图随问题变化。相对位置或形态重要时用剖面或叠层；对象之间传递、分流或依赖是重点时用带方向的关系图，状态切换保持共同对象和边界。多个数值情况用共享尺度。标注贴近对象，保留参照物。只在两种视角各自解释一个疑问时增加第二张图。',
   '同一量的多种情况要共用横、纵坐标，读数也要对齐到同一时刻。折线 series 可写成 [["情况甲",[[0,100],[10,80],[20,68]]],["情况乙",[[0,100],[10,60],[20,42]]]]，最多四条。每条写出名称和至少两个按横坐标顺序排列的点，范围外没有读数。图上比较变化速度时，优先让各条曲线用同一组横坐标。',
   '要切换整组正文、图和读数，用 <views label="对照主题"><view label="第一种情况" caption="变化的解释">…</view><view label="第二种情况">…</view></views>。需要和其他控件联动时，为 views 写 bind="$state.名称"，两项 view 用不同的 value。drawing 内的 view 只放图元，用于切换同一张图的图层。',
-  '只使用约定中的语法和函数。角度用 sin(x)、cos(x)，参数是弧度。SVG 的 label.text 可写 $state.n + " 单位"；动态正文先用 derive 拼接整句，再使用 <text text="$state.sentence"/>。算式未知时用少数已验证的离散状态。定义统一的单位与假设，至少把一个题设值代入并核对图与正文是否一致。初值和边界的图元、标签都应留在画布内。一幅静态图足够时就直接呈现。教学示意与实测分开。',
+  '只使用约定中的语法和函数。角度统一用弧度计算，显示度数时再乘 180/pi。SVG 的 label.text 可写 $state.n + " 单位"；动态正文先用 derive 拼接整句，再使用 <text text="$state.sentence"/>。算式未知时用少数已验证的离散状态。定义统一的单位与假设，至少把一个题设值代入并核对图与正文是否一致。初值和边界的图元、标签都应留在画布内。一幅静态图足够时就直接呈现。教学示意与实测分开。',
   `例如解释天空放晴后积水为何还在，使用一条曲线覆盖降雨和排水两个阶段。假定前 4 秒净积水每秒 3 升，停雨后每秒排走 2 升，第 10 秒排完：
 ${FENCE}iui
 <ui density="auto" fallback="停雨时还有 12 升水，继续排 6 秒才排完">

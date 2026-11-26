@@ -48,7 +48,32 @@ window.__ModuleLoader__.load({
       const SEQUENCE_ARITY = Object.freeze({
         len: 1, at: 2, gather: 2, dot: 2, matvec: 2, scale: 2, softmax: 1, roundEach: 2, zip: [2, 6], join: 2, sample: 2, accumulate: 2,
       })
-      const FUNCTIONS = Object.freeze({ round: [1, 2], floor: 1, ceil: 1, abs: 1, sin: 1, cos: 1, exp: 1, when: 3, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY })
+      const MATH_FUNCTIONS = Object.freeze({
+        round: { arity: Object.freeze([1, 2]), evaluate: (args) => {
+          const [value, places = 0] = args
+          if (!Number.isInteger(places) || places < 0 || places > EXPR_LIMITS.decimalPlaces) {
+            return fail(`round 小数位需要 0–${EXPR_LIMITS.decimalPlaces} 之间的整数`)
+          }
+          return finite(places === 0 ? Math.round(value) : Number(value.toFixed(places)))
+        } },
+        floor: { arity: 1, evaluate: ([value]) => finite(Math.floor(value)) },
+        ceil: { arity: 1, evaluate: ([value]) => finite(Math.ceil(value)) },
+        abs: { arity: 1, evaluate: ([value]) => finite(Math.abs(value)) },
+        sin: { arity: 1, evaluate: ([value]) => finite(Math.sin(value)) },
+        cos: { arity: 1, evaluate: ([value]) => finite(Math.cos(value)) },
+        tan: { arity: 1, evaluate: ([value]) => finite(Math.tan(value)) },
+        asin: { arity: 1, evaluate: ([value]) => finite(Math.asin(value)) },
+        acos: { arity: 1, evaluate: ([value]) => finite(Math.acos(value)) },
+        atan: { arity: 1, evaluate: ([value]) => finite(Math.atan(value)) },
+        atan2: { arity: 2, evaluate: ([y, x]) => finite(Math.atan2(y, x)) },
+        sqrt: { arity: 1, evaluate: ([value]) => finite(Math.sqrt(value)) },
+        hypot: { arity: 2, evaluate: ([x, y]) => finite(Math.hypot(x, y)) },
+        exp: { arity: 1, evaluate: ([value]) => finite(Math.exp(value)) },
+      })
+      const FUNCTIONS = Object.freeze({
+        ...Object.fromEntries(Object.entries(MATH_FUNCTIONS).map(([name, definition]) => [name, definition.arity])),
+        when: 3, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY,
+      })
       const SCOPES = new Set(['state', 'data'])
       const IDENT_START = /[A-Za-z_]/u
       const IDENT_PART = /[A-Za-z0-9_]/u
@@ -309,6 +334,10 @@ window.__ModuleLoader__.load({
             if (word === 'true' || word === 'false' || word === 'null') {
               next()
               return { ok: true, node: { t: 'lit', v: word === 'true' ? true : word === 'false' ? false : null } }
+            }
+            if (word === 'pi') {
+              next()
+              return { ok: true, node: { t: 'num', v: Math.PI } }
             }
             if (Object.prototype.hasOwnProperty.call(FUNCTIONS, word)) {
               next()
@@ -712,19 +741,7 @@ window.__ModuleLoader__.load({
           }
           if (Object.hasOwn(SEQUENCE_ARITY, node.name)) return sequenceCall(node.name, args, work)
           if (!args.every(numeric)) return fail(`${node.name} 只接受有限数字`)
-          if (node.name === 'round') {
-            const [value, places = 0] = args
-            if (!Number.isInteger(places) || places < 0 || places > EXPR_LIMITS.decimalPlaces) {
-              return fail(`round 小数位需要 0–${EXPR_LIMITS.decimalPlaces} 之间的整数`)
-            }
-            return finite(places === 0 ? Math.round(value) : Number(value.toFixed(places)))
-          }
-          if (node.name === 'floor') return finite(Math.floor(args[0]))
-          if (node.name === 'ceil') return finite(Math.ceil(args[0]))
-          if (node.name === 'abs') return finite(Math.abs(args[0]))
-          if (node.name === 'sin') return finite(Math.sin(args[0]))
-          if (node.name === 'cos') return finite(Math.cos(args[0]))
-          if (node.name === 'exp') return finite(Math.exp(args[0]))
+          if (Object.hasOwn(MATH_FUNCTIONS, node.name)) return MATH_FUNCTIONS[node.name].evaluate(args)
           if (node.name === 'min') return finite(Math.min(...args))
           if (node.name === 'max') return finite(Math.max(...args))
           if (args[1] > args[2]) return fail('clamp 需要 lo <= hi')

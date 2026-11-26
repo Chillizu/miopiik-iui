@@ -21,6 +21,7 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 - `len(a)`、`at(a,i)`、`gather(a,indices)` 和 `join(a,separator)` 适合序列。索引从零开始。
 - `dot(a,b)`、`matvec(m,v)`、`scale(a,k)`、`softmax(a)` 和 `roundEach(a,n)` 适合数值计算。softmax 使用减最大值的形式归一化，矩阵最多 4,096 个元素。
 - `zip(a,b,…)` 将 2–6 个等长数组按位置合成二维表格。数组每维最多 128 项，求值另有运算次数与结果预算。
+- `sqrt(x)` 可计算非负数的平方根，`hypot(x,y)` 可计算平面位移的长度。三角函数以弧度为单位，`atan2(y,x)*180/pi` 将方向换算成度数。输入和结果均须为有限数。
 
 [微型 Transformer 回复](../test/fixtures/natural/toy-decoder.md)允许连续追加 token、撤销或复位。它用教学参数计算末 token 的注意力和所属词表的下一 token 概率。调温度只影响输出分布；追加 token 改变上下文，触发注意力与输出重算。
 

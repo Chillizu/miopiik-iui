@@ -366,7 +366,7 @@ test('metric/progress 数值读数编译 state 表达式并保留旧文本路径
   const result = validateAst({ state: { n: 4 }, root: { type: 'column', children: [
     { type: 'metric', props: { label: '结果', value: 'round($state.n * 2)', delta: '$state.n - 3', note: '原样说明' } },
     { type: 'metric', props: { label: '文字', value: '等待输入', delta: '保持稳定' } },
-    { type: 'metric', props: { label: '旧语法', value: 'sqrt($state.n)' } },
+    { type: 'metric', props: { label: '旧语法', value: 'formatTime($state.n)' } },
     { type: 'metric', props: { label: '数据域', value: '$state.n + $data.x' } },
     { type: 'progress', props: { label: '进度', value: '$state.n * 5', max: 'max($state.n, 1)' } },
     { type: 'progress', props: { label: '绑定上限', value: 2, max: '$state.n' } },
