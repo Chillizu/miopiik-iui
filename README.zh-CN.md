@@ -4,8 +4,8 @@
 
 [English](README.md) | **简体中文**
 
-> **Version 0.2.0 — 正式版。**
-> 可通过 [npm](https://www.npmjs.com/package/miopiik-iui/v/0.2.0) 或 [GitHub Releases](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.2.0) 单独安装。聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
+> **Version 0.3.0 — 正式版。**
+> 可通过 [npm](https://www.npmjs.com/package/miopiik-iui/v/0.3.0) 或 [GitHub Releases](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.3.0) 单独安装。聊天内联渲染依赖对 `@deepseek-ai/dsh-client-ui-chat` 的**非官方、版本耦合补丁**。详见[发布状态](#发布状态)。
 
 MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输出包含受信行内 token 与受控 `iui` 围栏的普通 Markdown，浏览器将其渲染为声明式界面组件。本插件不依赖 MiOpIIk 的 Mind/Ink/Operator Agent，不维护账本，也不注册模型工具。
 
@@ -21,7 +21,7 @@ MiOpIIk IUI 是 DeepSeek Harness（DSH）Web 的纯表现层插件。模型输�
 
 ## 发布状态
 
-**0.2.0** 支持直接在同一幅图里对照条件。图形可共享底图，切换时本地更新图形和图注。图表和表格支持有界数据表达式，无效片段保留可读回退。见[自然问法验收](docs/NATURAL-EXPRESSION.md)和[程序与绘图示例](docs/PROGRAMMABLE-IUI.md)。
+**0.3.0** 让区间图、折线、示意图和读数可以沿同一个时间状态联动。绘图可复用计算点，切换时会处理重叠标注。滑块采用内嵌圆形手柄，开关更紧凑，预设控件统一沿用宿主主题。见[发布说明](docs/RELEASE-NOTES.md)、[自然问法验收](docs/EXPRESSION-ACCEPTANCE.md)和[程序与绘图示例](docs/PROGRAMMABLE-IUI.md)。
 
 已知限制：
 
@@ -38,7 +38,7 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 
 | | **MiOpIIk IUI**（本仓库） | **MiOpIIk Agent** |
 |---|---|---|
-| 包 | `miopiik-iui` 0.2.0，正式版 | `miopiik-dsh` 0.1.2，stable |
+| 包 | `miopiik-iui` 0.3.0，正式版 | `miopiik-dsh` 0.1.2，stable |
 | 层次 | 纯表现层：浏览器侧的受信 Markdown 片段 | host 侧：记忆、治理、后台执行 |
 | 主要面 | 行内 token、`iui` 围栏、声明式组件、本地状态 | `ink_*` 工具面、收件箱/事实/开环/鱼骨账本、Operator 派发 |
 | 状态 | 浏览器 `localStorage` 中的单个渲染偏好 | 工作区 `.dsh/miopiik/` 下的 append-only JSONL 账本 |
@@ -276,23 +276,23 @@ payload 长度上限为 120 字符，不含花括号或换行。其他代码围�
 
 - 可修改 profile 的 DSH Web 安装（基线 `0.2.2-rc.1`）。
 - Node.js `>= 23.6`，且 `PATH` 中包含 `dsh` CLI。
-- 本仓库 [`v0.2.0` 版本](https://github.com/Chillizu/miopiik-iui/tree/v0.2.0)的本地 checkout，用于生成宿主补丁。
+- 本仓库 [`v0.3.0` 版本](https://github.com/Chillizu/miopiik-iui/tree/v0.3.0)的本地 checkout，用于生成宿主补丁。
 
 ### 安装
 
 1. 将插件安装到目标 profile。
 
    ```sh
-   dsh plugin --profile <profile> add miopiik-iui@0.2.0
+   dsh plugin --profile <profile> add miopiik-iui@0.3.0
    ```
 
    也可在 DSH Web 的「插件 → 实验性插件」启用「自定义插件索引」，打开「发现 → 添加索引源」，粘贴 [MiOpIIk 索引地址](https://raw.githubusercontent.com/Chillizu/miopiik-iui/main/dsh-index.json)，安装 **MiOpIIk IUI**。随后继续配置下方的宿主补丁。
 
-   若使用发布包，从 [GitHub Release](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.2.0) 下载 `miopiik-iui-0.2.0.tgz` 和 `SHA256SUMS.txt`，在下载目录校验并安装。
+   若使用发布包，从 [GitHub Release](https://github.com/Chillizu/miopiik-iui/releases/tag/v0.3.0) 下载 `miopiik-iui-0.3.0.tgz` 和 `SHA256SUMS.txt`，在下载目录校验并安装。
 
    ```sh
    sha256sum -c SHA256SUMS.txt
-   dsh plugin --profile <profile> add ./miopiik-iui-0.2.0.tgz
+   dsh plugin --profile <profile> add ./miopiik-iui-0.3.0.tgz
    ```
 
    开发时可直接用 checkout 的绝对路径安装。

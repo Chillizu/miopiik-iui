@@ -5,7 +5,7 @@
 | 项 | MiOpIIk IUI |
 |---|---|
 | 包名 | `miopiik-iui` |
-| 当前版本 | `0.2.0`（stable / 正式版） |
+| 当前版本 | `0.3.0`（stable / 正式版） |
 | 包类型 | 独立可安装的 DSH Web 插件包（零第三方运行时依赖） |
 | 依赖另一个包 | 否：可单装（仅提供 IUI 表现层），也可与 MiOpIIk Agent 同装 |
 | Tarball 安装 | 支持（由 `npm run check` 执行真实打包并校验 import 图） |
