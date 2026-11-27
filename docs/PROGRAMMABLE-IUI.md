@@ -23,7 +23,7 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 - `len(a)`、`at(a,i)`、`gather(a,indices)` 和 `join(a,separator)` 适合序列。索引从零开始。
 - `dot(a,b)`、`matvec(m,v)`、`scale(a,k)`、`softmax(a)` 和 `roundEach(a,n)` 适合数值计算。softmax 使用减最大值的形式归一化，矩阵最多 4,096 个元素。
 - `zip(a,b,…)` 将 2–6 个等长数组按位置合成二维表格。数组每维最多 128 项，求值另有运算次数与结果预算。
-- `sqrt(x)` 可计算非负数的平方根，`hypot(x,y)` 可计算平面位移的长度。三角函数以弧度为单位，`atan2(y,x)*180/pi` 将方向换算成度数。输入和结果均须为有限数。
+- `sqrt(x)` 可计算非负数的平方根，`hypot(x,y)` 可计算平面位移的长度。`x^n` 是数学乘方，由右至左结合。三角函数以弧度为单位，`atan2(y,x)*180/pi` 将方向换算成度数。输入和结果均须为有限数。
 
 [微型 Transformer 回复](../test/fixtures/natural/toy-decoder.md)允许连续追加 token、撤销或复位。它用教学参数计算末 token 的注意力和所属词表的下一 token 概率。调温度只影响输出分布；追加 token 改变上下文，触发注意力与输出重算。
 
@@ -41,6 +41,8 @@ MiOpIIk IUI 在 DSH 聊天中渲染声明式程序。控件触发局部状态转
 | `label` | `x y text size align` |
 
 位置可以写成一对 `[x,y]`。`rect`、`circle` 和 `label` 读 `at`，`line` 读 `from` 和 `to`，`path` 读 2–32 个点的 `points` 并画成折线。标签可以用 `dx` 和 `dy` 从共用点旁移。位置可填 JSON 数组、完整绑定或引用本地状态的表达式。同一个图元使用一套坐标写法。
+
+`polar(center, radius, angle)` 从中心、半径和角度得到一个点。`rotate(point, center, angle)` 把已有点绕中心旋转。输入的点和返回结果都是 `[x,y]`，角度用弧度。画布向下为正，正角在屏幕上顺时针。半径可用负数表示中心另一侧的端点。把移动的端点写成一项 `derive`，线段、圆点、标签和读数就能引用同一位置。
 
 ```xml
 <state name="start" value="[40,80]"/>

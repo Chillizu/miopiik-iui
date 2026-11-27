@@ -32,6 +32,19 @@ test('expr: 算术、优先级、括号与一元运算', () => {
   assert.equal(value('+5'), 5)
 })
 
+test('expr: 乘方保留数学优先级并拒绝非有限结果', () => {
+  assert.equal(value('1 + 2 * 3 ^ 2'), 19)
+  assert.equal(value('2 ^ 3 ^ 2'), 512)
+  assert.equal(value('-2 ^ 2'), -4)
+  assert.equal(value('(-2) ^ 2'), 4)
+  assert.equal(value('2 ^ -3'), 0.125)
+  assert.match(rejected('(-2) ^ 0.5'), /有限数字/u)
+  assert.match(rejected('0 ^ -1'), /有限数字/u)
+  assert.match(rejected('10 ^ 1000'), /有限数字/u)
+  assert.match(rejected('"2" ^ 3'), /有限数字/u)
+  assert.match(rejected(Array(30).fill('1').join(' ^ ')), /嵌套超限/u)
+})
+
 test('expr: 比较、逻辑与三元', () => {
   assert.equal(value('2 > 1'), true)
   assert.equal(value('2 <= 1'), false)
@@ -98,6 +111,37 @@ test('expr: 函数白名单与错误参数', () => {
   assert.match(rejected('eval(1)'), /未知标识符/u)
   assert.match(rejected('Math.round(1)'), /未知标识符|不支持的字符/u)
   assert.match(rejected('$state.a.toString()'), /不支持|多余内容/u)
+})
+
+test('expr: 极坐标偏移和绕点旋转使用弧度，并返回数值点', () => {
+  assert.deepEqual(value('polar([4, 7], 0, pi / 2)'), [4, 7])
+  assert.deepEqual(value('polar([4, 7], 3, 0)'), [7, 7])
+  assert.deepEqual(value('polar([4, 7], -3, 0)'), [1, 7])
+  assert.deepEqual(value('roundEach(polar([4, 7], 3, -pi / 2), 12)'), [4, 4])
+  assert.deepEqual(value('rotate([4, 7], $state.origin, 0)', { state: { origin: [1e308, -1e308] } }), [4, 7])
+  assert.deepEqual(value('rotate([4, 7], [4, 7], pi / 2)'), [4, 7])
+  assert.deepEqual(value('roundEach(rotate([7, 7], [4, 7], pi / 2), 12)'), [4, 10])
+  assert.deepEqual(value('roundEach(rotate(polar([4, 7], 3, 0), [4, 7], -pi / 2), 12)'), [4, 4])
+})
+
+test('expr: 点运算拒绝非有限数、错误形状及坐标溢出', () => {
+  const scope = { state: { large: Number.MAX_VALUE, infinity: Infinity, sparse: Array(2) } }
+  for (const [source, reason] of [
+    ['polar([0, 0], 1)', /参数个数/u],
+    ['rotate([0, 0], [0, 0], 1, 2)', /参数个数/u],
+    ['polar([0], 1, 0)', /有限数字点/u],
+    ['polar([0, 0, 0], 1, 0)', /有限数字点/u],
+    ['polar([0, "0"], 1, 0)', /有限数字点/u],
+    ['polar({x: 0, y: 0}, 1, 0)', /有限数字点/u],
+    ['polar([0, 0], "1", 0)', /有限数字半径/u],
+    ['polar([0, 0], 0, $state.infinity)', /有限数字弧度/u],
+    ['polar([0, 0], $state.infinity, 0)', /有限数字半径/u],
+    ['rotate($state.sparse, [0, 0], 0)', /有限数字点/u],
+    ['rotate([0, 0], [0, $state.infinity], 0)', /有限数字原点/u],
+    ['rotate([0, 0], [0, 0], true)', /有限数字弧度/u],
+    ['len(polar([$state.large, 0], $state.large, 0))', /运算结果必须是有限数字/u],
+    ['rotate([$state.large, 0], [-$state.large, 0], pi / 2)', /运算结果必须是有限数字/u],
+  ]) assert.match(rejected(source, scope), reason, source)
 })
 
 test('expr: 序列索引、收集、并列与拼接保留数组顺序和类型', () => {

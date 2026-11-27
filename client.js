@@ -24,7 +24,7 @@ window.__ModuleLoader__.load({
        *    不产生可执行代码，解析结果只是一棵受限 JSON AST；
        *  - 表达式只能读 `$state.*` / `$data.*` 的只读点号路径，不能调用对象方法、不能赋值、
        *    不能访问任意成员（`.constructor` 等一律拒绝）；
-       *  - 函数只允许白名单内的纯标量、序列与数值运算；
+       *  - 函数只允许白名单内的纯标量、序列、数值与二维点运算；
        *  - 预算（源码长度/token/嵌套深度/结果体量）统一拒绝；失败返回结构化错误，不抛异常；
        *  - 纯函数、确定性；compile 结果按源码做有界缓存（≤ 256 项）。
        */
@@ -48,6 +48,7 @@ window.__ModuleLoader__.load({
       const SEQUENCE_ARITY = Object.freeze({
         len: 1, at: 2, gather: 2, dot: 2, matvec: 2, scale: 2, softmax: 1, roundEach: 2, zip: [2, 6], join: 2, sample: 2, accumulate: 2,
       })
+      const POINT_ARITY = Object.freeze({ polar: 3, rotate: 3 })
       const MATH_FUNCTIONS = Object.freeze({
         round: { arity: Object.freeze([1, 2]), evaluate: (args) => {
           const [value, places = 0] = args
@@ -72,14 +73,14 @@ window.__ModuleLoader__.load({
       })
       const FUNCTIONS = Object.freeze({
         ...Object.fromEntries(Object.entries(MATH_FUNCTIONS).map(([name, definition]) => [name, definition.arity])),
-        when: 3, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY,
+        when: 3, min: -1, max: -1, clamp: 3, ...SEQUENCE_ARITY, ...POINT_ARITY,
       })
       const SCOPES = new Set(['state', 'data'])
       const IDENT_START = /[A-Za-z_]/u
       const IDENT_PART = /[A-Za-z0-9_]/u
       const DIGIT = /[0-9]/u
       const PUNCT2 = new Set(['==', '!=', '<=', '>=', '&&', '||'])
-      const PUNCT1 = new Set(['+', '-', '*', '/', '%', '<', '>', '!', '?', ':', '(', ')', '[', ']', '{', '}', ','])
+      const PUNCT1 = new Set(['+', '-', '*', '/', '%', '^', '<', '>', '!', '?', ':', '(', ')', '[', ']', '{', '}', ','])
 
       function fail(error) {
         return { ok: false, error }
@@ -246,7 +247,15 @@ window.__ModuleLoader__.load({
             if (operand.ok === false) return operand
             return { ok: true, node: { t: 'unary', op, x: operand.node } }
           }
-          return parsePrimary(depth)
+          return parsePower(depth)
+        }
+
+        function parsePower(depth) {
+          const base = parsePrimary(depth)
+          if (base.ok === false || !eat('^')) return base
+          const exponent = parseUnary(depth + 1)
+          if (exponent.ok === false) return exponent
+          return { ok: true, node: { t: 'bin', op: '^', l: base.node, r: exponent.node } }
         }
 
         function parseCall(depth, name) {
@@ -497,6 +506,35 @@ window.__ModuleLoader__.load({
         return true
       }
 
+      function numericPoint(value) {
+        return Array.isArray(value) && value.length === 2 && numericVector(value)
+      }
+
+      function pointCall(name, [point, argument, angle], work) {
+        if (!numericPoint(point)) return fail(`${name} 第一个参数需要 [x, y] 有限数字点`)
+        if (!numeric(angle)) return fail(`${name} 需要有限数字弧度`)
+        const x = point[0]
+        const y = point[1]
+        if (name === 'polar') {
+          if (!numeric(argument)) return fail('polar 需要有限数字半径')
+          if (argument === 0) return inspectResult([x, y], work)
+          // 负半径沿角度所指方向的反向偏移。
+          return inspectResult([x + argument * Math.cos(angle), y + argument * Math.sin(angle)], work)
+        }
+        if (!numericPoint(argument)) return fail('rotate 需要 [x, y] 有限数字原点')
+        if (angle === 0) return inspectResult([x, y], work)
+        const originX = argument[0]
+        const originY = argument[1]
+        const dx = x - originX
+        const dy = y - originY
+        const cosine = Math.cos(angle)
+        const sine = Math.sin(angle)
+        return inspectResult([
+          originX + (dx * cosine - dy * sine),
+          originY + (dx * sine + dy * cosine),
+        ], work)
+      }
+
       function arrayIndex(array, index) {
         return Number.isSafeInteger(index) && index >= 0 && index < array.length && Object.hasOwn(array, index)
       }
@@ -711,6 +749,7 @@ window.__ModuleLoader__.load({
           if (node.op === '+') return finite(a + b)
           if (node.op === '-') return finite(a - b)
           if (node.op === '*') return finite(a * b)
+          if (node.op === '^') return finite(Math.pow(a, b))
           if (node.op === '/') return b === 0 ? fail('除数不能为 0') : finite(a / b)
           return b === 0 ? fail('取模的除数不能为 0') : finite(a % b)
         }
@@ -740,6 +779,7 @@ window.__ModuleLoader__.load({
             args.push(value.value)
           }
           if (Object.hasOwn(SEQUENCE_ARITY, node.name)) return sequenceCall(node.name, args, work)
+          if (Object.hasOwn(POINT_ARITY, node.name)) return pointCall(node.name, args, work)
           if (!args.every(numeric)) return fail(`${node.name} 只接受有限数字`)
           if (Object.hasOwn(MATH_FUNCTIONS, node.name)) return MATH_FUNCTIONS[node.name].evaluate(args)
           if (node.name === 'min') return finite(Math.min(...args))

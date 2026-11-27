@@ -18,7 +18,8 @@ export const IUI_CHARTER = [
   `时间或范围的重叠用 <chart kind="interval" label="共享时间轴" x-unit="分" domain='[0,4]' series='[["甲",0,2,"准备"],["乙",1,3,"执行","success"]]'/>。行格式是 [轨道名, 起点, 终点, 标签, 可选色调]，名称和标签都要有文字。区间色调可省略，或用 neutral/success/warning/danger/info/accent。宿主用起止值画区间，点选可读具体时间。区间图和线性折线都可加阶段 marks、游标 cursor 或时间滑轨 scrub。`,
   `对象之间的流向可用 diagram，由宿主布置。先写 <node id="a" label="起点"/> 和 <node id="b" label="下一站"/>，然后写 <edge from="a" to="b" label="作用"/>。可用 lane(label) 分组，node.note 补充短说明，node 和 edge 允许用 when="$state.名称" 显示对应状态。数字关系使用 chart(kind=bar/line/donut)、table、metric，步骤用 steps(step)。row 横向就近、column 纵向。chart.series 和 table.rows 可用数组、完整绑定或纯表达式。table 同时写 columns。state 的 value、segmented 的 options 用合法 JSON，如 <state name="mode" value='"short"'/> 和 options='[{"label":"短","value":"short"}]'。控件 bind="$state.名称"，slider 设 min/max/step，toggle 绑定布尔。button 支持 set/append/pop/reset（bind、value、max 或 min）和用户触发的 copy。`,
   `metric 的 value/delta 和 progress 的 value/max 可以写字面量、完整绑定或引用 $state 的算式。图和读数共用一项计算时写 <derive name="result" expr="round($state.input * 100, 1)"/>，读数写 <metric label="读数" value="$state.result"/>。绘图内的坐标、标签文字和颜色可用局部算式，图外 <text> 用字面量或完整绑定。控件绑定 <state> 声明的输入。用两组输入核对图形、读数和正文。`,
-  '算式使用四则运算、比较和 ?:，数值函数有 round、min、max、clamp、abs、floor、ceil、exp、sqrt(x)、hypot(x,y)。角度用弧度和常量 pi，支持 sin/cos/tan、asin/acos/atan、atan2(y,x)。数组用 len/at/gather/join/zip/dot/matvec/scale/softmax/roundEach，索引用 at(a,i)。其余需要的值可提前算好填入状态或数据行。',
+  '算式使用四则运算、乘方 ^、比较和 ?:，数值函数有 round、min、max、clamp、abs、floor、ceil、exp、sqrt(x)、hypot(x,y)。角度用弧度和常量 pi，支持 sin/cos/tan、asin/acos/atan、atan2(y,x)。数组用 len/at/gather/join/zip/dot/matvec/scale/softmax/roundEach，索引用 at(a,i)。其余需要的值可提前算好填入状态或数据行。',
+  '角度改变位置时，用 polar(中心, 半径, 弧度) 或 rotate(已有点, 中心, 弧度) 得到 [x,y]。例如 <derive name="tip" expr="polar($state.center,45,$state.angle*pi/180)"/>，让 line.to、circle.at 或 label.at 读取 $state.tip。polar 的零角朝右，画布上正角顺时针。',
   `例如解释影长变化，让图旁的切换器同时更新光路、图注和影长：
 ${FENCE}iui
 <ui density="auto" fallback="光线越贴近地面，同一根竖杆的影子越长">
