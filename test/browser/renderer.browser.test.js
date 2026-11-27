@@ -387,12 +387,13 @@ const BOUND_DRAWING_VIEWS_ML = `<ui density="auto">
   <drawing width="200" height="100" label="覆盖方式" bind="$state.mode">
     <view label="包含" value='"contain"' caption="形状处在边框内部。">
       <rect x="25" y="20" width="150" height="60" fill="success" opacity="0.35"/>
-      <label x="100" y="55" text="包含模式" align="middle"/>
     </view>
     <view label="覆盖" value='"cover"' caption="形状铺满边框。">
       <rect x="15" y="10" width="170" height="80" fill="warning" opacity="0.35"/>
       <label x="100" y="55" text="覆盖模式" align="middle"/>
+      <label x="100" y="57" text="边框处" align="middle"/>
     </view>
+    <label x="100" y="55" text="包含模式" align="middle"/>
   </drawing>
   <metric label="当前模式" value="$state.mode"/>
   <button label="重置模式" action="reset" bind="$state.mode"/>
@@ -1199,6 +1200,13 @@ const MAIN_RUN = `
           ? true : '绑定绘图未按初始 state 选择视图，或内建 selector 不唯一');
         boundDrawingOptions()[1]?.click();
         await wait(25);
+        const settledLabels = [...(boundDrawingGraph()?.querySelectorAll(':scope > text') ?? [])];
+        const viewLabel = settledLabels.find(label => label.textContent === '覆盖模式');
+        const beside = settledLabels.find(label => label.textContent === '边框处');
+        check('drawingLabelLayout', () => settledLabels.length === 2 && viewLabel?.getAttribute('y') === '55'
+          && beside?.getAttribute('x') === '100' && Number(beside?.getAttribute('y')) > 57
+          && viewLabel?.getBoundingClientRect().bottom <= beside?.getBoundingClientRect().top + 0.5
+          ? true : '叠层标注没有覆盖同位置内容，或相邻标签未纵向错开');
         check('boundDrawingSelect', () => boundDrawingOptions()[1]?.getAttribute('aria-pressed') === 'true'
           && boundDrawingMetric() === 'cover' && boundDrawingGraph()?.textContent.includes('覆盖模式')
           && boundDrawingGraph()?.getAttribute('viewBox') === boundDrawingInitialViewBox
@@ -2162,6 +2170,7 @@ test('插件页与设置页在真实 Chromium DOM 中各自完整呈现，并使
   assert.match(html,/data-comparison-restored="ok"/u,'普通重渲染应保留显式选择')
   assert.match(html,/data-bound-drawing-initial="ok"/u,'绘图应按绑定 state 初始选择唯一内建视图切换器')
   assert.match(html,/data-bound-drawing-select="ok"/u,'绘图内建选择应更新外部 metric 与活动图层并共享 viewBox')
+  assert.match(html,/data-drawing-label-layout="ok"/u,'自适应绘图切换时同位置标注只显示一条，相邻标注保持横坐标并纵向错开')
   assert.match(html,/data-bound-drawing-external-update="ok"/u,'外部本地 set/reset 应同步绘图视图而不增加切换器')
   assert.match(html,/data-point-anchored-initial="ok"/u,'初始 point 应统一驱动 circle、line、path 和偏移标签')
   assert.match(html,/data-point-anchored-state="ok"/u,'改变 state point 后不同图元与标签坐标应一起移动')

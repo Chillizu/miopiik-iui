@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { placeDrawingLabels } from '../shared/drawing-label-layout.js'
 import { drawingProps, LIMITS, resolveValue, validateAst } from '../shared/iui-ast.js'
 import { evaluateExpr } from '../shared/iui-expr.js'
 import { parseMiopiikMl } from '../shared/miopiik-ml.js'
@@ -9,6 +10,32 @@ function check(source) {
   assert.equal(parsed.ok, true)
   return validateAst(parsed.doc)
 }
+
+test('drawing label layout only shifts actual overlaps and uses the nearest clear position', () => {
+  const frame = Object.freeze({ x: 0, y: 0, right: 100, bottom: 80 })
+  const first = Object.freeze({ left: 10, top: 20, right: 30, bottom: 30, size: 12 })
+  const second = Object.freeze({ ...first, top: 25, bottom: 35 })
+  const horizontalTouch = { ...first, left: 30, right: 50 }
+  const verticalTouch = { ...first, top: 10, bottom: 20 }
+  assert.deepEqual(placeDrawingLabels([first, horizontalTouch, verticalTouch], frame), [0, 0, 0])
+  assert.deepEqual(placeDrawingLabels([first, { ...second, left: 29, right: 50 }], frame), [0, 7])
+  assert.deepEqual(placeDrawingLabels([first, { ...first, top: 17, bottom: 27 }], frame), [0, -9])
+
+  const labels = Object.freeze([first, second, Object.freeze({ ...first, top: 38, bottom: 48 })])
+  assert.deepEqual(placeDrawingLabels(labels, frame), [0, -17, 0])
+  assert.deepEqual(placeDrawingLabels(labels, frame), [0, -17, 0])
+})
+
+test('drawing label layout preserves authored positions when safe movement is unavailable', () => {
+  const frame = { x: -10, y: 0, right: 100, bottom: 80 }
+  const label = { left: -5, top: 20, right: 30, bottom: 30, size: 12 }
+  assert.deepEqual(placeDrawingLabels([label, label, label, label], frame), [0, -12, 12, 0])
+  assert.deepEqual(placeDrawingLabels([label, label], { ...frame, y: 20, bottom: 36 }), [0, 0])
+  assert.deepEqual(placeDrawingLabels([label, { ...label, left: -11 }], frame), [0, 0])
+  assert.deepEqual(placeDrawingLabels([label, { ...label, size: 6 }], frame), [0, 0])
+  const tall = { ...label, bottom: 60, size: 40 }
+  assert.deepEqual(placeDrawingLabels([tall, tall], frame), [0, 0])
+})
 
 test('drawing composes closed SVG shapes, semantic colors and local state bindings', () => {
   const checked = check(`<ui fallback="图形结构">

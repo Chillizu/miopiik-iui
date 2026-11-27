@@ -46,6 +46,7 @@ export function build() {
     closure('miopiik-ml.js', 'MIOPIIK_ML', ['ML_VERSION', 'ML_TAGS', 'parseMiopiikMl']),
     closure('markdown-segments.js', 'MARKDOWN_SEGMENTS', ['INLINE_TOKEN', 'BLOCK_FENCE', 'splitTrustedMarkdown', 'hasTrustedMarkup', 'splitTrustedBlocks', 'splitStreamingFence', 'graftTrustedInline']),
     closure('diagram-geometry.js', 'DIAGRAM_GEO', ['diagramEdges', 'diagramFallbackAnchors', 'placeDiagramCaptions']),
+    closure('drawing-label-layout.js', 'DRAWING_LABEL_LAYOUT', ['placeDrawingLabels']),
     closure('frame-theme.js', 'FRAME_THEME', ['FRAME_PRESET_ATTR', 'readHostTheme', 'framePresetCss', 'framePresetStyle']),
     closure('legacy-widgets.js', 'LEGACY_WIDGETS', ['adoptLegacySpec']),
     read('renderer.js'),

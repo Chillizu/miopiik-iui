@@ -189,7 +189,10 @@
           if (textAnchor === 'start' && x + advance > frame.right && x - advance >= frame.x) textAnchor = 'end'
           else if (textAnchor === 'end' && x - advance < frame.x && x + advance <= frame.right) textAnchor = 'start'
         }
-        return h('text', { key, ...geometry, fill: DRAWING_COLORS[fill ?? 'text'], fontSize, fontFamily: SANS, textAnchor }, text)
+        return h('text', {
+          key, ...geometry, fill: DRAWING_COLORS[fill ?? 'text'], fontSize, fontFamily: SANS, textAnchor,
+          'data-iui-label-slot': frame === null ? undefined : JSON.stringify([geometry.x, geometry.y, align ?? 'start']),
+        }, text)
       }
       const outline = child.type === 'rect' || child.type === 'circle' ? 'border' : 'accent'
       const strokeColor = stroke ?? (fill === undefined || fill === 'none' ? outline : 'none')
@@ -209,14 +212,24 @@
 
     function renderDrawingElements(entries, context, resolveDataset) {
       const shapes = []
+      const viewLabels = new Set()
+      const sharedLabels = new Map()
+      const addShape = (shape, view) => {
+        if (shape === null) return
+        const slot = shape.props['data-iui-label-slot']
+        if (slot !== undefined) {
+          if (view) viewLabels.add(slot)
+          else sharedLabels.set(shapes.length, slot)
+        }
+        shapes.push(shape)
+      }
       const limit = IUI_AST.LIMITS.drawingShapes
       // Reserve room for ordinary marks even if a repeat appears earlier in the drawing.
       let remaining = limit - entries.filter(({ child }) => Object.hasOwn(DRAWING_TAGS, child.type)).length
       let error
-      for (const { child, key } of entries) {
+      for (const { child, key, view } of entries) {
         if (child.type !== 'repeat') {
-          const shape = renderDrawingShape(child, key, context)
-          if (shape !== null) shapes.push(shape)
+          addShape(renderDrawingShape(child, key, context), view)
           continue
         }
         if (!context.visible(child)) continue
@@ -236,12 +249,61 @@
           const resolve = (value) => IUI_AST.resolveValue(value, scope)
           const shapeContext = { ...context, resolve, scope, visible: (mark) => isItemVisible(mark, resolve, scope) }
           for (const [order, mark] of child.children.entries()) {
-            const shape = renderDrawingShape(mark, `${key}-${index}-${order}`, shapeContext)
-            if (shape !== null) shapes.push(shape)
+            addShape(renderDrawingShape(mark, `${key}-${index}-${order}`, shapeContext), view)
           }
         }
       }
-      return { shapes, error }
+      const visibleShapes = viewLabels.size === 0 ? shapes : shapes.filter((_, index) => !viewLabels.has(sharedLabels.get(index)))
+      return { shapes: visibleShapes, error }
+    }
+
+    const drawingFontMetrics = new Map()
+    let drawingCanvas
+
+    function drawingLabelBounds({ x, y, children, fontSize, textAnchor }, weight) {
+      const key = JSON.stringify([children, fontSize, weight])
+      let metrics = drawingFontMetrics.get(key)
+      if (metrics === undefined) {
+        drawingCanvas ??= globalThis.document?.createElement('canvas').getContext('2d')
+        if (drawingCanvas == null) return null
+        drawingCanvas.font = `${weight} ${fontSize}px ${SANS}`
+        drawingCanvas.textAlign = 'left'
+        drawingCanvas.textBaseline = 'alphabetic'
+        const { width, actualBoundingBoxLeft, actualBoundingBoxRight, actualBoundingBoxAscent, actualBoundingBoxDescent,
+          fontBoundingBoxAscent, fontBoundingBoxDescent } = drawingCanvas.measureText(children)
+        if (!Number.isFinite(width) || width <= 0) return null
+        metrics = {
+          width, left: Math.min(0, -actualBoundingBoxLeft || 0), right: Math.max(width, actualBoundingBoxRight || 0),
+          ascent: Math.max(actualBoundingBoxAscent || 0, fontBoundingBoxAscent || fontSize * .9),
+          descent: Math.max(actualBoundingBoxDescent || 0, fontBoundingBoxDescent || fontSize * .25),
+        }
+        if (drawingFontMetrics.size >= 256) drawingFontMetrics.clear()
+        drawingFontMetrics.set(key, metrics)
+      }
+      const start = x - metrics.width * (textAnchor === 'middle' ? .5 : textAnchor === 'end' ? 1 : 0)
+      return { left: start + metrics.left, top: y - metrics.ascent, right: start + metrics.right, bottom: y + metrics.descent, size: fontSize }
+    }
+
+    function fitDrawingLabels(shapes, frame, weight) {
+      const indices = []
+      for (const [index, shape] of shapes.entries()) if (shape.type === 'text') indices.push(index)
+      if (indices.length < 2) return shapes
+      const boxes = []
+      const fitted = []
+      for (const index of indices) {
+        const bounds = drawingLabelBounds(shapes[index].props, weight)
+        if (bounds === null) continue
+        boxes.push(bounds)
+        fitted.push(index)
+      }
+      const shifts = DRAWING_LABEL_LAYOUT.placeDrawingLabels(boxes, frame)
+      for (const [index, dy] of shifts.entries()) {
+        if (dy === 0) continue
+        const position = fitted[index]
+        const { key, props } = shapes[position]
+        shapes[position] = h('text', { ...props, key, y: props.y + dy })
+      }
+      return shapes
     }
 
     const DRAWING_READABLE_FONT = 11
@@ -377,9 +439,10 @@
       const entries = item.children.flatMap((child, index) => {
         if (child.type !== 'view') return { child, key: String(index) }
         if (selected?.index !== index) return []
-        return child.children.map((mark, order) => ({ child: mark, key: `${index}-${order}` }))
+        return child.children.map((mark, order) => ({ child: mark, key: `${index}-${order}`, view: true }))
       })
       const { shapes, error } = renderDrawingElements(entries, shapeContext, resolveDataset)
+      if (frame !== null && streaming !== true) fitDrawingLabels(shapes, frame, weightStyle.fontWeight ?? 400)
       const repeatNotice = streaming !== true && error !== undefined ? h('div', {
         role: 'status', 'data-iui-drawing-repeat-error': '1', style: { color: C.muted, fontSize: 12 },
       }, error) : null
