@@ -38,12 +38,12 @@ The MiOpIIk project consists of two independent repositories. Either or both pac
 
 | | **MiOpIIk IUI** (this repository) | **MiOpIIk Agent** |
 |---|---|---|
-| Package | `miopiik-iui` 0.3.0, stable | `miopiik-dsh` 0.1.2, stable |
+| Package | [`miopiik-iui` 0.3.0](https://www.npmjs.com/package/miopiik-iui/v/0.3.0) | [`miopiik-dsh` 0.2.0](https://www.npmjs.com/package/miopiik-dsh/v/0.2.0) |
 | Layer | Presentation only: trusted Markdown fragments in the browser | Host side: memory, governance, background execution |
 | Main surface | Inline tokens, `iui` fences, declarative components, local state | `ink_*` tool surface, inbox/facts/loops/branches ledger, operator dispatch |
 | State | One browser-local render preference in `localStorage` | Append-only JSONL ledger under `<workspace>/.dsh/miopiik/` |
 | Model tools | None | 14 (`12` Mind + `2` Operator) |
-| Chat ownership | Native DSH `AssistantMarkdown` / `ReasoningRow` | Session views, right sidebar, plugin/settings pages; no IUI rendering |
+| Web interface | Inline visuals within native DSH chat messages | Fishbone, Seen, and Stream session views, plus sidebar and plugin settings |
 | Install requirement | DSH Web profile; experimental chat patch for in-chat rendering | DSH Web profile |
 | Repository | https://github.com/Chillizu/miopiik-iui | <https://github.com/Chillizu/miopiik> |
 

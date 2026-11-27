@@ -39,8 +39,8 @@
       "name": "miopiik-dsh",
       "title": "MiOpIIk Agent",
       "description": {
-        "en": "Session ledgers, approval gates, and background execution for DSH Web.",
-        "zh": "为 DSH Web 提供会话账本、操作确认与后台执行。"
+        "en": "Fishbone, Seen, and Stream session views, with approval gates and background execution for DSH Web.",
+        "zh": "为 DSH Web 提供鱼骨、所见和流水视图，以及操作确认与后台执行。"
       },
       "icon": "https://raw.githubusercontent.com/Chillizu/miopiik/a5044465151617b3465a8b412504856b8dcc2307/icon.svg",
       "author": "Chillizu",
@@ -49,6 +49,13 @@
         "url": "https://github.com/Chillizu/miopiik"
       },
       "versions": [
+        {
+          "version": "0.2.0",
+          "publishTimestamp": 1795783247,
+          "source": {
+            "type": "npm"
+          }
+        },
         {
           "version": "0.1.2",
           "publishTimestamp": 1794630652,

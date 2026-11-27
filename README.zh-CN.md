@@ -38,12 +38,12 @@ MiOpIIk 拆分为两个独立仓库，可同装或单装，互不依赖。
 
 | | **MiOpIIk IUI**（本仓库） | **MiOpIIk Agent** |
 |---|---|---|
-| 包 | `miopiik-iui` 0.3.0，正式版 | `miopiik-dsh` 0.1.2，stable |
+| 包 | [`miopiik-iui` 0.3.0](https://www.npmjs.com/package/miopiik-iui/v/0.3.0) | [`miopiik-dsh` 0.2.0](https://www.npmjs.com/package/miopiik-dsh/v/0.2.0) |
 | 层次 | 纯表现层：浏览器侧的受信 Markdown 片段 | host 侧：记忆、治理、后台执行 |
 | 主要面 | 行内 token、`iui` 围栏、声明式组件、本地状态 | `ink_*` 工具面、收件箱/事实/开环/鱼骨账本、Operator 派发 |
 | 状态 | 浏览器 `localStorage` 中的单个渲染偏好 | 工作区 `.dsh/miopiik/` 下的 append-only JSONL 账本 |
 | 模型工具 | 无 | 14 个（Mind 12 个 + Operator 2 个） |
-| 聊天所有权 | 原生 DSH `AssistantMarkdown` / `ReasoningRow` | 会话视图、右侧栏、插件页与设置页；不渲染 IUI |
+| Web 界面 | DSH 原生聊天消息中的内联图形 | 鱼骨、所见、流水三个会话视图，以及右栏和插件设置 |
 | 安装条件 | DSH Web profile；聊天内联渲染需实验性 chat 包补丁 | DSH Web profile |
 | 仓库 | https://github.com/Chillizu/miopiik-iui | <https://github.com/Chillizu/miopiik> |
 
