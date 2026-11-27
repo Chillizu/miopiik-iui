@@ -21,11 +21,9 @@
       "versions": [
         {
           "version": "0.3.0",
-          "publishTimestamp": 1795764993,
+          "publishTimestamp": 1795774476,
           "source": {
-            "type": "git",
-            "url": "https://github.com/Chillizu/miopiik-iui",
-            "commit": "287811999cb473e5e95dbf5c6b261a1a14d761d0"
+            "type": "npm"
           }
         },
         {
