@@ -466,7 +466,7 @@
         'data-iui-weight': weight,
         style: { ...layout, ...visualLayout, display: 'flex', flexDirection: 'column', gap: 6 },
       },
-      options.length > 1 ? h('div', { className: 'miopiik-choices', role: 'group', 'aria-label': `对照视图：${viewport.label}` },
+      options.length > 1 ? h('div', { className: 'miopiik-choices miopiik-choice-set', role: 'group', 'aria-label': `对照视图：${viewport.label}` },
         ...options.map((option) => {
           const active = option.index === selected?.index
           return h('button', {
@@ -507,7 +507,7 @@
         style: { display: 'flex', flexDirection: 'column', minWidth: 0, gap: 9, ...WEIGHT_STYLE[weight] },
       },
       useTabs ? h('div', {
-        className: 'miopiik-choices', role: 'tablist', 'aria-label': typeof title === 'string' ? title : '对照视图',
+        className: 'miopiik-choices miopiik-choice-set', role: 'tablist', 'aria-label': typeof title === 'string' ? title : '对照视图',
       }, ...options.map((option, index) => {
         const selected = option === active
         return h('button', {
@@ -633,7 +633,7 @@
       const span = max - min
       const ratio = Number.isFinite(span) ? (span > 0 ? (value - min) / span : 0)
         : (value / 2 - min / 2) / (max / 2 - min / 2)
-      return h('span', { className: 'miopiik-range' },
+      return h('span', { className: 'miopiik-range', 'data-iui-range-disabled': disabled ? '1' : undefined },
         h('span', { className: 'miopiik-range-fill', 'aria-hidden': true, style: { transform: `translateY(-50%) scaleX(${ratio})` } }),
         h('input', {
           type: 'range', min, max, step, value, disabled,
@@ -719,6 +719,7 @@
         const running = activePlayback.current
         if (running?.target === target) running.pause()
       }
+      const playbackLabel = playing ? '暂停' : value >= end ? '重播' : '播放'
       return {
         pauseBeforeSeek,
         seek(next) {
@@ -726,9 +727,10 @@
           apply(next)
         },
         button: enabled ? h('button', {
-          type: 'button', className: 'miopiik-ctl miopiik-choice', 'data-iui-range-play': '1',
+          type: 'button', className: 'miopiik-ctl miopiik-playback', 'data-iui-range-play': '1',
+          'data-iui-playing': playing ? '1' : undefined,
           disabled: streaming, onClick: playing ? pause : start,
-        }, playing ? '暂停' : value >= end ? '重播' : '播放') : null,
+        }, h('span', { className: 'miopiik-playback-icon', 'aria-hidden': true }), playbackLabel) : null,
       }
     }
 
@@ -742,7 +744,10 @@
       return h('div', { 'data-iui-slider': String(value) },
         label === '' ? null : h('span', { className: 'miopiik-control-label' }, label),
         h('span', { className: 'miopiik-range-value' }, `${value}${unit}`),
-        renderPlaybackRange(button, { min, max, step, value, label: label || '数值', onChange: seek, onPointerDown: pauseBeforeSeek }),
+        renderPlaybackRange(button, {
+          min, max, step, value, label: label || '数值', valueText: unit === '' ? undefined : `${value}${unit}`,
+          onChange: seek, onPointerDown: pauseBeforeSeek, disabled: streaming,
+        }),
       )
     }
 
@@ -1522,9 +1527,9 @@
           const selectedIndex = options.findIndex((option) => sameValue(option?.value, current))
           return h(
             'div',
-            { key, className: 'miopiik-choices', role: 'group', 'aria-label': label ? textOf(label) : undefined },
+            { key, className: 'miopiik-choices miopiik-labeled-control', role: 'group', 'aria-label': label ? textOf(label) : undefined },
             label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
-            ...options.map((option, index) =>
+            h('div', { className: 'miopiik-choices miopiik-choice-set' }, ...options.map((option, index) =>
               h(
                 'button',
                 {
@@ -1539,7 +1544,7 @@
                 },
                 String(option.label ?? ''),
               ),
-            ),
+            )),
           )
         }
         if (item.type === 'toggle') {
@@ -1549,8 +1554,8 @@
           const on = current === true || current === 'true'
           const ariaLabel = label ? textOf(label) : '开关'
           return h(
-            'div',
-            { key, 'data-iui-toggle': on ? 'on' : 'off', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+            'label',
+            { key, className: 'miopiik-labeled-control miopiik-switch-label', 'data-iui-toggle': on ? 'on' : 'off' },
             label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
             h(
               'button',
@@ -1594,8 +1599,8 @@
           const current = binding.scope === 'state' ? readStatePath(scopedState, binding.key) : undefined
           const ariaLabel = label ? textOf(label) : '文本输入'
           return h(
-            'div',
-            { key, 'data-iui-input': '1', style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+            'label',
+            { key, className: 'miopiik-labeled-control', 'data-iui-input': '1' },
             label ? h('span', { className: 'miopiik-control-label' }, textOf(label)) : null,
             h('input', {
               key: `${key}-ctl`,
@@ -1718,10 +1723,13 @@
           const ratio = Math.min(1, numeric / max)
           return h(
             'div',
-            { key, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-            label ? h('div', { style: { fontSize: 11, color: C.muted } }, textOf(label)) : null,
-            h('div', { role: 'progressbar', 'aria-valuenow': String(Math.round(ratio * 100)), 'aria-valuemin': '0', 'aria-valuemax': '100', style: { height: 6, borderRadius: 999, background: 'rgba(127,127,127,0.18)', overflow: 'hidden' } },
-              h('div', { style: { width: `${ratio * 100}%`, height: '100%', background: (TONE_COLORS[props.tone] ?? [null, C.brand])[1], transition: 'width .18s ease' } })),
+            { key, className: 'miopiik-progress' },
+            label ? h('div', { className: 'miopiik-control-label' }, textOf(label)) : null,
+            h('div', {
+              className: 'miopiik-progress-track', role: 'progressbar', 'aria-label': textOf(label) || '进度',
+              'aria-valuenow': String(Math.round(ratio * 100)), 'aria-valuemin': '0', 'aria-valuemax': '100',
+              style: { '--iui-progress-tone': (TONE_COLORS[props.tone] ?? [null, C.brand])[1] },
+            }, h('div', { className: 'miopiik-progress-fill', style: { width: `${ratio * 100}%` } })),
           )
         }
         if (item.type === 'empty') {
@@ -1967,7 +1975,7 @@
               const next = IUI_AST.localActionValue(prev, ast.state, props, value)
               return next === undefined ? prev : writeStatePath(prev, binding.key, next)
             }),
-            style: { border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', color: disabled ? C.muted : C.text, padding: '3px 10px', fontSize: 12, lineHeight: '18px', alignSelf: 'start', cursor: disabled ? 'default' : 'pointer' },
+            style: { alignSelf: 'start' },
           }, textOf(resolveText(props.label)))
         }
         return null
@@ -2020,13 +2028,12 @@
         { 'data-iui-details': expanded ? 'open' : 'closed', 'data-iui-weight': weightStyle === undefined ? undefined : weight, style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, ...(weightStyle ?? {}) } },
         h('button', {
           type: 'button',
-          className: 'miopiik-ctl',
+          className: 'miopiik-ctl miopiik-disclosure',
           'aria-expanded': expanded ? 'true' : 'false',
           'aria-controls': bodyId,
           onClick: () => {
             if (typeof onToggle === 'function') onToggle()
           },
-          style: { alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', color: C.text, padding: '3px 9px', fontSize: 12, lineHeight: '18px', cursor: 'pointer' },
         }, h('span', { 'aria-hidden': true }, expanded ? '▾' : '▸'), label),
         h('div', { id: bodyId, hidden: !expanded, 'data-iui-details-body': expanded ? '1' : undefined, style: { display: expanded ? 'flex' : 'none', flexDirection: 'column', gap: 8, paddingLeft: 2, minWidth: 0 } },
           ...(expanded ? children.map(render) : []),
@@ -2108,7 +2115,6 @@
           'data-iui-action': 'copy',
           'data-iui-copy-bytes': payload.parsed ? String(payload.bytes) : undefined,
           onClick: copy,
-          style: { border: `1px solid ${C.border}`, borderRadius: 6, background: 'transparent', color: C.text, padding: '3px 10px', fontSize: 12, lineHeight: '18px', cursor: 'pointer' },
         }, label),
         h('span', {
           'data-iui-copy-summary': '1',

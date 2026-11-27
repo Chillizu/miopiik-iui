@@ -1166,7 +1166,7 @@ const MAIN_RUN = `
           const buttons = compareButtons();
           const named = compareGraph().getAttribute('aria-describedby') === compareCaption().id;
           const graphicLeft = compareGraph().getBoundingClientRect().left;
-          const aligned = Math.abs(buttons[0].getBoundingClientRect().left - graphicLeft) < 1
+          const aligned = Math.abs(buttons[0].parentElement.getBoundingClientRect().left - graphicLeft) < 1
             && Math.abs(compareCaption().getBoundingClientRect().left - graphicLeft) < 1;
           return (buttons.length === 2 && buttons[0].type === 'button' && buttons[0].getAttribute('aria-pressed') === 'true'
             && compareCaption().textContent === '共同结构。' && named && aligned && shapeOrder() === 'rect,line,text'
