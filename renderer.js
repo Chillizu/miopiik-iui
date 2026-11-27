@@ -634,7 +634,12 @@
       const ratio = Number.isFinite(span) ? (span > 0 ? (value - min) / span : 0)
         : (value / 2 - min / 2) / (max / 2 - min / 2)
       return h('span', { className: 'miopiik-range', 'data-iui-range-disabled': disabled ? '1' : undefined },
-        h('span', { className: 'miopiik-range-fill', 'aria-hidden': true, style: { transform: `translateY(-50%) scaleX(${ratio})` } }),
+        h('span', { className: 'miopiik-range-track', 'aria-hidden': true },
+          h('span', {
+            className: 'miopiik-range-fill',
+            style: ratio === 0 || ratio === 1 ? { inlineSize: `${ratio * 100}%` } : { '--iui-range-ratio': ratio },
+          }),
+        ),
         h('input', {
           type: 'range', min, max, step, value, disabled,
           'aria-label': label, 'aria-valuetext': valueText,
